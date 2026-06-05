@@ -532,9 +532,53 @@ body {
 /* ── Table row variants ── */
 .row-subtotal td       { background: #F9FAFB; font-weight: 700; }
 .row-total td          { background: #F0FBF7; font-weight: 700; }
-.td-nama               { font-size: 13px; font-weight: 500; color: var(--text-1); }
+.row-parent td         { background: #F5F3FF; font-weight: 600; }
+.td-nama               { font-size: 13px; font-weight: 500; color: var(--text-1); display: flex; align-items: center; gap: 6px; }
 .td-nama--sub          { color: var(--text-2); }
 .td-nama--total        { color: var(--primary); }
+.td-nama--parent       { color: #6D28D9; }
+.parent-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  background: #EDE9FE;
+  color: #6D28D9;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
+}
+
+/* ── Sync button ── */
+.sync-btn {
+  display: flex; align-items: center; gap: 6px;
+  padding: 7px 14px;
+  border: 1px solid var(--primary);
+  border-radius: 8px;
+  background: var(--bg-card);
+  color: var(--primary);
+  font-size: 13px; font-weight: 600;
+  font-family: inherit; cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.sync-btn:hover:not(:disabled) { background: var(--primary); color: #fff; }
+.sync-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.spin { display: inline-block; animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Toast notification ── */
+.toast-success {
+  position: fixed;
+  bottom: 24px; right: 24px;
+  background: #065F46; color: #fff;
+  padding: 12px 20px;
+  border-radius: 10px;
+  font-size: 13px; font-weight: 600;
+  box-shadow: 0 4px 16px rgba(0,0,0,.15);
+  z-index: 999;
+  animation: slideUp 0.3s ease;
+}
+@keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
 
 /* ── Section header with description ── */
 .section-header-row {

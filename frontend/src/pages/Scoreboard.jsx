@@ -122,28 +122,47 @@ export default function Scoreboard() {
   const [bulan,   setBulan]   = useState('JUN_2026');
   const [filter,  setFilter]  = useState('Semua');
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
   const [error,   setError]   = useState(null);
+  const [toast,   setToast]   = useState('');
 
-  useEffect(() => {
+  const fetchData = (b, m) => {
     setLoading(true); setError(null);
-    getScoreboard(bulan, metric)
+    getScoreboard(b, m)
       .then(d  => { setData(d);          setLoading(false); })
       .catch(e => { setError(e.message); setLoading(false); });
-  }, [bulan, metric]);
+  };
+
+  useEffect(() => { fetchData(bulan, metric); }, [bulan, metric]);
+
+  const handleSync = async () => {
+    setSyncing(true);
+    try {
+      const d = await getScoreboard(bulan, metric);
+      setData(d);
+      setToast('Data berhasil diperbarui');
+      setTimeout(() => setToast(''), 3000);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   const s           = data?.summary || {};
   const allRows     = data?.all_rows || [];
-  const rankings    = data?.rankings || [];
+  // Exclude parent rows (group totals) dan subtotals dari ranking
+  const rankings    = (data?.rankings || []).filter(u => !u.is_parent);
   const daysElapsed = data?.days_elapsed || 0;
   const bulanLabel  = bulan.replace('_', ' ');
   const monthKey    = bulan.split('_')[0];
   const totalDays   = DAYS_IN_MONTH[monthKey] || 30;
   const daysLeft    = Math.max(totalDays - daysElapsed, 1);
 
-  // Units yang butuh perhatian: Kritis dulu, lalu Awas, lalu Waspada
+  // Units yang butuh perhatian: Kritis dulu, lalu Awas, lalu Waspada (exclude parent)
   const statusOrder = { Kritis: 0, Awas: 1, Waspada: 2 };
   const attentionUnits = rankings
-    .filter(u => u.status === 'Kritis' || u.status === 'Awas' || u.status === 'Waspada')
+    .filter(u => (u.status === 'Kritis' || u.status === 'Awas' || u.status === 'Waspada') && !u.is_parent)
     .sort((a, b) => (statusOrder[a.status] ?? 9) - (statusOrder[b.status] ?? 9));
 
   // Top performers
@@ -161,13 +180,18 @@ export default function Scoreboard() {
     { key:'d', label:'Kritis 🚨',      desc:'Est KPI < 70%',   color:'#991B1B', bg:'#FEE2E2', units: rankings.filter(u=>u.est_kpi_juni<70) },
   ].filter(t => t.units.length > 0);
 
-  // Table rows
-  const tableRows = allRows.filter(r =>
-    filter === 'Semua' ? true : r.is_subtotal ? true : r.status === filter
-  );
+  // Table rows — parent rows always shown, filter only non-parent non-subtotal
+  const tableRows = allRows.filter(r => {
+    if (r.is_subtotal || r.is_parent) return true;
+    if (filter === 'Semua') return true;
+    return r.status === filter;
+  });
 
   return (
     <Layout syncedAt={data?.synced_at} bulan={bulan}>
+
+      {/* Toast notification */}
+      {toast && <div className="toast-success">✓ {toast}</div>}
 
       {/* ── Header ── */}
       <div className="page-header">
@@ -185,6 +209,10 @@ export default function Scoreboard() {
             <button className={`metric-btn${metric==='kpi'?' metric-btn--active':''}`} onClick={()=>setMetric('kpi')}>Est % KPI</button>
             <button className={`metric-btn${metric==='rev'?' metric-btn--active':''}`} onClick={()=>setMetric('rev')}>Revenue</button>
           </div>
+          <button className="sync-btn" onClick={handleSync} disabled={syncing}>
+            <span className={syncing ? 'spin' : ''}>↻</span>
+            {syncing ? 'Memuat...' : 'Sync Data'}
+          </button>
         </div>
       </div>
 
@@ -212,32 +240,6 @@ export default function Scoreboard() {
               main={<span style={{color:'#DC2626',fontSize:'28px',fontWeight:800}}>{s.unit_kritis}</span>}
               sub="Perlu perhatian segera" subColor="#DC2626" />
           </div>
-
-          {/* ══════════════════════════════════════
-              PRIORITAS PERHATIAN (Kritis → Awas → Waspada)
-          ══════════════════════════════════════ */}
-          {attentionUnits.length > 0 && (
-            <section className="section">
-              <div className="section-header-row">
-                <div>
-                  <h2 className="section-title" style={{marginBottom:2}}>🚨 Prioritas Perhatian</h2>
-                  <p className="section-desc">{attentionUnits.length} unit membutuhkan tindakan · {daysLeft} hari tersisa di bulan ini</p>
-                </div>
-                <div className="attention-legend">
-                  {['Kritis','Awas','Waspada'].map(s => (
-                    <span key={s} className={`pill ${pillClass(s)}`} style={{fontSize:11}}>
-                      {s}: {rankings.filter(u=>u.status===s).length} unit
-                    </span>
-                  ))}
-                </div>
-              </div>
-              <div className="alert-cards-grid">
-                {attentionUnits.map(u => (
-                  <AlertCard key={u.nama} unit={u} daysLeft={daysLeft} />
-                ))}
-              </div>
-            </section>
-          )}
 
           {/* ══════════════════════════════════════
               SEGMENTASI PERFORMA
@@ -343,11 +345,15 @@ export default function Scoreboard() {
                 <tbody>
                   {tableRows.map((row,i) => {
                     const pct = row.target_rkap>0?(row.juni/row.target_rkap)*100:0;
-                    const isTotal = row.nama==='REVENUE BISNIS BMS';
-                    const isSub   = row.is_subtotal && !isTotal;
+                    const isTotal  = row.nama==='REVENUE BISNIS BMS';
+                    const isSub    = row.is_subtotal && !isTotal;
+                    const isParent = row.is_parent;
                     return (
-                      <tr key={i} className={`table-row${isTotal?' row-total':isSub?' row-subtotal':''}`}>
-                        <td className={`td-nama${isTotal?' td-nama--total':isSub?' td-nama--sub':''}`}>{row.nama}</td>
+                      <tr key={i} className={`table-row${isTotal?' row-total':isSub?' row-subtotal':isParent?' row-parent':''}`}>
+                        <td className={`td-nama${isTotal?' td-nama--total':isSub?' td-nama--sub':isParent?' td-nama--parent':''}`}>
+                          {isParent && <span className="parent-badge">GROUP</span>}
+                          {row.nama}
+                        </td>
                         <td>{fmtRev(row.juni)}</td>
                         <td>{fmtRev(row.target_rkap)}</td>
                         <td>{fmtRev(row.est_rev_juni)}</td>
@@ -355,7 +361,7 @@ export default function Scoreboard() {
                         <td><ProgressBar pct={pct} color={barColor(row.status)} /></td>
                         <td><strong style={{color:row.est_kpi_juni>=100?'#1D9E75':row.est_kpi_juni>=80?'#F59E0B':'#EF4444'}}>{row.est_kpi_juni?.toFixed(2)}%</strong></td>
                         <td>
-                          {!isSub&&!isTotal
+                          {!isSub&&!isTotal&&!isParent
                             ? <span className={`pill ${pillClass(row.status)}`}>{row.status}</span>
                             : <span style={{fontWeight:600,color:barColor(row.status)}}>{row.status}</span>}
                         </td>
@@ -366,6 +372,32 @@ export default function Scoreboard() {
               </table>
             </div>
           </section>
+
+          {/* ══════════════════════════════════════
+              PRIORITAS PERHATIAN (di bawah tabel)
+          ══════════════════════════════════════ */}
+          {attentionUnits.length > 0 && (
+            <section className="section">
+              <div className="section-header-row">
+                <div>
+                  <h2 className="section-title" style={{marginBottom:2}}>🚨 Prioritas Perhatian</h2>
+                  <p className="section-desc">{attentionUnits.length} unit membutuhkan tindakan · {daysLeft} hari tersisa di bulan ini</p>
+                </div>
+                <div className="attention-legend">
+                  {['Kritis','Awas','Waspada'].map(st => (
+                    <span key={st} className={`pill ${pillClass(st)}`} style={{fontSize:11}}>
+                      {st}: {rankings.filter(u=>u.status===st).length} unit
+                    </span>
+                  ))}
+                </div>
+              </div>
+              <div className="alert-cards-grid">
+                {attentionUnits.map(u => (
+                  <AlertCard key={u.nama} unit={u} daysLeft={daysLeft} />
+                ))}
+              </div>
+            </section>
+          )}
         </>
       )}
     </Layout>
