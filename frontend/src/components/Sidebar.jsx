@@ -2,8 +2,9 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import { logout, getUser } from '../utils/auth';
 
 const menus = [
-  { label: 'Unit Scoreboard', to: '/scoreboard', icon: '⬡' },
-  { label: 'Kelola User',     to: '/users',      icon: '👥', adminOnly: true },
+  { label: 'Unit Scoreboard',   to: '/scoreboard', icon: '⬡' },
+  { label: 'Winme & InstaQris', to: '/winme',      icon: '⚡' },
+  { label: 'Kelola User',       to: '/users',      icon: '👥', adminOnly: true },
 ];
 
 export default function Sidebar({ onClose }) {

@@ -48,3 +48,11 @@ export const getScoreboard = async (bulan, metric = 'kpi') => {
   });
   return res.data;
 };
+
+export const getWinmeData = async (bulan) => {
+  const res = await axios.get(`${API_URL}/api/winme`, {
+    params: { bulan },
+    headers: authHeaders()
+  });
+  return res.data;
+};

@@ -7,6 +7,7 @@ require('dotenv').config();
 const authRoutes       = require('./routes/auth');
 const scoreboardRoutes = require('./routes/scoreboard');
 const usersRoutes      = require('./routes/users');
+const winmeRoutes      = require('./routes/winme');
 const requireAuth      = require('./middleware/auth');
 
 const app  = express();
@@ -48,6 +49,7 @@ app.use('/api/auth/login', loginLimiter);
 app.use('/api/auth',       authRoutes);
 app.use('/api/scoreboard', requireAuth, scoreboardRoutes);
 app.use('/api/users',      requireAuth, usersRoutes);
+app.use('/api/winme',      requireAuth, winmeRoutes);
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
