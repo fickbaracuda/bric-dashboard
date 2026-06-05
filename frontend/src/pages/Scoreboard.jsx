@@ -173,8 +173,7 @@ export default function Scoreboard() {
 
   // Segmentation
   const tiers = [
-    { key:'s', label:'Luar Biasa 🔥', desc:'Est KPI ≥ 150%', color:'#059669', bg:'#D1FAE5', units: rankings.filter(u=>u.est_kpi_juni>=150) },
-    { key:'a', label:'Aman ✅',        desc:'Est KPI 100–149%', color:'#1D9E75', bg:'#E6FAF4', units: rankings.filter(u=>u.est_kpi_juni>=100&&u.est_kpi_juni<150) },
+    { key:'a', label:'Aman ✅',    desc:'Est KPI ≥ 100%', color:'#1D9E75', bg:'#E6FAF4', units: rankings.filter(u=>u.est_kpi_juni>=100) },
     { key:'b', label:'Waspada ⚡',     desc:'Est KPI 80–99%',  color:'#D97706', bg:'#FEF3C7', units: rankings.filter(u=>u.est_kpi_juni>=80&&u.est_kpi_juni<100) },
     { key:'c', label:'Awas 🔶',        desc:'Est KPI 70–79%',  color:'#DC2626', bg:'#FEE2E2', units: rankings.filter(u=>u.est_kpi_juni>=70&&u.est_kpi_juni<80) },
     { key:'d', label:'Kritis 🚨',      desc:'Est KPI < 70%',   color:'#991B1B', bg:'#FEE2E2', units: rankings.filter(u=>u.est_kpi_juni<70) },
