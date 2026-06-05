@@ -116,6 +116,18 @@ const BULAN_OPTIONS = ['JAN_2026','FEB_2026','MAR_2026','APR_2026','MEI_2026','J
 const FILTERS = ['Semua','Aman','Waspada','Awas','Kritis'];
 const DAYS_IN_MONTH = { JAN:31,FEB:28,MAR:31,APR:30,MEI:31,JUN:30,JUL:31,AGU:31,SEP:30,OKT:31,NOV:30,DES:31 };
 
+// Unit ESA yang sementara disembunyikan
+const HIDDEN_UNITS = [
+  'PAYMENT SWITCHING&BIG ENTERPRISE',
+  'PSE',
+  'GigaPulsa',
+  'RETAIL,RECC&NICHE',
+  'GOVERNMENT&BUMN',
+  'LOCAL GOVERNMENT',
+  'PAYMENT AGREGATOR',
+  'B. TOTAL ESA'
+];
+
 export default function Scoreboard() {
   const [data,    setData]    = useState(null);
   const [metric,  setMetric]  = useState('kpi');
@@ -149,10 +161,10 @@ export default function Scoreboard() {
     }
   };
 
-  const s           = data?.summary || {};
-  const allRows     = data?.all_rows || [];
+  const s        = data?.summary || {};
+  const allRows  = (data?.all_rows  || []).filter(r => !HIDDEN_UNITS.includes(r.nama));
   // Exclude parent rows (group totals) dan subtotals dari ranking
-  const rankings    = (data?.rankings || []).filter(u => !u.is_parent);
+  const rankings = (data?.rankings  || []).filter(u => !u.is_parent && !HIDDEN_UNITS.includes(u.nama));
   const daysElapsed = data?.days_elapsed || 0;
   const bulanLabel  = bulan.replace('_', ' ');
   const monthKey    = bulan.split('_')[0];
