@@ -2,11 +2,7 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import { logout, getUser } from '../utils/auth';
 
 const menus = [
-  { label: 'Dashboard',       to: '/dashboard', icon: '◫' },
   { label: 'Unit Scoreboard', to: '/scoreboard', icon: '⬡' },
-  { label: 'Tren Harian',     to: '/tren',       icon: '↗' },
-  { label: 'Per Unit',        to: '/per-unit',   icon: '▦' },
-  { label: 'Laporan',         to: '/laporan',    icon: '≡' },
 ];
 
 export default function Sidebar({ onClose }) {
