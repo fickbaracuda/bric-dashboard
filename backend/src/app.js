@@ -6,6 +6,7 @@ require('dotenv').config();
 
 const authRoutes       = require('./routes/auth');
 const scoreboardRoutes = require('./routes/scoreboard');
+const usersRoutes      = require('./routes/users');
 const requireAuth      = require('./middleware/auth');
 
 const app  = express();
@@ -46,6 +47,7 @@ app.use(express.json({ limit: '1mb' }));
 app.use('/api/auth/login', loginLimiter);
 app.use('/api/auth',       authRoutes);
 app.use('/api/scoreboard', requireAuth, scoreboardRoutes);
+app.use('/api/users',      requireAuth, usersRoutes);
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 

@@ -761,6 +761,105 @@ body {
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
 
 /* ═══════════════════════════════════════════
+   USER MANAGEMENT
+═══════════════════════════════════════════ */
+.user-avatar-sm {
+  width: 30px; height: 30px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-weight: 700; font-size: 12px; flex-shrink: 0;
+}
+
+/* Action buttons in table */
+.action-btn {
+  padding: 4px 10px; border-radius: 6px; border: 1px solid transparent;
+  font-size: 11px; font-weight: 600; cursor: pointer; font-family: inherit;
+  transition: all 0.15s; white-space: nowrap;
+}
+.action-btn--edit    { background: #EFF6FF; color: #1D4ED8; border-color: #BFDBFE; }
+.action-btn--edit:hover { background: #DBEAFE; }
+.action-btn--warn    { background: #FEF3C7; color: #92400E; border-color: #FDE68A; }
+.action-btn--warn:hover { background: #FDE68A; }
+.action-btn--success { background: #D1FAE5; color: #065F46; border-color: #6EE7B7; }
+.action-btn--danger  { background: #FEE2E2; color: #991B1B; border-color: #FCA5A5; }
+.action-btn--danger:hover { background: #FECACA; }
+.action-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Buttons */
+.btn-primary {
+  padding: 8px 18px; background: var(--primary); color: #fff;
+  border: none; border-radius: 8px; font-size: 13px; font-weight: 600;
+  font-family: inherit; cursor: pointer; transition: background 0.15s;
+}
+.btn-primary:hover:not(:disabled) { background: var(--primary-dark); }
+.btn-primary:disabled { background: #A0D9C4; cursor: not-allowed; }
+
+.btn-secondary {
+  padding: 8px 18px; background: var(--bg-page); color: var(--text-2);
+  border: 1px solid var(--border); border-radius: 8px; font-size: 13px;
+  font-weight: 600; font-family: inherit; cursor: pointer; transition: background 0.15s;
+}
+.btn-secondary:hover { background: var(--border); }
+
+.btn-danger {
+  padding: 8px 18px; background: #EF4444; color: #fff;
+  border: none; border-radius: 8px; font-size: 13px; font-weight: 600;
+  font-family: inherit; cursor: pointer; transition: background 0.15s;
+}
+.btn-danger:hover:not(:disabled) { background: #DC2626; }
+.btn-danger:disabled { background: #FCA5A5; cursor: not-allowed; }
+
+/* Modal */
+.modal-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.45);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 500; padding: 16px;
+}
+.modal-box {
+  background: var(--bg-card);
+  border-radius: 14px;
+  width: 100%; max-width: 560px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+  max-height: 90vh; overflow-y: auto;
+}
+.modal-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.modal-title { font-size: 16px; font-weight: 700; color: var(--text-1); }
+.modal-close {
+  background: none; border: none; font-size: 18px;
+  color: var(--text-4); cursor: pointer; padding: 4px;
+}
+.modal-close:hover { color: var(--text-1); }
+.modal-body { padding: 20px 24px 24px; }
+
+/* Form */
+.user-form { display: flex; flex-direction: column; gap: 16px; }
+.form-row   { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.form-field { display: flex; flex-direction: column; gap: 6px; }
+.form-label { font-size: 12px; font-weight: 600; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.4px; }
+.form-input {
+  padding: 9px 12px; border: 1px solid var(--border);
+  border-radius: 8px; font-size: 13px; font-family: inherit;
+  color: var(--text-1); outline: none; transition: border-color 0.15s;
+  background: var(--bg-card);
+}
+.form-input:focus { border-color: var(--primary); }
+.form-input:disabled { background: var(--bg-page); color: var(--text-4); }
+.form-error {
+  background: #FEF2F2; color: #991B1B;
+  border: 1px solid #FEE2E2;
+  padding: 10px 14px; border-radius: 8px; font-size: 13px;
+}
+.form-actions { display: flex; justify-content: flex-end; gap: 10px; padding-top: 8px; }
+
+@media (max-width: 480px) {
+  .form-row { grid-template-columns: 1fr; }
+}
+
+/* ═══════════════════════════════════════════
    LOGIN PAGE
 ═══════════════════════════════════════════ */
 .login-wrap {

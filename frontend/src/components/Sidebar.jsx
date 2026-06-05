@@ -3,6 +3,7 @@ import { logout, getUser } from '../utils/auth';
 
 const menus = [
   { label: 'Unit Scoreboard', to: '/scoreboard', icon: '⬡' },
+  { label: 'Kelola User',     to: '/users',      icon: '👥', adminOnly: true },
 ];
 
 export default function Sidebar({ onClose }) {
@@ -30,7 +31,7 @@ export default function Sidebar({ onClose }) {
       {/* Navigation */}
       <nav className="sidebar-nav">
         <div className="sidebar-nav-label">MENU</div>
-        {menus.map(m => (
+        {menus.filter(m => !m.adminOnly || user?.role === 'admin').map(m => (
           <NavLink
             key={m.to}
             to={m.to}
