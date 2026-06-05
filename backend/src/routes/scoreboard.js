@@ -47,8 +47,13 @@ router.get('/units', (req, res) => {
     if (!bulanData)
       return res.status(404).json({ error: `Data ${bulan} belum tersedia.` });
 
-    const allRows      = bulanData.all_rows || [];
-    const daysElapsed  = bulanData.days_elapsed || 1;
+    // Support both old format (units array) and new format (all_rows array)
+    const rawRows = bulanData.all_rows || bulanData.units || [];
+    const allRows = rawRows.map(r => ({
+      ...r,
+      is_subtotal: r.is_subtotal ?? EXCLUDE_TOTAL.indexOf(r.nama) !== -1
+    }));
+    const daysElapsed = bulanData.days_elapsed || 1;
 
     // Non-subtotal units only (for ranking)
     const units = allRows.filter(r =>
