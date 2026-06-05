@@ -2,6 +2,7 @@ const express = require('express');
 const router  = express.Router();
 const fs      = require('fs');
 const path    = require('path');
+const pool    = require('../db');
 
 const DATA_FILE    = path.join(__dirname, '../../data/scoreboard.json');
 const SECRET_TOKEN = process.env.APPS_SCRIPT_TOKEN || 'bric2026bimasaktisecret';
@@ -15,19 +16,61 @@ function ensureDir() {
 }
 
 // POST /api/scoreboard/sync
-router.post('/sync', (req, res) => {
+router.post('/sync', async (req, res) => {
   const { token, bulan, synced_at, days_elapsed, all_rows } = req.body;
   if (token !== SECRET_TOKEN) return res.status(401).json({ error: 'Unauthorized' });
 
   try {
+    // 1. Simpan ke JSON (data terkini, untuk tampilan cepat)
     ensureDir();
     const store = fs.existsSync(DATA_FILE)
       ? JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')) : {};
-
     store[bulan || 'JUN_2026'] = { synced_at, days_elapsed, all_rows };
     fs.writeFileSync(DATA_FILE, JSON.stringify(store, null, 2));
-    console.log(`Synced ${all_rows?.length} rows for ${bulan}`);
-    res.json({ success: true, rows: all_rows?.length });
+
+    // 2. Simpan ke PostgreSQL (snapshot harian, tidak tertimpa)
+    const today = new Date().toISOString().split('T')[0];
+    const bulanKey = bulan || 'JUN_2026';
+
+    // Hitung ranking untuk non-subtotal, non-parent
+    const unitRows = (all_rows || []).filter(r => !r.is_subtotal && !r.is_parent);
+    const sorted   = [...unitRows].sort((a, b) => b.est_kpi_juni - a.est_kpi_juni);
+    const rankMap  = {};
+    sorted.forEach((u, i) => { rankMap[u.nama] = i + 1; });
+
+    // Upsert setiap baris ke daily_snapshot
+    for (const row of (all_rows || [])) {
+      await pool.query(`
+        INSERT INTO daily_snapshot
+          (tanggal, bulan, unit_nama, juni, mei, target_rkap, est_rev_juni,
+           avg_rev_day, real_kpi, est_kpi_juni, status, is_subtotal, is_parent, rank_posisi, synced_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+        ON CONFLICT (tanggal, bulan, unit_nama)
+        DO UPDATE SET
+          juni         = EXCLUDED.juni,
+          mei          = EXCLUDED.mei,
+          target_rkap  = EXCLUDED.target_rkap,
+          est_rev_juni = EXCLUDED.est_rev_juni,
+          avg_rev_day  = EXCLUDED.avg_rev_day,
+          real_kpi     = EXCLUDED.real_kpi,
+          est_kpi_juni = EXCLUDED.est_kpi_juni,
+          status       = EXCLUDED.status,
+          rank_posisi  = EXCLUDED.rank_posisi,
+          synced_at    = EXCLUDED.synced_at
+      `, [
+        today, bulanKey, row.nama,
+        row.juni || 0, row.mei || 0, row.target_rkap || 0,
+        row.est_rev_juni || 0, row.avg_rev_day || 0,
+        row.real_kpi || 0, row.est_kpi_juni || 0,
+        row.status || null,
+        row.is_subtotal || false, row.is_parent || false,
+        rankMap[row.nama] || null,
+        synced_at || new Date().toISOString()
+      ]);
+    }
+
+    console.log(`Synced ${all_rows?.length} rows for ${bulanKey} (${today}) — JSON + PostgreSQL`);
+    res.json({ success: true, rows: all_rows?.length, date: today });
   } catch (err) {
     console.error('Sync error:', err.message);
     res.status(500).json({ error: err.message });
