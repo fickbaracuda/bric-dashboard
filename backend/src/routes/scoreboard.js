@@ -1,61 +1,67 @@
 const express = require('express');
 const router = express.Router();
-const https = require('https');
+const fs = require('fs');
+const path = require('path');
 
-const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL || '';
+const DATA_FILE = path.join(__dirname, '../../data/scoreboard.json');
 const SECRET_TOKEN = process.env.APPS_SCRIPT_TOKEN || 'bric2026bimasaktisecret';
 
-function fetchFromSheet(bulan) {
-  return new Promise((resolve, reject) => {
-    const url = `${APPS_SCRIPT_URL}?token=${SECRET_TOKEN}&bulan=${bulan}`;
-
-    const get = (targetUrl, redirectCount = 0) => {
-      if (redirectCount > 5) return reject(new Error('Too many redirects'));
-
-      https.get(targetUrl, (res) => {
-        if (res.statusCode === 301 || res.statusCode === 302) {
-          return get(res.headers.location, redirectCount + 1);
-        }
-
-        let data = '';
-        res.on('data', chunk => { data += chunk; });
-        res.on('end', () => {
-          try { resolve(JSON.parse(data)); }
-          catch (e) { reject(new Error('Invalid JSON from Apps Script')); }
-        });
-      }).on('error', reject);
-    };
-
-    get(url);
-  });
+function ensureDataDir() {
+  const dir = path.dirname(DATA_FILE);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
-router.get('/units', async (req, res) => {
+// POST /api/scoreboard/sync — Apps Script pushes data here
+router.post('/sync', (req, res) => {
+  const { token, bulan, synced_at, units } = req.body;
+
+  if (token !== SECRET_TOKEN) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  try {
+    ensureDataDir();
+    const existing = fs.existsSync(DATA_FILE)
+      ? JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'))
+      : {};
+
+    existing[bulan || 'JUN_2026'] = { synced_at, units };
+    fs.writeFileSync(DATA_FILE, JSON.stringify(existing, null, 2));
+    console.log(`Synced ${units?.length} units for ${bulan}`);
+    res.json({ success: true, units: units?.length });
+  } catch (err) {
+    console.error('Sync error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/scoreboard/units — Frontend reads data
+router.get('/units', (req, res) => {
   const { bulan = 'JUN_2026', metric = 'kpi' } = req.query;
 
   try {
-    const sheetData = await fetchFromSheet(bulan);
-
-    if (sheetData.error) {
-      return res.status(401).json({ error: sheetData.error });
+    if (!fs.existsSync(DATA_FILE)) {
+      return res.status(404).json({ error: 'Belum ada data. Silakan sync dari Google Sheets.' });
     }
 
-    const units = sheetData.units || [];
+    const allData = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+    const bulanData = allData[bulan];
 
-    // Sort by metric
-    const sorted = [...units].sort((a, b) => {
-      if (metric === 'rev') return b.juni - a.juni;
-      return b.est_kpi_juni - a.est_kpi_juni;
-    });
+    if (!bulanData) {
+      return res.status(404).json({ error: `Data untuk ${bulan} belum tersedia.` });
+    }
 
-    // Assign ranks
+    const units = bulanData.units || [];
+
+    const sorted = [...units].sort((a, b) =>
+      metric === 'rev' ? b.juni - a.juni : b.est_kpi_juni - a.est_kpi_juni
+    );
+
     const rankings = sorted.map((u, i) => {
-      const inisial = (() => {
-        const words = u.nama.trim().split(' ');
-        return words.length >= 2
-          ? (words[0][0] + words[1][0]).toUpperCase()
-          : u.nama.substring(0, 2).toUpperCase();
-      })();
+      const words = u.nama.trim().split(' ');
+      const inisial = words.length >= 2
+        ? (words[0][0] + words[1][0]).toUpperCase()
+        : u.nama.substring(0, 2).toUpperCase();
 
       return {
         rank: i + 1,
@@ -79,7 +85,7 @@ router.get('/units', async (req, res) => {
     res.json({
       bulan,
       metric,
-      synced_at: sheetData.synced_at || new Date().toISOString(),
+      synced_at: bulanData.synced_at || new Date().toISOString(),
       summary: {
         unit_terbaik: rankings[0] ? { nama: rankings[0].nama, nilai: rankings[0].est_kpi_juni } : null,
         unit_terendah: rankings[rankings.length - 1]
@@ -90,7 +96,7 @@ router.get('/units', async (req, res) => {
       rankings
     });
   } catch (err) {
-    console.error('Scoreboard error:', err.message);
+    console.error('Scoreboard read error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
