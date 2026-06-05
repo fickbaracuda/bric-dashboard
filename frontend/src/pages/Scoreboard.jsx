@@ -2,43 +2,32 @@ import { useState, useEffect } from 'react';
 import Layout from '../components/Layout';
 import { getScoreboard } from '../services/api';
 
+/* ── helpers ── */
 function fmtRev(n) {
   if (!n && n !== 0) return '—';
-  if (n >= 1e12) return 'Rp ' + (n / 1e12).toFixed(2) + 'T';
-  if (n >= 1e9)  return 'Rp ' + (n / 1e9).toFixed(1) + 'M';
-  if (n >= 1e6)  return 'Rp ' + (n / 1e6).toFixed(1) + 'jt';
-  return 'Rp ' + Math.round(n).toLocaleString('id-ID');
+  const abs = Math.abs(n);
+  const sign = n < 0 ? '-' : '';
+  if (abs >= 1e12) return sign + 'Rp ' + (abs / 1e12).toFixed(2) + 'T';
+  if (abs >= 1e9)  return sign + 'Rp ' + (abs / 1e9).toFixed(2) + 'M';
+  if (abs >= 1e6)  return sign + 'Rp ' + (abs / 1e6).toFixed(0) + 'jt';
+  return sign + 'Rp ' + Math.round(abs).toLocaleString('id-ID');
+}
+
+function fmtRevShort(n) {
+  if (!n && n !== 0) return '—';
+  const abs = Math.abs(n);
+  const sign = n < 0 ? '-' : '+';
+  if (abs >= 1e12) return sign + 'Rp ' + (abs / 1e12).toFixed(2) + 'T';
+  if (abs >= 1e9)  return sign + 'Rp ' + (abs / 1e9).toFixed(0) + 'M';
+  if (abs >= 1e6)  return sign + 'Rp ' + (abs / 1e6).toFixed(0) + 'jt';
+  return sign + 'Rp ' + Math.round(abs).toLocaleString('id-ID');
 }
 
 function barColor(status) {
-  const map = { Aman: '#1D9E75', Waspada: '#F59E0B', Awas: '#EF4444', Kritis: '#DC2626' };
-  return map[status] || '#9CA3AF';
+  return { Aman: '#1D9E75', Waspada: '#F59E0B', Awas: '#EF4444', Kritis: '#DC2626' }[status] || '#9CA3AF';
 }
-
 function pillClass(status) {
-  const map = { Aman: 'pill-aman', Waspada: 'pill-waspada', Awas: 'pill-awas', Kritis: 'pill-kritis' };
-  return map[status] || 'pill-kritis';
-}
-
-function getInisial(nama) {
-  const words = nama.trim().split(' ');
-  return words.length >= 2
-    ? (words[0][0] + words[1][0]).toUpperCase()
-    : nama.substring(0, 2).toUpperCase();
-}
-
-const avatarColors = [
-  '#1D9E75','#3B82F6','#8B5CF6','#F59E0B',
-  '#EF4444','#EC4899','#14B8A6','#F97316',
-  '#6366F1','#84CC16','#06B6D4','#A855F7','#10B981'
-];
-
-const BULAN_OPTIONS = ['JAN_2026','FEB_2026','MAR_2026','APR_2026','MEI_2026','JUN_2026'];
-
-function DeltaBadge({ delta }) {
-  if (delta > 0) return <span className="delta-badge delta-up">↑ {delta}</span>;
-  if (delta < 0) return <span className="delta-badge delta-down">↓ {Math.abs(delta)}</span>;
-  return <span className="delta-badge delta-flat">— Tetap</span>;
+  return { Aman: 'pill-aman', Waspada: 'pill-waspada', Awas: 'pill-awas', Kritis: 'pill-kritis' }[status] || 'pill-kritis';
 }
 
 function ProgressBar({ pct, color }) {
@@ -49,62 +38,21 @@ function ProgressBar({ pct, color }) {
   );
 }
 
-function SummaryCard({ label, value, sub, color }) {
+const BULAN_OPTIONS = ['JAN_2026','FEB_2026','MAR_2026','APR_2026','MEI_2026','JUN_2026'];
+const FILTERS = ['Semua','Aman','Waspada','Kritis'];
+
+/* ── Summary card ── */
+function SumCard({ label, main, sub, subColor, badge, badgeColor }) {
   return (
-    <div className="summary-card">
-      <div className="summary-label">{label}</div>
-      <div className="summary-value" style={color ? { color } : {}}>{value}</div>
-      {sub && <div className="summary-sub">{sub}</div>}
-    </div>
-  );
-}
-
-function PodiumCard({ unit, rank, metric }) {
-  const borderColors = { 1: '#F59E0B', 2: '#9CA3AF', 3: '#F97316' };
-  const skor    = metric === 'rev' ? fmtRev(unit.rev_juni) : unit.est_kpi_juni?.toFixed(2) + '%';
-  const skorSub = metric === 'rev' ? unit.est_kpi_juni?.toFixed(2) + '%' : fmtRev(unit.rev_juni);
-  const pct     = unit.target_rkap > 0 ? (unit.rev_juni / unit.target_rkap) * 100 : 0;
-
-  return (
-    <div className={`podium-card podium-rank-${rank}`} style={{ borderTopColor: borderColors[rank] }}>
-      <div className="podium-rank-icon">
-        {rank === 1 ? '🥇' : rank === 2 ? '🥈' : '🥉'}
-      </div>
-      <div className="podium-avatar" style={{ background: avatarColors[(rank - 1) % avatarColors.length] }}>
-        {getInisial(unit.nama)}
-      </div>
-      <div className="podium-nama">{unit.nama}</div>
-      <div className="podium-skor">{skor}</div>
-      <div className="podium-skor-sub">{skorSub}</div>
-      <ProgressBar pct={pct} color={barColor(unit.status)} />
-      <span className={`pill ${pillClass(unit.status)}`}>{unit.status}</span>
-    </div>
-  );
-}
-
-function UnitCard({ unit, index, metric }) {
-  const skor  = metric === 'rev' ? fmtRev(unit.rev_juni) : unit.est_kpi_juni?.toFixed(2) + '%';
-  const pct   = unit.target_rkap > 0 ? (unit.rev_juni / unit.target_rkap) * 100 : 0;
-  const color = avatarColors[index % avatarColors.length];
-
-  return (
-    <div className="unit-card">
-      <div className="unit-card-head">
-        <span className="unit-rank">#{unit.rank}</span>
-        <div className="unit-avatar" style={{ background: color }}>{getInisial(unit.nama)}</div>
-        <div className="unit-info">
-          <div className="unit-nama">{unit.nama}</div>
-          <DeltaBadge delta={unit.delta_rank} />
+    <div className="sum-card">
+      <div className="sum-label">{label}</div>
+      <div className="sum-main">{main}</div>
+      {sub && <div className="sum-sub" style={{ color: subColor || 'var(--text-4)' }}>{sub}</div>}
+      {badge && (
+        <div className="sum-badge" style={{ background: badgeColor || '#F3F4F6', color: badgeColor ? '#fff' : 'var(--text-3)' }}>
+          {badge}
         </div>
-        <span className="unit-skor-right">{skor}</span>
-      </div>
-      <div className="unit-card-body">
-        <ProgressBar pct={pct} color={barColor(unit.status)} />
-        <div className="unit-card-bottom">
-          <span className="unit-pct-label">{pct.toFixed(1)}% dari target</span>
-          <span className={`pill ${pillClass(unit.status)}`}>{unit.status}</span>
-        </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -113,48 +61,44 @@ export default function Scoreboard() {
   const [data,    setData]    = useState(null);
   const [metric,  setMetric]  = useState('kpi');
   const [bulan,   setBulan]   = useState('JUN_2026');
+  const [filter,  setFilter]  = useState('Semua');
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState(null);
 
   useEffect(() => {
-    setLoading(true);
-    setError(null);
+    setLoading(true); setError(null);
     getScoreboard(bulan, metric)
-      .then(d  => { setData(d);      setLoading(false); })
+      .then(d  => { setData(d);          setLoading(false); })
       .catch(e => { setError(e.message); setLoading(false); });
   }, [bulan, metric]);
 
-  const rankings = data?.rankings || [];
-  const top3     = rankings.slice(0, 3);
-  const rest     = rankings.slice(3);
-  const summary  = data?.summary;
+  const s            = data?.summary || {};
+  const allRows      = data?.all_rows || [];
+  const daysElapsed  = data?.days_elapsed || 0;
+  const bulanLabel   = bulan.replace('_', ' ');
+
+  // Table rows — apply filter (skip filter for subtotal rows)
+  const tableRows = allRows.filter(r => {
+    if (r.is_subtotal) return true; // always show subtotals
+    if (filter === 'Semua') return true;
+    return r.status === filter;
+  });
 
   return (
     <Layout syncedAt={data?.synced_at} bulan={bulan}>
-      {/* Page header */}
+
+      {/* ── Page header ── */}
       <div className="page-header">
         <div>
-          <h1 className="page-title">Unit Scoreboard</h1>
+          <h1 className="page-title">Pencapaian Bisnis — {bulanLabel}</h1>
           <p className="page-sub">
-            {bulan.replace('_', ' ')} · {rankings.length} unit aktif
+            Data per 1–{daysElapsed} {bulanLabel} · {s.unit_total || 0} unit aktif
           </p>
         </div>
         <div className="header-controls">
           <select className="select-input" value={bulan} onChange={e => setBulan(e.target.value)}>
-            {BULAN_OPTIONS.map(b => (
-              <option key={b} value={b}>{b.replace('_', ' ')}</option>
-            ))}
+            {BULAN_OPTIONS.map(b => <option key={b} value={b}>{b.replace('_', ' ')}</option>)}
           </select>
-          <div className="metric-toggle">
-            <button
-              className={`metric-btn${metric === 'kpi' ? ' metric-btn--active' : ''}`}
-              onClick={() => setMetric('kpi')}
-            >Est % KPI</button>
-            <button
-              className={`metric-btn${metric === 'rev' ? ' metric-btn--active' : ''}`}
-              onClick={() => setMetric('rev')}
-            >Revenue</button>
-          </div>
         </div>
       </div>
 
@@ -162,96 +106,114 @@ export default function Scoreboard() {
 
       {loading ? (
         <div className="skeleton-grid">
-          {[...Array(8)].map((_, i) => <div key={i} className="skeleton-card" />)}
+          {[...Array(6)].map((_, i) => <div key={i} className="skeleton-card" />)}
         </div>
       ) : (
         <>
-          {/* Summary */}
-          {summary && (
-            <div className="summary-grid">
-              <SummaryCard label="Unit Terbaik"     value={summary.unit_terbaik?.nama}      sub={summary.unit_terbaik?.nilai?.toFixed(2) + '%'}    color="#1D9E75" />
-              <SummaryCard label="Unit Terendah"    value={summary.unit_terendah?.nama}     sub={summary.unit_terendah?.nilai?.toFixed(2) + '%'}   color="#EF4444" />
-              <SummaryCard label="Di Atas Target"   value={summary.unit_di_atas_target}     sub="unit ≥ 100%"                                      color="#1D9E75" />
-              <SummaryCard label="Rata-rata Est KPI" value={summary.rata_rata_est_kpi?.toFixed(2) + '%'} sub="semua unit" />
-            </div>
-          )}
+          {/* ── Summary cards ── */}
+          <div className="sum-grid">
+            <SumCard
+              label="REVENUE JUNI"
+              main={fmtRev(s.revenue_juni)}
+              sub={s.delta_vs_mei ? fmtRevShort(s.delta_vs_mei) + ' vs Mei' : null}
+              subColor={s.delta_vs_mei >= 0 ? '#1D9E75' : '#EF4444'}
+            />
+            <SumCard
+              label="AVG REV / HARI"
+              main={fmtRev(s.avg_rev_hari)}
+              sub={`${daysElapsed} hari berjalan`}
+            />
+            <SumCard
+              label="EST % KPI JUNI"
+              main={<span style={{ color: s.est_kpi_juni >= 100 ? '#1D9E75' : '#EF4444' }}>{s.est_kpi_juni?.toFixed(2)}%</span>}
+              sub={s.est_kpi_juni >= 100 ? '↗ Di atas target' : '↘ Di bawah target'}
+              subColor={s.est_kpi_juni >= 100 ? '#1D9E75' : '#EF4444'}
+            />
+            <SumCard
+              label="REAL % KPI"
+              main={s.real_kpi?.toFixed(2) + '%'}
+              sub="Akumulasi berjalan"
+            />
+            <SumCard
+              label="UNIT AMAN"
+              main={<span style={{ color: '#1D9E75', fontSize: '28px', fontWeight: 800 }}>{s.unit_aman}</span>}
+              sub={`dari ${s.unit_total} unit`}
+            />
+            <SumCard
+              label="UNIT KRITIS"
+              main={<span style={{ color: '#DC2626', fontSize: '28px', fontWeight: 800 }}>{s.unit_kritis}</span>}
+              sub="Perlu perhatian segera"
+              subColor="#DC2626"
+            />
+          </div>
 
-          {/* Podium */}
-          {top3.length >= 3 && (
-            <section className="section">
-              <h2 className="section-title">Podium 3 Besar</h2>
-              <div className="podium-layout">
-                <PodiumCard unit={top3[1]} rank={2} metric={metric} />
-                <PodiumCard unit={top3[0]} rank={1} metric={metric} />
-                <PodiumCard unit={top3[2]} rank={3} metric={metric} />
-              </div>
-            </section>
-          )}
-
-          {/* Rank 4+ */}
-          {rest.length > 0 && (
-            <section className="section">
-              <h2 className="section-title">Ranking Selengkapnya</h2>
-              <div className="units-grid">
-                {rest.map((u, i) => (
-                  <UnitCard key={u.nama} unit={u} index={i + 3} metric={metric} />
+          {/* ── Table ── */}
+          <section className="section">
+            <div className="table-header-row">
+              <h2 className="section-title" style={{ marginBottom: 0 }}>Detail pencapaian per poin</h2>
+              <div className="filter-tabs">
+                {FILTERS.map(f => (
+                  <button
+                    key={f}
+                    className={`filter-tab${filter === f ? ' filter-tab--active' : ''}`}
+                    onClick={() => setFilter(f)}
+                  >{f}</button>
                 ))}
               </div>
-            </section>
-          )}
-
-          {/* Table */}
-          {rankings.length > 0 && (
-            <section className="section">
-              <h2 className="section-title">Tabel Lengkap</h2>
-              <div className="table-wrap">
-                <table className="ranking-table">
-                  <thead>
-                    <tr>
-                      <th>#</th><th>Unit</th><th>Revenue Juni</th>
-                      <th>Target RKAP</th><th>Real KPI</th><th>Est KPI</th>
-                      <th>Progress</th><th>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rankings.map((u, i) => {
-                      const pct = u.target_rkap > 0 ? (u.rev_juni / u.target_rkap) * 100 : 0;
-                      return (
-                        <tr key={u.nama} className="table-row">
-                          <td className="td-rank">
-                            {u.rank === 1 ? '🥇' : u.rank === 2 ? '🥈' : u.rank === 3 ? '🥉' : u.rank}
-                          </td>
-                          <td>
-                            <div className="td-unit-inner">
-                              <div className="td-avatar" style={{ background: avatarColors[i % avatarColors.length] }}>
-                                {u.inisial}
-                              </div>
-                              <span className="td-unit-name">{u.nama}</span>
-                            </div>
-                          </td>
-                          <td>{fmtRev(u.rev_juni)}</td>
-                          <td>{fmtRev(u.target_rkap)}</td>
-                          <td>{u.real_kpi?.toFixed(2)}%</td>
-                          <td><strong>{u.est_kpi_juni?.toFixed(2)}%</strong></td>
-                          <td style={{ minWidth: 100 }}>
-                            <ProgressBar pct={pct} color={barColor(u.status)} />
-                          </td>
-                          <td><span className={`pill ${pillClass(u.status)}`}>{u.status}</span></td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-          )}
-
-          {rankings.length === 0 && !error && (
-            <div className="empty-state">
-              <div className="empty-icon">📭</div>
-              <div>Belum ada data untuk {bulan.replace('_', ' ')}</div>
             </div>
-          )}
+
+            <div className="table-wrap" style={{ marginTop: 14 }}>
+              <table className="ranking-table">
+                <thead>
+                  <tr>
+                    <th>POIN / UNIT</th>
+                    <th>REV JUNI</th>
+                    <th>TARGET RKAP</th>
+                    <th>EST REV JUNI</th>
+                    <th>REAL KPI</th>
+                    <th style={{ minWidth: 120 }}>PROGRES</th>
+                    <th>EST KPI</th>
+                    <th>STATUS</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {tableRows.map((row, i) => {
+                    const pct = row.target_rkap > 0 ? (row.juni / row.target_rkap) * 100 : 0;
+                    const isTotal = row.nama === 'REVENUE BISNIS BMS';
+                    const isSub   = row.is_subtotal && !isTotal;
+                    return (
+                      <tr
+                        key={i}
+                        className={`table-row${isTotal ? ' row-total' : isSub ? ' row-subtotal' : ''}`}
+                      >
+                        <td className={`td-nama${isTotal ? ' td-nama--total' : isSub ? ' td-nama--sub' : ''}`}>
+                          {row.nama}
+                        </td>
+                        <td>{fmtRev(row.juni)}</td>
+                        <td>{fmtRev(row.target_rkap)}</td>
+                        <td>{fmtRev(row.est_rev_juni)}</td>
+                        <td>{row.real_kpi?.toFixed(2)}%</td>
+                        <td>
+                          <ProgressBar pct={pct} color={barColor(row.status)} />
+                        </td>
+                        <td>
+                          <strong style={{ color: row.est_kpi_juni >= 100 ? '#1D9E75' : row.est_kpi_juni >= 80 ? '#F59E0B' : '#EF4444' }}>
+                            {row.est_kpi_juni?.toFixed(2)}%
+                          </strong>
+                        </td>
+                        <td>
+                          {row.status && !isSub && !isTotal
+                            ? <span className={`pill ${pillClass(row.status)}`}>{row.status}</span>
+                            : <span style={{ fontWeight: 600, color: barColor(row.status) }}>{row.status}</span>
+                          }
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </section>
         </>
       )}
     </Layout>

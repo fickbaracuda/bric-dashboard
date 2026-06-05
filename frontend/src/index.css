@@ -488,6 +488,54 @@ body {
   color: #fff; font-weight: 700; font-size: 11px; flex-shrink: 0;
 }
 
+/* ── Summary cards (6-col grid) ── */
+.sum-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 12px;
+  margin-bottom: 28px;
+}
+.sum-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  box-shadow: var(--shadow-sm);
+}
+.sum-label { font-size: 10px; font-weight: 700; color: var(--text-4); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+.sum-main  { font-size: 20px; font-weight: 800; color: var(--text-1); line-height: 1.2; }
+.sum-sub   { font-size: 12px; color: var(--text-4); margin-top: 4px; display: flex; align-items: center; gap: 3px; }
+.sum-badge { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 600; margin-top: 6px; }
+
+/* ── Table header row ── */
+.table-header-row {
+  display: flex; align-items: center;
+  justify-content: space-between; gap: 12px;
+  flex-wrap: wrap; margin-bottom: 0;
+}
+
+/* ── Filter tabs ── */
+.filter-tabs { display: flex; gap: 6px; }
+.filter-tab {
+  padding: 5px 14px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--bg-card);
+  font-size: 12px; font-weight: 500;
+  color: var(--text-3); cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s;
+}
+.filter-tab:hover { border-color: var(--primary); color: var(--primary); }
+.filter-tab--active { background: var(--primary); color: #fff; border-color: var(--primary); }
+
+/* ── Table row variants ── */
+.row-subtotal td       { background: #F9FAFB; font-weight: 700; }
+.row-total td          { background: #F0FBF7; font-weight: 700; }
+.td-nama               { font-size: 13px; font-weight: 500; color: var(--text-1); }
+.td-nama--sub          { color: var(--text-2); }
+.td-nama--total        { color: var(--primary); }
+
 /* Alert */
 .alert-error {
   background: #FEF2F2; color: #991B1B;
@@ -570,8 +618,12 @@ body {
 /* ═══════════════════════════════════════════
    RESPONSIVE
 ═══════════════════════════════════════════ */
+@media (max-width: 1280px) {
+  .sum-grid { grid-template-columns: repeat(3, 1fr); }
+}
 @media (max-width: 1024px) {
   .summary-grid { grid-template-columns: repeat(2, 1fr); }
+  .sum-grid { grid-template-columns: repeat(3, 1fr); }
 }
 
 @media (max-width: 768px) {
@@ -602,9 +654,15 @@ body {
   .header-controls { width: 100%; }
 }
 
+@media (max-width: 768px) {
+  .sum-grid { grid-template-columns: repeat(2, 1fr); }
+  .table-header-row { flex-direction: column; align-items: flex-start; }
+}
 @media (max-width: 480px) {
   .summary-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
+  .sum-grid     { grid-template-columns: 1fr 1fr; gap: 10px; }
   .chip-sync    { display: none; }
   .topbar       { padding: 0 16px; }
   .login-card   { padding: 28px 20px; }
+  .filter-tabs  { flex-wrap: wrap; }
 }
