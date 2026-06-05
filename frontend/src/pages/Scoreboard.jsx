@@ -181,9 +181,10 @@ export default function Scoreboard() {
 
   // Table rows — parent rows always shown, filter only non-parent non-subtotal
   const tableRows = allRows.filter(r => {
-    if (r.is_subtotal || r.is_parent) return true;
     if (filter === 'Semua') return true;
-    return r.status === filter;
+    // Saat filter aktif: sembunyikan subtotal & parent, tampilkan unit yang cocok saja
+    if (r.is_subtotal || r.is_parent) return false;
+    return r.status?.toLowerCase() === filter.toLowerCase();
   });
 
   return (
