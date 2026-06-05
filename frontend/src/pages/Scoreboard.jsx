@@ -28,26 +28,40 @@ function pillClass(s) {
 
 /* ── Auto-generate CEO recommendation per unit ── */
 function getRekomendasi(unit, daysLeft) {
-  const k = unit.est_kpi_juni;
-  const gap = unit.target_rkap - (unit.est_rev_juni || unit.juni);
-  const dailyNeed = daysLeft > 0 ? gap / daysLeft : 0;
+  const k      = unit.est_kpi_juni;
+  const status = unit.status;
 
-  if (k < 30) return {
-    level: 'urgen',
-    text: `Performa sangat kritis (${k.toFixed(1)}%). Butuh eskalasi ke manajemen puncak. Evaluasi ulang strategi dan tim secara menyeluruh.`
-  };
-  if (k < 70) return {
-    level: 'tinggi',
-    text: `Target berat — perlu tambahan ${fmtRev(dailyNeed)}/hari di sisa ${daysLeft} hari. Fokus akselerasi pipeline & closing deal prioritas.`
-  };
-  if (k < 80) return {
-    level: 'sedang',
-    text: `Masih bisa dikejar dengan effort ${fmtRev(dailyNeed)}/hari. Dorong aktivitas sales, review hambatan, dan tambah resource jika perlu.`
-  };
-  if (k < 100) return {
-    level: 'pantau',
-    text: `Hampir di target. Pertahankan momentum, pastikan ${fmtRev(dailyNeed)}/hari terpenuhi di ${daysLeft} hari tersisa.`
-  };
+  // Gap antara estimasi akhir bulan vs target RKAP
+  const estRevJuni  = unit.est_rev_juni || 0;
+  const gapRevJuni  = Math.max(unit.target_rkap - estRevJuni, 0);
+  const dailyExtra  = daysLeft > 0 ? gapRevJuni / daysLeft : 0;
+
+  // Gap revenue harian yang perlu ditambah vs rata-rata harian saat ini
+  const currentDaily = unit.avg_rev_day || 0;
+  const targetDaily  = unit.target_rkap / 30; // asumsi 30 hari/bulan
+
+  if (status === 'Kritis') {
+    if (k < 30) return {
+      level: 'urgen',
+      text: `🚨 URGEN: Est. KPI ${k.toFixed(1)}% — sangat jauh dari target. Butuh eskalasi ke manajemen. Evaluasi ulang strategi dan tim secara menyeluruh.`
+    };
+    return {
+      level: 'tinggi',
+      text: `Kritis di ${k.toFixed(1)}%. Perlu gap ${fmtRev(gapRevJuni)} tertutup di ${daysLeft} hari tersisa, setara tambahan ${fmtRev(dailyExtra)}/hari di atas pace saat ini. Review pipeline dan akselerasi closing deal prioritas.`
+    };
+  }
+  if (status === 'Awas') {
+    return {
+      level: 'sedang',
+      text: `Awas di ${k.toFixed(1)}%. Gap ke target ${fmtRev(gapRevJuni)} — butuh tambahan ${fmtRev(dailyExtra)}/hari di ${daysLeft} hari tersisa. Dorong aktivitas sales dan review hambatan utama.`
+    };
+  }
+  if (status === 'Waspada') {
+    return {
+      level: 'pantau',
+      text: `Waspada di ${k.toFixed(1)}%. Masih ada gap ${fmtRev(gapRevJuni)} ke target — perlu tambahan ${fmtRev(dailyExtra)}/hari di sisa ${daysLeft} hari. Pantau ketat dan jaga momentum.`
+    };
+  }
   return null;
 }
 
