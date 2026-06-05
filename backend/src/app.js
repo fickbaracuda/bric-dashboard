@@ -1,24 +1,56 @@
-const express = require('express');
-const cors = require('cors');
+const express    = require('express');
+const cors       = require('cors');
+const helmet     = require('helmet');
+const rateLimit  = require('express-rate-limit');
 require('dotenv').config();
 
-const authRoutes      = require('./routes/auth');
+const authRoutes       = require('./routes/auth');
 const scoreboardRoutes = require('./routes/scoreboard');
-const requireAuth     = require('./middleware/auth');
+const requireAuth      = require('./middleware/auth');
 
 const app  = express();
 const PORT = process.env.PORT || 3001;
 
-app.use(cors());
-app.use(express.json());
+// Security headers
+app.use(helmet({
+  contentSecurityPolicy: false
+}));
 
+// Hide server fingerprint
+app.disable('x-powered-by');
+
+// Rate limit: semua API maksimal 100 req/menit per IP
+app.use('/api/', rateLimit({
+  windowMs: 60 * 1000,
+  max: 100,
+  message: { error: 'Terlalu banyak request. Coba lagi sebentar.' },
+  standardHeaders: true,
+  legacyHeaders: false
+}));
+
+// Rate limit ketat untuk login: max 10 percobaan per 15 menit
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { error: 'Terlalu banyak percobaan login. Coba lagi dalam 15 menit.' },
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
+app.use(cors({ origin: process.env.ALLOWED_ORIGIN || '*' }));
+app.use(express.json({ limit: '1mb' }));
+
+app.use('/api/auth/login', loginLimiter);
 app.use('/api/auth',       authRoutes);
 app.use('/api/scoreboard', requireAuth, scoreboardRoutes);
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
-app.listen(PORT, () => {
-  console.log(`BRIC Backend running on port ${PORT}`);
+// 404 untuk semua route tidak dikenal
+app.use((req, res) => res.status(404).json({ error: 'Not found' }));
+
+app.listen(PORT, '127.0.0.1', () => {
+  console.log(`BRIC Backend running on port ${PORT} (localhost only)`);
 });
 
 module.exports = app;
