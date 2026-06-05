@@ -147,6 +147,64 @@ export default function Scoreboard() {
             />
           </div>
 
+          {/* ── Top performer & Perlu perhatian ── */}
+          {data?.rankings?.length > 0 && (
+            <div className="insight-row">
+              {/* Top performer */}
+              <div className="insight-card">
+                <div className="insight-title">
+                  <span>🏆</span> Top performer — Est % KPI
+                </div>
+                <div className="insight-list">
+                  {(data.rankings || []).slice(0, 5).map((u, i) => (
+                    <div key={u.nama} className="insight-item">
+                      <span className="insight-rank">
+                        {i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : i + 1}
+                      </span>
+                      <span className="insight-nama">{u.nama}</span>
+                      <span className="insight-val insight-val--green">
+                        {u.est_kpi_juni?.toFixed(2)}%
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Perlu perhatian */}
+              <div className="insight-card">
+                <div className="insight-title">
+                  <span>⚠️</span> Perlu perhatian
+                </div>
+                <div className="insight-list">
+                  {(data.rankings || [])
+                    .filter(u => u.status === 'Kritis' || u.status === 'Awas')
+                    .slice(0, 5)
+                    .map(u => (
+                      <div key={u.nama} className="insight-item">
+                        <span
+                          className="insight-dot"
+                          style={{ background: u.status === 'Kritis' ? '#EF4444' : '#F59E0B' }}
+                        />
+                        <span className="insight-nama">{u.nama}</span>
+                        <span className="insight-val" style={{ color: u.status === 'Kritis' ? '#EF4444' : '#F59E0B' }}>
+                          {u.est_kpi_juni?.toFixed(2)}%
+                        </span>
+                      </div>
+                    ))}
+                </div>
+                <div className="insight-legend">
+                  <div className="legend-title">Keterangan status</div>
+                  <div className="legend-items">
+                    <span className="legend-item" style={{ background: '#D1FAE5', color: '#065F46' }}>Aman ≥100%</span>
+                    <span className="legend-item" style={{ background: '#FEF3C7', color: '#92400E' }}>Waspada 80–99%</span>
+                    <span className="legend-item" style={{ background: '#FEE2E2', color: '#991B1B' }}>Awas 70–79%</span>
+                    <span className="legend-item" style={{ background: '#FEE2E2', color: '#7F1D1D' }}>Kritis &lt;70%</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* ── Table ── */}
           <section className="section">
             <div className="table-header-row">
