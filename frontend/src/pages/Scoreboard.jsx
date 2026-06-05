@@ -161,15 +161,36 @@ export default function Scoreboard() {
     }
   };
 
-  const s        = data?.summary || {};
   const allRows  = (data?.all_rows  || []).filter(r => !HIDDEN_UNITS.includes(r.nama));
-  // Exclude parent rows (group totals) dan subtotals dari ranking
   const rankings = (data?.rankings  || []).filter(u => !u.is_parent && !HIDDEN_UNITS.includes(u.nama));
   const daysElapsed = data?.days_elapsed || 0;
   const bulanLabel  = bulan.replace('_', ' ');
   const monthKey    = bulan.split('_')[0];
   const totalDays   = DAYS_IN_MONTH[monthKey] || 30;
   const daysLeft    = Math.max(totalDays - daysElapsed, 1);
+
+  // Hitung ulang summary dari data yang sudah difilter (Business Retail only)
+  const filteredUnits  = allRows.filter(r => !r.is_subtotal && !r.is_parent);
+  const retailTotalRow = allRows.find(r => r.nama === 'A. TOTAL BUSINESS RETAIL');
+  const revJuni        = filteredUnits.reduce((sum, u) => sum + (u.juni || 0), 0);
+  const revMei         = filteredUnits.reduce((sum, u) => sum + (u.mei  || 0), 0);
+
+  const s = {
+    revenue_juni:    revJuni,
+    revenue_mei:     revMei,
+    delta_vs_mei:    revJuni - revMei,
+    avg_rev_hari:    retailTotalRow?.avg_rev_day || (daysElapsed > 0 ? revJuni / daysElapsed : 0),
+    est_kpi_juni:    retailTotalRow?.est_kpi_juni ?? (data?.summary?.est_kpi_juni || 0),
+    real_kpi:        retailTotalRow?.real_kpi     ?? (data?.summary?.real_kpi     || 0),
+    unit_total:      filteredUnits.length,
+    unit_aman:       filteredUnits.filter(u => u.status === 'Aman').length,
+    unit_waspada:    filteredUnits.filter(u => u.status === 'Waspada').length,
+    unit_awas:       filteredUnits.filter(u => u.status === 'Awas').length,
+    unit_kritis:     filteredUnits.filter(u => u.status === 'Kritis').length,
+    rata_rata_est_kpi: filteredUnits.length
+      ? parseFloat((filteredUnits.reduce((sum,u) => sum+(u.est_kpi_juni||0),0) / filteredUnits.length).toFixed(2))
+      : 0,
+  };
 
   // Units yang butuh perhatian: Kritis dulu, lalu Awas, lalu Waspada (exclude parent)
   const statusOrder = { Kritis: 0, Awas: 1, Waspada: 2 };
