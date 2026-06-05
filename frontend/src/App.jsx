@@ -1,5 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import Login from './pages/Login';
 import Scoreboard from './pages/Scoreboard';
+import ProtectedRoute from './components/ProtectedRoute';
 
 function ComingSoon({ title }) {
   return (
@@ -15,12 +17,13 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
+        <Route path="/login" element={<Login />} />
         <Route path="/" element={<Navigate to="/scoreboard" replace />} />
-        <Route path="/scoreboard" element={<Scoreboard />} />
-        <Route path="/dashboard" element={<ComingSoon title="Dashboard Pencapaian" />} />
-        <Route path="/tren" element={<ComingSoon title="Tren Harian" />} />
-        <Route path="/per-unit" element={<ComingSoon title="Per Unit" />} />
-        <Route path="/laporan" element={<ComingSoon title="Laporan" />} />
+        <Route path="/scoreboard" element={<ProtectedRoute><Scoreboard /></ProtectedRoute>} />
+        <Route path="/dashboard" element={<ProtectedRoute><ComingSoon title="Dashboard Pencapaian" /></ProtectedRoute>} />
+        <Route path="/tren"      element={<ProtectedRoute><ComingSoon title="Tren Harian" /></ProtectedRoute>} />
+        <Route path="/per-unit"  element={<ProtectedRoute><ComingSoon title="Per Unit" /></ProtectedRoute>} />
+        <Route path="/laporan"   element={<ProtectedRoute><ComingSoon title="Laporan" /></ProtectedRoute>} />
       </Routes>
     </BrowserRouter>
   );

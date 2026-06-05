@@ -1,4 +1,14 @@
+import { useNavigate } from 'react-router-dom';
+import { logout, getUser } from '../utils/auth';
+
 export default function Topbar({ syncedAt, bulan }) {
+  const navigate = useNavigate();
+  const user = getUser();
+
+  const handleLogout = () => {
+    logout();
+    navigate('/login', { replace: true });
+  };
   const formatSync = (iso) => {
     if (!iso) return null;
     const d = new Date(iso);
@@ -19,6 +29,8 @@ export default function Topbar({ syncedAt, bulan }) {
       <div className="topbar-chips">
         {syncStr && <span className="chip chip-sync">Sync: {syncStr}</span>}
         {bulan && <span className="chip chip-bulan">{bulan.replace('_', ' ')}</span>}
+        {user && <span className="chip chip-sync">{user.username}</span>}
+        <button className="logout-btn" onClick={handleLogout}>Keluar</button>
       </div>
     </header>
   );

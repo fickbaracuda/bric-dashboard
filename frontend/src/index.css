@@ -254,3 +254,71 @@ body {
   .podium-card { width: 100%; max-width: 360px; }
   .page-header { flex-direction: column; }
 }
+
+/* ── Logout button ── */
+.logout-btn {
+  padding: 4px 12px;
+  border: 1px solid #E8E6DE;
+  border-radius: 6px;
+  background: #fff;
+  color: #5F5E5A;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.15s, color 0.15s;
+}
+.logout-btn:hover { background: #FCEBEB; color: #791F1F; border-color: #F5C6C6; }
+
+/* ── Login page ── */
+.login-wrap {
+  min-height: 100vh;
+  background: #F7F6F2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.login-card {
+  background: #fff;
+  border: 1px solid #E8E6DE;
+  border-radius: 16px;
+  padding: 40px 36px;
+  width: 100%;
+  max-width: 380px;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.06);
+}
+.login-logo { font-size: 32px; font-weight: 800; color: #1D9E75; letter-spacing: -1px; text-align: center; }
+.login-subtitle { text-align: center; color: #888780; font-size: 13px; margin-top: 4px; }
+.login-divider { border: none; border-top: 1px solid #E8E6DE; margin: 24px 0; }
+.login-form { display: flex; flex-direction: column; gap: 16px; }
+.login-field { display: flex; flex-direction: column; gap: 6px; }
+.login-label { font-size: 12px; font-weight: 600; color: #5F5E5A; text-transform: uppercase; letter-spacing: 0.4px; }
+.login-input {
+  padding: 10px 14px;
+  border: 1px solid #E8E6DE;
+  border-radius: 8px;
+  font-size: 14px;
+  font-family: inherit;
+  color: #1A1917;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.login-input:focus { border-color: #1D9E75; }
+.login-error { background: #FCEBEB; color: #791F1F; padding: 10px 14px; border-radius: 8px; font-size: 13px; font-weight: 500; }
+.login-btn {
+  padding: 11px;
+  background: #1D9E75;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s;
+  margin-top: 4px;
+}
+.login-btn:hover { background: #178060; }
+.login-btn:disabled { background: #A0D9C4; cursor: not-allowed; }
+.login-footer { text-align: center; color: #888780; font-size: 11px; margin-top: 24px; }
