@@ -4,6 +4,7 @@ import { logout, getUser } from '../utils/auth';
 const menus = [
   { label: 'Unit Scoreboard',   to: '/scoreboard', icon: '⬡' },
   { label: 'Payment Agent',    to: '/payment-agent',  icon: '◎' },
+  { label: 'Dompet Digital',   to: '/dompet-digital', icon: '◈' },
   { label: 'Winme & InstaQris', to: '/winme',         icon: '⚡' },
   { label: 'Kelola User',       to: '/users',      icon: '👥', adminOnly: true },
 ];

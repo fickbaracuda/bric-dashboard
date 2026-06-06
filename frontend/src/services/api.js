@@ -57,6 +57,14 @@ export const getWinmeData = async (bulan) => {
   return res.data;
 };
 
+export const getDompetDigitalData = async (bulan) => {
+  const res = await axios.get(`${API_URL}/api/dompetdigital`, {
+    params: { bulan },
+    headers: authHeaders()
+  });
+  return res.data;
+};
+
 export const getPaymentAgentData = async (bulan) => {
   const res = await axios.get(`${API_URL}/api/paymentagent`, {
     params: { bulan },

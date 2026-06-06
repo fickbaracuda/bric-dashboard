@@ -4,6 +4,7 @@ import Scoreboard from './pages/Scoreboard';
 import UserManagement from './pages/UserManagement';
 import WinmeInstaqris from './pages/WinmeInstaqris';
 import PaymentAgent from './pages/PaymentAgent';
+import DompetDigital from './pages/DompetDigital';
 import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './components/Layout';
 
@@ -28,6 +29,7 @@ export default function App() {
         <Route path="/scoreboard" element={<ProtectedRoute><Scoreboard /></ProtectedRoute>} />
         <Route path="/winme"          element={<ProtectedRoute><WinmeInstaqris /></ProtectedRoute>} />
         <Route path="/payment-agent"  element={<ProtectedRoute><PaymentAgent /></ProtectedRoute>} />
+        <Route path="/dompet-digital" element={<ProtectedRoute><DompetDigital /></ProtectedRoute>} />
         <Route path="/users"      element={<ProtectedRoute><UserManagement /></ProtectedRoute>} />
         <Route path="/dashboard"  element={<ProtectedRoute><ComingSoon title="Dashboard Pencapaian" /></ProtectedRoute>} />
         <Route path="/tren"       element={<ProtectedRoute><ComingSoon title="Tren Harian" /></ProtectedRoute>} />
