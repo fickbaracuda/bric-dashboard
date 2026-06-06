@@ -58,7 +58,7 @@ components/
 pages/
   Login.jsx
   Scoreboard.jsx
-  WinmeInstaqris.jsx    — tab: Analitik | Leader & Tim
+  WinmeInstaqris.jsx    — tab: Pencapaian Unit | Scoreboard Tim
   PaymentAgent.jsx      — unit PAYMENT AGENT, warna #639922
   DompetDigital.jsx     — grup SpeedCash/Travel B2C/Pulsagram
   UserManagement.jsx
