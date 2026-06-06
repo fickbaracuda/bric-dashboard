@@ -1269,11 +1269,29 @@ body {
 /* ═══════════════════════════════════════════
    SIDEBAR — DYNAMIC MEMBER LINKS
 ═══════════════════════════════════════════ */
+.sidebar-accordion-wrap { position: relative; }
+
+.sidebar-link-accordion {
+  /* beri ruang untuk chevron */
+}
+
+.sidebar-chevron {
+  font-size: 13px;
+  color: var(--text-4);
+  flex-shrink: 0;
+  transition: transform 0.25s ease;
+  padding: 2px;
+  margin-left: 2px;
+}
+.sidebar-chevron--open { transform: rotate(180deg); }
+
 .sidebar-submenu {
-  margin-left: 12px;
-  padding-left: 12px;
+  margin-left: 14px;
+  padding-left: 10px;
   border-left: 2px solid var(--border);
-  margin-bottom: 2px;
+}
+.sidebar-submenu--animate {
+  transition: height 0.25s ease;
 }
 
 .sidebar-link-member {
