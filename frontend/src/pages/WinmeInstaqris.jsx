@@ -195,7 +195,7 @@ export default function WinmeInstaqris() {
           className={'winme-tab' + (tab === 'tim' ? ' winme-tab--active' : '')}
           onClick={() => setTab('tim')}
         >
-          <i className="ti ti-users" /> Leader &amp; Tim
+          <i className="ti ti-users" /> Scoreboard Tim
         </button>
       </div>
 
