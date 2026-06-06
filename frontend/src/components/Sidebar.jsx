@@ -3,9 +3,10 @@ import { useState, useEffect }  from 'react';
 import { logout, getUser }      from '../utils/auth';
 import { getMembers }           from '../services/api';
 
-const MENU_UTAMA = [
-  { label: 'Unit Scoreboard',   to: '/scoreboard',     icon: 'ti-trophy'        },
-  { label: 'Winme & InstaQris', to: '/winme',          icon: 'ti-bolt'          },
+const MENU_BEFORE = [
+  { label: 'Unit Scoreboard',   to: '/scoreboard',     icon: 'ti-trophy' },
+];
+const MENU_AFTER = [
   { label: 'Payment Agent',     to: '/payment-agent',  icon: 'ti-building-bank' },
   { label: 'Dompet Digital',    to: '/dompet-digital', icon: 'ti-wallet'        },
   { label: 'Kelola User',       to: '/users',          icon: 'ti-users', adminOnly: true },
@@ -73,7 +74,9 @@ export default function Sidebar({ onClose }) {
 
       <nav className="sidebar-nav">
         <div className="sidebar-nav-label">MENU</div>
-        {MENU_UTAMA.filter(m => !m.adminOnly || user?.role === 'admin').map(m => (
+
+        {/* Menu sebelum Winme */}
+        {MENU_BEFORE.map(m => (
           <NavLink
             key={m.to} to={m.to} onClick={onClose}
             className={({ isActive }) =>
@@ -85,12 +88,20 @@ export default function Sidebar({ onClose }) {
           </NavLink>
         ))}
 
+        {/* Winme & InstaQris + sub-member langsung di bawahnya */}
+        <NavLink
+          to="/winme" onClick={onClose}
+          className={({ isActive }) =>
+            'sidebar-link' + (isActive ? ' sidebar-link--active' : '')
+          }
+        >
+          <i className="ti ti-bolt" aria-hidden="true" />
+          <span>Winme &amp; InstaQris</span>
+        </NavLink>
+
         {(leaders.length > 0 || tim.length > 0) && (
-          <>
-            <div className="sidebar-nav-label" style={{ marginTop: 12 }}>
-              WINME &amp; INSTAQRIS
-            </div>
-            {leaders.map(m => (
+          <div className="sidebar-submenu">
+            {[...leaders, ...tim].map(m => (
               <NavLink
                 key={m.id} to={`/anggota/${m.id}`} onClick={onClose}
                 className={({ isActive }) =>
@@ -103,31 +114,28 @@ export default function Sidebar({ onClose }) {
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div className="sidebar-member-name">{m.nama}</div>
-                  <div className="sidebar-member-role">Leader</div>
+                  <div className="sidebar-member-role">
+                    {m.posisi === 'leader' ? 'Leader' : 'Tim'}
+                  </div>
                 </div>
                 <span className="sidebar-status-dot" style={{ background: getStatusColor(m) }} />
               </NavLink>
             ))}
-            {tim.map(m => (
-              <NavLink
-                key={m.id} to={`/anggota/${m.id}`} onClick={onClose}
-                className={({ isActive }) =>
-                  'sidebar-link sidebar-link-member' + (isActive ? ' sidebar-link--active' : '')
-                }
-                title={getStatusLabel(m)}
-              >
-                <div className="sidebar-avatar-sm" style={{ background: m.avatar_warna }}>
-                  {getInisial(m.nama)}
-                </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div className="sidebar-member-name">{m.nama}</div>
-                  <div className="sidebar-member-role">Tim</div>
-                </div>
-                <span className="sidebar-status-dot" style={{ background: getStatusColor(m) }} />
-              </NavLink>
-            ))}
-          </>
+          </div>
         )}
+
+        {/* Menu setelah Winme */}
+        {MENU_AFTER.filter(m => !m.adminOnly || user?.role === 'admin').map(m => (
+          <NavLink
+            key={m.to} to={m.to} onClick={onClose}
+            className={({ isActive }) =>
+              'sidebar-link' + (isActive ? ' sidebar-link--active' : '')
+            }
+          >
+            <i className={`ti ${m.icon}`} aria-hidden="true" />
+            <span>{m.label}</span>
+          </NavLink>
+        ))}
       </nav>
 
       <div className="sidebar-footer">

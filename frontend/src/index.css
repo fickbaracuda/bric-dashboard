@@ -1269,8 +1269,15 @@ body {
 /* ═══════════════════════════════════════════
    SIDEBAR — DYNAMIC MEMBER LINKS
 ═══════════════════════════════════════════ */
+.sidebar-submenu {
+  margin-left: 12px;
+  padding-left: 12px;
+  border-left: 2px solid var(--border);
+  margin-bottom: 2px;
+}
+
 .sidebar-link-member {
-  padding: 7px 12px;
+  padding: 6px 10px;
   gap: 8px;
 }
 .sidebar-avatar-sm {
