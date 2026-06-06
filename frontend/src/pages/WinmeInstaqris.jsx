@@ -189,7 +189,7 @@ export default function WinmeInstaqris() {
           className={'winme-tab' + (tab === 'analitik' ? ' winme-tab--active' : '')}
           onClick={() => setTab('analitik')}
         >
-          <i className="ti ti-chart-bar" /> Analitik
+          <i className="ti ti-chart-bar" /> Pencapaian Unit
         </button>
         <button
           className={'winme-tab' + (tab === 'tim' ? ' winme-tab--active' : '')}
