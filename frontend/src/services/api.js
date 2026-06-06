@@ -57,6 +57,56 @@ export const getWinmeData = async (bulan) => {
   return res.data;
 };
 
+export const getMembers = async (unit = 'winme_instaqris') => {
+  const res = await axios.get(`${API_URL}/api/members`, {
+    params: { unit }, headers: authHeaders()
+  });
+  return res.data;
+};
+export const getMemberDetail = async (id) => {
+  const res = await axios.get(`${API_URL}/api/members/${id}/detail`, {
+    headers: authHeaders()
+  });
+  return res.data;
+};
+export const createMember = async (data) => {
+  const res = await axios.post(`${API_URL}/api/members`, data, {
+    headers: authHeaders()
+  });
+  return res.data;
+};
+export const updateMember = async (id, data) => {
+  const res = await axios.put(`${API_URL}/api/members/${id}`, data, {
+    headers: authHeaders()
+  });
+  return res.data;
+};
+export const deleteMember = async (id) => {
+  const res = await axios.delete(`${API_URL}/api/members/${id}`, {
+    headers: authHeaders()
+  });
+  return res.data;
+};
+export const addMemberTarget = async (memberId, data) => {
+  const res = await axios.post(`${API_URL}/api/members/${memberId}/targets`, data, {
+    headers: authHeaders()
+  });
+  return res.data;
+};
+export const deleteMemberTarget = async (targetId) => {
+  const res = await axios.delete(`${API_URL}/api/members/targets/${targetId}`, {
+    headers: authHeaders()
+  });
+  return res.data;
+};
+export const updatePencapaian = async (targetId, data) => {
+  const res = await axios.post(
+    `${API_URL}/api/members/targets/${targetId}/pencapaian`, data,
+    { headers: authHeaders() }
+  );
+  return res.data;
+};
+
 export const getDompetDigitalData = async (bulan) => {
   const res = await axios.get(`${API_URL}/api/dompetdigital`, {
     params: { bulan },

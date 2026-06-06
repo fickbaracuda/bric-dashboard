@@ -10,6 +10,7 @@ const usersRoutes      = require('./routes/users');
 const winmeRoutes         = require('./routes/winme');
 const paymentAgentRoutes  = require('./routes/paymentagent');
 const dompetDigitalRoutes = require('./routes/dompetdigital');
+const membersRoutes       = require('./routes/members');
 const requireAuth         = require('./middleware/auth');
 
 const app  = express();
@@ -54,6 +55,7 @@ app.use('/api/users',      requireAuth, usersRoutes);
 app.use('/api/winme',          requireAuth, winmeRoutes);
 app.use('/api/paymentagent',   requireAuth, paymentAgentRoutes);
 app.use('/api/dompetdigital',  requireAuth, dompetDigitalRoutes);
+app.use('/api/members',       requireAuth, membersRoutes);
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
