@@ -1301,6 +1301,10 @@ body {
 .sidebar-link-sub {
   font-size: 13px;
 }
+.sidebar-link-tim-child {
+  padding-left: 20px;
+  opacity: 0.88;
+}
 
 .sidebar-link-member {
   padding: 6px 10px;

@@ -43,11 +43,13 @@ function StatusBadge({ avg }) {
 }
 
 /* ─────── Modals ─────── */
-function ModalMember({ initial, onSave, onClose }) {
+function ModalMember({ initial, leaders, onSave, onClose }) {
   const [form, setForm] = useState({
     nama: '', posisi: 'tim', fungsi: '',
     avatar_warna: '#7F77DD', unit: 'winme_instaqris',
+    leader_id: leaders[0]?.id || '',
     ...initial,
+    leader_id: initial?.leader_id || leaders[0]?.id || '',
   });
   const [busy, setBusy] = useState(false);
   const [err,  setErr]  = useState('');
@@ -56,6 +58,9 @@ function ModalMember({ initial, onSave, onClose }) {
 
   async function handleSave() {
     if (!form.nama.trim()) { setErr('Nama wajib diisi.'); return; }
+    if (form.posisi === 'tim' && !form.leader_id) {
+      setErr('Pilih leader untuk anggota Tim.'); return;
+    }
     setBusy(true); setErr('');
     try { await onSave(form); onClose(); }
     catch (e) { setErr(e.response?.data?.error || 'Gagal menyimpan.'); }
@@ -79,11 +84,33 @@ function ModalMember({ initial, onSave, onClose }) {
           </div>
           <div className="lm-field">
             <label>Posisi</label>
-            <select className="lm-input" value={form.posisi} onChange={set('posisi')}>
+            <select className="lm-input" value={form.posisi} onChange={e => {
+              const posisi = e.target.value;
+              setForm(f => ({
+                ...f, posisi,
+                leader_id: posisi === 'tim' ? (leaders[0]?.id || '') : '',
+              }));
+            }}>
               <option value="leader">Leader</option>
               <option value="tim">Tim</option>
             </select>
           </div>
+          {form.posisi === 'tim' && (
+            <div className="lm-field">
+              <label>Leader <span style={{ color: '#EF4444' }}>*</span></label>
+              {leaders.length === 0 ? (
+                <div className="lm-err" style={{ fontSize: 12 }}>
+                  Belum ada leader. Tambahkan leader terlebih dahulu.
+                </div>
+              ) : (
+                <select className="lm-input" value={form.leader_id} onChange={set('leader_id')}>
+                  {leaders.map(l => (
+                    <option key={l.id} value={l.id}>{l.nama}</option>
+                  ))}
+                </select>
+              )}
+            </div>
+          )}
           <div className="lm-field">
             <label>Fungsi / Jabatan</label>
             <input className="lm-input" value={form.fungsi} onChange={set('fungsi')}
@@ -513,6 +540,7 @@ export default function LeaderManagement({ navigate }) {
       {modal?.type === 'member' && (
         <ModalMember
           initial={modal.data || {}}
+          leaders={members.filter(m => m.posisi === 'leader')}
           onSave={handleSaveMember}
           onClose={() => setModal(null)}
         />

@@ -147,18 +147,21 @@ router.get('/:id/detail', async (req, res) => {
 
 /* ── POST /api/members ── */
 router.post('/', async (req, res) => {
-  const { nama, posisi, fungsi, avatar_warna, unit, targets = [] } = req.body;
+  const { nama, posisi, fungsi, avatar_warna, unit, leader_id, targets = [] } = req.body;
   if (!nama || !posisi)
     return res.status(400).json({ error: 'Nama dan posisi wajib diisi.' });
+  if (posisi === 'tim' && !leader_id)
+    return res.status(400).json({ error: 'Anggota Tim harus memilih Leader.' });
 
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     const memberRes = await client.query(`
-      INSERT INTO members (nama, posisi, fungsi, avatar_warna, unit)
-      VALUES ($1, $2, $3, $4, $5) RETURNING *
+      INSERT INTO members (nama, posisi, fungsi, avatar_warna, unit, leader_id)
+      VALUES ($1, $2, $3, $4, $5, $6) RETURNING *
     `, [nama.trim(), posisi, fungsi || null,
-        avatar_warna || '#7F77DD', unit || 'winme_instaqris']);
+        avatar_warna || '#7F77DD', unit || 'winme_instaqris',
+        posisi === 'tim' ? (leader_id || null) : null]);
     const member = memberRes.rows[0];
 
     const insertedTargets = [];
@@ -188,14 +191,15 @@ router.post('/', async (req, res) => {
 /* ── PUT /api/members/:id ── */
 router.put('/:id', async (req, res) => {
   const { id } = req.params;
-  const { nama, posisi, fungsi, avatar_warna, is_active } = req.body;
+  const { nama, posisi, fungsi, avatar_warna, is_active, leader_id } = req.body;
   try {
     const result = await pool.query(`
       UPDATE members
       SET nama=$1, posisi=$2, fungsi=$3, avatar_warna=$4,
-          is_active=$5, updated_at=NOW()
-      WHERE id=$6 RETURNING *
-    `, [nama, posisi, fungsi, avatar_warna, is_active ?? true, id]);
+          is_active=$5, leader_id=$6, updated_at=NOW()
+      WHERE id=$7 RETURNING *
+    `, [nama, posisi, fungsi, avatar_warna, is_active ?? true,
+        posisi === 'tim' ? (leader_id || null) : null, id]);
     res.json(result.rows[0]);
   } catch (err) {
     res.status(500).json({ error: err.message });

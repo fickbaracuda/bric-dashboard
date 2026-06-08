@@ -161,24 +161,67 @@ export default function Sidebar({ onClose }) {
 
                 <Accordion open={timOpen && hasMember}>
                   <div className="sidebar-submenu sidebar-submenu--deep">
-                    {members.map(m => (
+                    {/* Leaders + Tim di bawahnya */}
+                    {members.filter(m => m.posisi === 'leader').map(leader => {
+                      const timList = members.filter(m => m.posisi === 'tim' && String(m.leader_id) === String(leader.id));
+                      return (
+                        <div key={leader.id}>
+                          {/* Leader row */}
+                          <NavLink
+                            to={`/anggota/${leader.id}`} onClick={onClose}
+                            className={({ isActive }) =>
+                              'sidebar-link sidebar-link-member' + (isActive ? ' sidebar-link--active' : '')
+                            }
+                            title={getStatusLabel(leader)}
+                          >
+                            <div className="sidebar-avatar-sm" style={{ background: leader.avatar_warna }}>
+                              {getInisial(leader.nama)}
+                            </div>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div className="sidebar-member-name">{leader.nama}</div>
+                              <div className="sidebar-member-role">Leader</div>
+                            </div>
+                            <span className="sidebar-status-dot" style={{ background: getStatusColor(leader) }} />
+                          </NavLink>
+                          {/* Tim rows di bawah leader */}
+                          {timList.map(tim => (
+                            <NavLink
+                              key={tim.id} to={`/anggota/${tim.id}`} onClick={onClose}
+                              className={({ isActive }) =>
+                                'sidebar-link sidebar-link-member sidebar-link-tim-child' + (isActive ? ' sidebar-link--active' : '')
+                              }
+                              title={getStatusLabel(tim)}
+                            >
+                              <div className="sidebar-avatar-sm" style={{ background: tim.avatar_warna, width: 20, height: 20, fontSize: 8 }}>
+                                {getInisial(tim.nama)}
+                              </div>
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div className="sidebar-member-name">{tim.nama}</div>
+                                <div className="sidebar-member-role">Tim</div>
+                              </div>
+                              <span className="sidebar-status-dot" style={{ background: getStatusColor(tim) }} />
+                            </NavLink>
+                          ))}
+                        </div>
+                      );
+                    })}
+                    {/* Tim tanpa leader */}
+                    {members.filter(m => m.posisi === 'tim' && !m.leader_id).map(tim => (
                       <NavLink
-                        key={m.id} to={`/anggota/${m.id}`} onClick={onClose}
+                        key={tim.id} to={`/anggota/${tim.id}`} onClick={onClose}
                         className={({ isActive }) =>
                           'sidebar-link sidebar-link-member' + (isActive ? ' sidebar-link--active' : '')
                         }
-                        title={getStatusLabel(m)}
+                        title={getStatusLabel(tim)}
                       >
-                        <div className="sidebar-avatar-sm" style={{ background: m.avatar_warna }}>
-                          {getInisial(m.nama)}
+                        <div className="sidebar-avatar-sm" style={{ background: tim.avatar_warna }}>
+                          {getInisial(tim.nama)}
                         </div>
                         <div style={{ flex: 1, minWidth: 0 }}>
-                          <div className="sidebar-member-name">{m.nama}</div>
-                          <div className="sidebar-member-role">
-                            {m.posisi === 'leader' ? 'Leader' : 'Tim'}
-                          </div>
+                          <div className="sidebar-member-name">{tim.nama}</div>
+                          <div className="sidebar-member-role">Tim</div>
                         </div>
-                        <span className="sidebar-status-dot" style={{ background: getStatusColor(m) }} />
+                        <span className="sidebar-status-dot" style={{ background: getStatusColor(tim) }} />
                       </NavLink>
                     ))}
                   </div>
