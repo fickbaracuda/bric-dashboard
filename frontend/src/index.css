@@ -110,6 +110,13 @@ body {
   margin-bottom: 6px;
 }
 
+.sidebar-menu-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 8px;
+  opacity: 0.6;
+}
+
 .sidebar-link {
   display: flex;
   align-items: center;

@@ -189,6 +189,8 @@ export default function Sidebar({ onClose }) {
           <span>Unit Scoreboard</span>
         </NavLink>
 
+        <div className="sidebar-menu-sep" />
+
         {/* ── Winme & InstaQris — level 1 accordion ── */}
         <div className="sidebar-accordion-wrap">
           <NavLink
@@ -279,12 +281,16 @@ export default function Sidebar({ onClose }) {
           </Accordion>
         </div>
 
+        <div className="sidebar-menu-sep" />
+
         {/* Payment Agent */}
         <NavLink to="/payment-agent" onClick={onClose}
           className={({ isActive }) => 'sidebar-link' + (isActive ? ' sidebar-link--active' : '')}>
           <i className="ti ti-building-bank" aria-hidden="true" />
           <span>Payment Agent</span>
         </NavLink>
+
+        <div className="sidebar-menu-sep" />
 
         {/* Dompet Digital */}
         <NavLink to="/dompet-digital" onClick={onClose}
