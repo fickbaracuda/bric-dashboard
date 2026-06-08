@@ -12,6 +12,8 @@ async function syncHandler(req, res) {
 
   let count = 0;
   for (const r of rows) {
+    // skip baris total/summary (mcc kosong atau kategori mengandung kata "total")
+    if (!r.mcc || String(r.mcc).trim() === '' || /total/i.test(String(r.kategori || ''))) continue;
     await pool.query(`
       INSERT INTO segmen_snapshot
         (tanggal,mcc,kategori,
