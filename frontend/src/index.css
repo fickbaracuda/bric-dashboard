@@ -1997,10 +1997,10 @@ body {
 }
 
 /* ═══════════════════════════════════════════
-   LEADER SCOREBOARD (ls-*)
+   LEADER SCOREBOARD (lsc-* / ls-* shared)
 ═══════════════════════════════════════════ */
 
-/* Filter row */
+/* Filter row — shared with ScoreboardTim */
 .ls-filter-row {
   display: flex; gap: 6px; flex-wrap: wrap;
   margin-bottom: 12px;
@@ -2027,128 +2027,247 @@ body {
   background: var(--bg-page); color: var(--text-4);
 }
 
-/* Cards list */
-.ls-cards { display: flex; flex-direction: column; gap: 12px; }
-
-/* Leader card */
-.ls-card {
+/* ── Stats Row ── */
+.lsc-stats-row {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.lsc-stat-card {
   background: var(--bg-card);
   border: 0.5px solid var(--border);
   border-radius: var(--radius);
-  padding: 18px;
+  padding: 14px 16px;
+  display: flex; align-items: center; gap: 12px;
   box-shadow: var(--shadow-sm);
-  cursor: pointer;
-  transition: box-shadow 0.15s, border-color 0.15s, transform 0.1s;
 }
-.ls-card:hover {
-  box-shadow: var(--shadow-md);
-  border-color: #C4B5FD;
-  transform: translateY(-1px);
+.lsc-stat-icon {
+  width: 36px; height: 36px; border-radius: 9px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px; flex-shrink: 0;
+}
+.lsc-stat-val {
+  font-size: 20px; font-weight: 800; color: var(--text-1); line-height: 1;
+}
+.lsc-stat-lbl {
+  font-size: 10.5px; color: var(--text-4); font-weight: 500; margin-top: 3px;
 }
 
-/* Rank badges */
-.ls-rank {
-  width: 38px; height: 38px; border-radius: 50%;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 20px; flex-shrink: 0;
+/* ── Toolbar: filter + legend ── */
+.lsc-toolbar {
+  display: flex; align-items: flex-start;
+  justify-content: space-between; gap: 12px;
+  flex-wrap: wrap; margin-bottom: 16px;
 }
-.ls-rank-gold   { background: #FEF9C3; }
-.ls-rank-silver { background: #F3F4F6; }
-.ls-rank-bronze { background: #FEF3C7; opacity: 0.8; }
-.ls-rank-n {
-  background: #F3F4F6; color: #6B7280;
-  font-size: 14px; font-weight: 800;
+
+/* ── Card Grid ── */
+.lsc-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+  margin-bottom: 24px;
+}
+
+/* ── Compact Card ── */
+.lsc-card {
+  background: var(--bg-card);
+  border: 0.5px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  position: relative;
+  transition: box-shadow 0.15s, border-color 0.15s, transform 0.1s;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.lsc-card:hover {
+  box-shadow: var(--shadow-md);
+  border-color: #C4B5FD;
+  transform: translateY(-2px);
+}
+
+.lsc-card-rank {
+  position: absolute; top: 12px; right: 12px;
+}
+
+.lsc-card-head {
+  display: flex; align-items: center; gap: 10px;
+  padding-right: 36px; /* space for rank badge */
 }
 
 /* Avatar */
-.ls-avatar {
-  width: 46px; height: 46px; border-radius: 50%;
-  font-size: 15px; font-weight: 800; color: #fff;
+.lsc-avatar {
+  width: 40px; height: 40px; border-radius: 50%;
+  font-size: 13px; font-weight: 800; color: #fff;
   display: flex; align-items: center; justify-content: center;
   flex-shrink: 0;
 }
+.lsc-avatar-sm {
+  width: 28px; height: 28px; font-size: 10px;
+}
 
-/* Card layout */
-.ls-card-main {
-  display: flex; align-items: flex-start; gap: 12px; margin-bottom: 0;
+.lsc-card-info { flex: 1; min-width: 0; }
+.lsc-name {
+  font-size: 13.5px; font-weight: 700; color: var(--text-1);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.ls-card-body { flex: 1; min-width: 0; }
+.lsc-meta {
+  display: flex; align-items: center; gap: 5px; margin-top: 3px; flex-wrap: wrap;
+}
+.lsc-unit-badge {
+  display: inline-block; padding: 1px 7px; border-radius: 20px;
+  border: 0.5px solid; font-size: 9.5px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.3px;
+}
+.lsc-fungsi { font-size: 10.5px; color: var(--text-4); }
 
-.ls-card-top {
-  display: flex; align-items: flex-start;
-  justify-content: space-between; gap: 12px;
-  margin-bottom: 10px;
-}
-.ls-card-left { flex: 1; min-width: 0; }
-
-.ls-name {
-  font-size: 15px; font-weight: 700; color: var(--text-1);
-  margin-bottom: 5px;
-}
-.ls-meta {
-  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
-}
-.ls-unit-badge {
-  display: inline-block; padding: 2px 8px; border-radius: 20px;
-  font-size: 10px; font-weight: 700; text-transform: uppercase;
-  letter-spacing: 0.3px;
-}
-.ls-fungsi    { font-size: 11px; color: var(--text-4); }
-.ls-tim-count { font-size: 11px; color: var(--text-4); display: flex; align-items: center; gap: 3px; }
-
-.ls-card-right {
-  display: flex; flex-direction: column; align-items: flex-end;
-  gap: 5px; flex-shrink: 0;
-}
-.ls-pct {
-  font-size: 26px; font-weight: 800; line-height: 1;
+.lsc-pct {
+  font-size: 22px; font-weight: 800; line-height: 1; flex-shrink: 0;
 }
 
 /* Progress bar */
-.ls-progress-bg {
-  height: 7px; border-radius: 4px;
+.lsc-prog-bg {
+  height: 6px; border-radius: 3px;
   background: var(--border); overflow: hidden;
-  margin-bottom: 10px;
 }
-.ls-progress-fill {
-  height: 100%; border-radius: 4px;
+.lsc-prog-fill {
+  height: 100%; border-radius: 3px;
   transition: width 0.5s ease;
 }
 
-/* Revenue row */
-.ls-rev-row {
-  display: flex; align-items: center; gap: 0; flex-wrap: wrap;
+/* Stats row inside card */
+.lsc-card-stats {
+  display: flex; align-items: center; gap: 0;
 }
-.ls-rev-item { padding: 0 14px; }
-.ls-rev-item:first-child { padding-left: 0; }
-.ls-rev-sep {
-  width: 1px; height: 28px; background: var(--border);
-  flex-shrink: 0;
+.lsc-stat { flex: 1; }
+.lsc-stat-sep {
+  width: 1px; height: 24px; background: var(--border); flex-shrink: 0; margin: 0 8px;
 }
-.ls-rev-lbl {
-  font-size: 10px; font-weight: 600; color: var(--text-4);
+.lsc-stat-lbl {
+  font-size: 9.5px; font-weight: 600; color: var(--text-4);
   text-transform: uppercase; letter-spacing: 0.3px;
-  margin-bottom: 2px;
 }
-.ls-rev-val {
-  font-size: 13px; font-weight: 600; color: var(--text-2);
+.lsc-stat-val {
+  font-size: 12px; font-weight: 600; color: var(--text-2); margin-top: 1px;
 }
 
-/* Recommendation */
-.ls-rec {
+.lsc-card-footer {
+  display: flex; align-items: center; justify-content: space-between;
+  padding-top: 8px; border-top: 0.5px solid var(--border);
+}
+.lsc-detail-hint {
+  font-size: 11px; color: var(--text-4); display: flex; align-items: center; gap: 2px;
+}
+.lsc-detail-hint .ti { font-size: 12px; }
+
+/* ── Rank Badges ── */
+.lsc-rank {
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%; flex-shrink: 0;
+}
+.lsc-rank-md { width: 36px; height: 36px; font-size: 20px; }
+.lsc-rank-sm { width: 30px; height: 30px; font-size: 17px; }
+.lsc-rank-xs { width: 24px; height: 24px; font-size: 13px; }
+.lsc-rank-medal { background: transparent; }
+.lsc-rank-n {
+  background: #F3F4F6; color: #6B7280; font-weight: 800;
+}
+.lsc-rank-sm.lsc-rank-n { font-size: 12px; }
+.lsc-rank-xs.lsc-rank-n { font-size: 10px; }
+
+/* ── Section heading ── */
+.lsc-section { margin-bottom: 24px; }
+.lsc-section-head {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 14px; font-weight: 700; color: var(--text-1);
+  margin-bottom: 12px;
+}
+.lsc-section-head .ti { font-size: 16px; color: var(--text-3); }
+.lsc-section-sub {
+  font-size: 11.5px; font-weight: 400; color: var(--text-4); margin-left: 4px;
+}
+
+/* ── Scoreboard Table ── */
+.lsc-table-wrap {
+  background: var(--bg-card);
+  border: 0.5px solid var(--border);
+  border-radius: var(--radius);
+  overflow-x: auto;
+  box-shadow: var(--shadow-sm);
+}
+.lsc-table {
+  width: 100%; border-collapse: collapse;
+  font-size: 13px;
+}
+.lsc-th {
+  padding: 10px 14px;
+  text-align: left; font-size: 11px; font-weight: 700;
+  color: var(--text-4); text-transform: uppercase; letter-spacing: 0.3px;
+  background: var(--bg-page);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap; cursor: pointer; user-select: none;
+  transition: color 0.15s;
+}
+.lsc-th:hover { color: var(--text-2); }
+.lsc-th--active { color: var(--primary) !important; }
+.lsc-tr {
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.lsc-tr:not(:last-child) td { border-bottom: 1px solid var(--border); }
+.lsc-tr:hover td { background: #F9FAFB; }
+.lsc-td {
+  padding: 10px 14px; color: var(--text-2); vertical-align: middle;
+}
+.lsc-td-rank { width: 60px; text-align: center; }
+.lsc-td-center { text-align: center; }
+.lsc-td-num { text-align: right; font-variant-numeric: tabular-nums; }
+.lsc-td-pct { text-align: right; font-variant-numeric: tabular-nums; }
+.lsc-td-fungsi { color: var(--text-4); font-size: 12px; }
+
+.lsc-tr-leader {
+  display: flex; align-items: center; gap: 8px;
+}
+.lsc-tr-name { font-weight: 600; color: var(--text-1); }
+
+/* ── Rekomendasi section ── */
+.lsc-recs { display: flex; flex-direction: column; gap: 10px; }
+.lsc-rec-card {
+  background: var(--bg-card);
+  border: 0.5px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  cursor: pointer;
+  transition: box-shadow 0.15s;
+}
+.lsc-rec-card:hover { box-shadow: var(--shadow-md); }
+.lsc-rec-head {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 10px;
+}
+.lsc-rec-leader {
+  display: flex; align-items: center; gap: 6px; flex: 1;
+}
+.lsc-rec-name { font-size: 13px; font-weight: 700; color: var(--text-1); }
+.lsc-rec-pct  { font-size: 16px; font-weight: 800; flex-shrink: 0; }
+.lsc-rec-body {
   display: flex; align-items: flex-start; gap: 8px;
-  margin-top: 14px; padding-top: 12px;
-  border-top: 0.5px solid var(--border);
   font-size: 12.5px; color: var(--text-2); line-height: 1.65;
+  padding-top: 10px; border-top: 0.5px solid var(--border);
 }
+.lsc-rec-body .ti { font-size: 14px; flex-shrink: 0; margin-top: 2px; }
 
+/* ── Responsive ── */
+@media (max-width: 1200px) {
+  .lsc-grid { grid-template-columns: repeat(2, 1fr); }
+  .lsc-stats-row { grid-template-columns: repeat(3, 1fr); }
+}
 @media (max-width: 768px) {
-  .ls-card-top { flex-direction: column; }
-  .ls-card-right { flex-direction: row; align-items: center; }
-  .ls-pct { font-size: 20px; }
-  .ls-rev-row { gap: 8px; }
-  .ls-rev-sep { display: none; }
-  .ls-rev-item { padding: 0; }
+  .lsc-grid { grid-template-columns: 1fr; }
+  .lsc-stats-row { grid-template-columns: repeat(2, 1fr); }
+  .lsc-toolbar { flex-direction: column; }
+  .lsc-pct { font-size: 18px; }
+  .lsc-rec-head { flex-wrap: wrap; }
 }
 
 /* ═══════════════════════════════════════════
