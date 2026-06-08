@@ -211,7 +211,7 @@ export default function Sidebar({ onClose }) {
             onClick={() => { setWinmeOpen(o => !o); onClose(); }}
             className={({ isActive }) =>
               'sidebar-link sidebar-link-accordion' +
-              (isActive || isWinmePath || isTimPath ? ' sidebar-link--active' : '')
+              (isActive || isWinmePath || isWinmeTimPath ? ' sidebar-link--active' : '')
             }
           >
             <i className="ti ti-bolt" aria-hidden="true" />
@@ -233,7 +233,7 @@ export default function Sidebar({ onClose }) {
                   onClick={() => { if (hasMember) setTimOpen(o => !o); onClose(); }}
                   className={({ isActive }) =>
                     'sidebar-link sidebar-link-accordion sidebar-link-sub' +
-                    (isActive || isTimPath ? ' sidebar-link--active' : '')
+                    (isActive || isWinmeTimPath ? ' sidebar-link--active' : '')
                   }
                 >
                   <i className="ti ti-users" aria-hidden="true" />
