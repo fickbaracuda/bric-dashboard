@@ -43,10 +43,10 @@ function StatusBadge({ avg }) {
 }
 
 /* ─────── Modals ─────── */
-function ModalMember({ initial, leaders, onSave, onClose }) {
+function ModalMember({ initial, leaders, unit, onSave, onClose }) {
   const [form, setForm] = useState({
     nama: '', posisi: 'tim', fungsi: '',
-    avatar_warna: '#7F77DD', unit: 'winme_instaqris',
+    avatar_warna: '#7F77DD', unit: unit || 'winme_instaqris',
     leader_id: leaders[0]?.id || '',
     ...initial,
     leader_id: initial?.leader_id || leaders[0]?.id || '',
@@ -406,8 +406,13 @@ function MemberCard({ member, onEdit, onDelete, onAddTarget, onDeleteTarget, onI
   );
 }
 
+const UNIT_LABEL = {
+  winme_instaqris: 'Winme / InstaQris',
+  payment_agent:   'Payment Agent',
+};
+
 /* ─────── Main export ─────── */
-export default function LeaderManagement({ navigate }) {
+export default function LeaderManagement({ navigate, unit = 'winme_instaqris' }) {
   const [members,  setMembers]  = useState([]);
   const [loading,  setLoading]  = useState(true);
   const [toast,    setToast]    = useState('');
@@ -415,7 +420,7 @@ export default function LeaderManagement({ navigate }) {
 
   async function load() {
     setLoading(true);
-    try { setMembers(await getMembers('winme_instaqris')); }
+    try { setMembers(await getMembers(unit)); }
     catch { setMembers([]); }
     finally { setLoading(false); }
   }
@@ -469,7 +474,7 @@ export default function LeaderManagement({ navigate }) {
     <div className="lm-wrap">
       <div className="lm-toolbar">
         <div>
-          <div className="lm-toolbar-title">Leader &amp; Tim Winme / InstaQris</div>
+          <div className="lm-toolbar-title">Leader &amp; Tim {UNIT_LABEL[unit] || unit}</div>
           <div className="lm-toolbar-sub">{members.length} anggota aktif</div>
         </div>
         <button
@@ -541,6 +546,7 @@ export default function LeaderManagement({ navigate }) {
         <ModalMember
           initial={modal.data || {}}
           leaders={members.filter(m => m.posisi === 'leader')}
+          unit={unit}
           onSave={handleSaveMember}
           onClose={() => setModal(null)}
         />

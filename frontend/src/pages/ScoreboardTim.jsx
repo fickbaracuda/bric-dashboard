@@ -179,7 +179,11 @@ function LeaderGroup({ leader, timList, navigate }) {
 }
 
 /* ── Main Page ── */
-export default function ScoreboardTim() {
+export default function ScoreboardTim({
+  unit      = 'winme_instaqris',
+  unitLabel = 'WINME&INSTAQRIS',
+  unitColor = '#7F77DD',
+}) {
   const navigate = useNavigate();
   const [members,  setMembers]  = useState([]);
   const [loading,  setLoading]  = useState(true);
@@ -187,7 +191,7 @@ export default function ScoreboardTim() {
 
   async function load() {
     setLoading(true);
-    try { setMembers(await getMembers('winme_instaqris')); }
+    try { setMembers(await getMembers(unit)); }
     catch { setMembers([]); }
     finally { setLoading(false); }
   }
@@ -214,9 +218,9 @@ export default function ScoreboardTim() {
       <div className="page-header">
         <div>
           <div className="page-title" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <i className="ti ti-podium" style={{ color: '#7F77DD' }} />
+            <i className="ti ti-podium" style={{ color: unitColor }} />
             Scoreboard Tim
-            <span className="pill pill-aman" style={{ fontSize: 11 }}>WINME&amp;INSTAQRIS</span>
+            <span className="pill pill-aman" style={{ fontSize: 11, background: unitColor + '22', color: unitColor, border: `0.5px solid ${unitColor}55` }}>{unitLabel}</span>
           </div>
           <div className="page-sub">
             Ranking &amp; pencapaian tim · {leaders.length} leader · {allTim.length} anggota tim
@@ -363,7 +367,7 @@ export default function ScoreboardTim() {
               <button className="lm-modal-close" onClick={() => { setShowKelola(false); handleMembersUpdated(); }}>✕</button>
             </div>
             <div className="st-kelola-body">
-              <LeaderManagement navigate={navigate} onUpdate={handleMembersUpdated} />
+              <LeaderManagement navigate={navigate} unit={unit} onUpdate={handleMembersUpdated} />
             </div>
           </div>
         </div>
