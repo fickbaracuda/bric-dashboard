@@ -281,7 +281,7 @@ router.post('/chat', async (req, res) => {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return res.status(503).json({ error: 'AI belum dikonfigurasi. Hubungi admin.' });
 
-  const { message, history = [] } = req.body;
+  const { message, history = [], pageContext = '' } = req.body;
   if (!message?.trim())      return res.status(400).json({ error: 'Pesan tidak boleh kosong.' });
   if (message.length > 2000) return res.status(400).json({ error: 'Pesan terlalu panjang (maks 2000 karakter).' });
 
@@ -289,11 +289,11 @@ router.post('/chat', async (req, res) => {
   if (!checkRateLimit(username))
     return res.status(429).json({ error: 'Terlalu banyak pesan. Tunggu sebentar.' });
 
-  /* Ambil data real-time dashboard */
-  const dataContext = await fetchDashboardContext().catch(e => `[Gagal memuat data: ${e.message}]`);
-
-  /* Gabungkan system prompt + data real-time */
-  const fullSystemPrompt = SYSTEM_PROMPT + '\n\n' + dataContext;
+  /* Jika frontend mengirim pageContext (sudah di-build oleh ai-context.js), gunakan langsung.
+     Jika tidak, fallback ke fetch semua data (backward-compatible). */
+  const fullSystemPrompt = pageContext && pageContext.trim()
+    ? pageContext
+    : SYSTEM_PROMPT + '\n\n' + await fetchDashboardContext().catch(e => `[Gagal memuat data: ${e.message}]`);
 
   const contents = [
     ...history.slice(-10).map(h => ({

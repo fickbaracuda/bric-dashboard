@@ -1,13 +1,99 @@
-import { useState, useRef, useEffect } from 'react';
-import { sendAiMessage } from '../services/api';
+import { useState, useRef, useEffect, useCallback } from 'react';
+import { sendAiMessage, getAiContext, saveChatMessage, getChatHistory, deleteChatHistory } from '../services/api';
 
-const SUGGESTIONS = [
-  'Apa itu status On Track dan Unggul?',
-  'Bagaimana cara meningkatkan pencapaian KPI?',
-  'Apa perbedaan Revenue Target RKAP vs pencapaian?',
-  'Tips analisa performa tim yang efektif?',
-];
+/* ─ Page detection ─ */
+function getPageInfo() {
+  const path = window.location.pathname;
+  let page      = 'scoreboard';
+  let member_id = null;
 
+  if (path === '/' || path.startsWith('/scoreboard') && !path.startsWith('/scoreboard-tim'))
+    page = 'scoreboard';
+  else if (path.startsWith('/scoreboard-tim')) page = 'scoreboard-tim';
+  else if (path.startsWith('/winme'))          page = 'winme';
+  else if (path.startsWith('/payment-agent'))  page = 'payment-agent';
+  else if (path.startsWith('/dompet-digital')) page = 'dompet';
+  else if (path.startsWith('/anggota/')) {
+    page = 'anggota';
+    member_id = path.split('/')[2] || null;
+  } else if (path.startsWith('/leader-scoreboard')) page = 'leader-scoreboard';
+
+  return { page, member_id };
+}
+
+function getCurrentBulan() {
+  const now   = new Date();
+  const month = now.toLocaleString('en-US', { month: 'short' }).toUpperCase();
+  return `${month}_${now.getFullYear()}`;
+}
+
+/* ─ Quick Questions per halaman ─ */
+const QUICK_QUESTIONS = {
+  scoreboard: [
+    'Unit mana yang paling kritis saat ini?',
+    'Analisa 3 unit KPI terendah bulan ini',
+    'Berapa total gap BMS ke target?',
+    'Proyeksikan akhir bulan jika tren berlanjut',
+  ],
+  winme: [
+    'Analisa kondisi Winme vs target bulan ini',
+    'Performa InstaQris dibanding Winme?',
+    'Berapa gap Winme ke target dan sisa harinya?',
+    'Strategi akselerasi InstaQris minggu ini',
+  ],
+  'payment-agent': [
+    'Analisa pace Payment Agent hari ini',
+    'Berapa rata-rata harian untuk tutup gap?',
+    'Kondisi Payment Agent vs target RKAP?',
+    'Rekomendasi konkret akselerasi revenue',
+  ],
+  dompet: [
+    'Sub-unit mana yang paling bermasalah?',
+    'Analisa SpeedCash vs Travel B2C vs Pulsagram',
+    'Berapa kontribusi tiap sub-unit ke grup?',
+    'Strategi recover sub-unit di bawah target',
+  ],
+  'scoreboard-tim': [
+    'Leader mana yang paling on track?',
+    'Siapa yang paling butuh perhatian segera?',
+    'Bandingkan performa antar leader',
+    'Analisa distribusi beban antar tim',
+  ],
+  'leader-scoreboard': [
+    'Siapa leader dengan KPI tertinggi?',
+    'Leader mana yang butuh intervensi sekarang?',
+    'Analisa gap pencapaian lintas leader',
+    'Rekomendasi coaching untuk leader bermasalah',
+  ],
+  anggota: [
+    'Analisa kondisi anggota ini sekarang',
+    'Tren pencapaian 7 hari terakhir?',
+    'Gap ke target dan strategi mengatasinya?',
+    'Rekomendasi konkret untuk naikkan KPI',
+  ],
+  default: [
+    'Analisa kondisi BMS secara keseluruhan',
+    'Unit mana yang perlu perhatian segera?',
+    'Proyeksi akhir bulan ini?',
+    'Prioritas tindakan untuk minggu ini',
+  ],
+};
+
+function getWelcomeMessage(page) {
+  const messages = {
+    scoreboard:          'Data seluruh unit sudah saya baca. Tanya tentang performa, gap, atau proyeksi akhir bulan.',
+    winme:               'Data Winme & InstaQris sudah dimuat. Siap analisa performa, gap, dan strategi.',
+    'payment-agent':     'Data Payment Agent sudah saya baca. Mau analisa pace, gap ke target, atau strategi akselerasi?',
+    dompet:              'Data SpeedCash, Travel B2C, Pulsagram sudah dimuat. Siap analisa sub-unit mana saja.',
+    'scoreboard-tim':    'Data scoreboard tim sudah dimuat. Mau bandingkan performa antar leader?',
+    'leader-scoreboard': 'Data semua leader sudah saya baca. Siap analisa ranking, gap, dan rekomendasi coaching.',
+    anggota:             'Profil dan pencapaian anggota sudah saya baca. Tanya apa saja tentang kondisinya.',
+    default:             'Halo! Saya BRIC AI. Tanyakan apa saja seputar data performa dan strategi bisnis BMS.',
+  };
+  return messages[page] || messages.default;
+}
+
+/* ─ Sub-components ─ */
 function TypingDots() {
   return (
     <div className="aic-bubble aic-bubble-ai aic-typing">
@@ -18,40 +104,75 @@ function TypingDots() {
 
 function Bubble({ msg }) {
   const isAi = msg.role === 'ai';
+  const lines = msg.text.split('\n');
   return (
     <div className={'aic-row ' + (isAi ? 'aic-row-ai' : 'aic-row-user')}>
-      {isAi && (
-        <div className="aic-avatar-ai">
-          <i className="ti ti-sparkles" />
-        </div>
-      )}
+      {isAi && <div className="aic-avatar-ai"><i className="ti ti-sparkles" /></div>}
       <div className={'aic-bubble ' + (isAi ? 'aic-bubble-ai' : 'aic-bubble-user')}>
-        {msg.text.split('\n').map((line, i) => (
-          <span key={i}>{line}{i < msg.text.split('\n').length - 1 && <br />}</span>
+        {lines.map((line, i) => (
+          <span key={i}>{line}{i < lines.length - 1 && <br />}</span>
         ))}
       </div>
     </div>
   );
 }
 
+/* ─ Main Component ─ */
 export default function AiChat() {
-  const [open,    setOpen]    = useState(false);
-  const [input,   setInput]   = useState('');
-  const [history, setHistory] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [error,   setError]   = useState('');
+  const [open,           setOpen]          = useState(false);
+  const [input,          setInput]         = useState('');
+  const [history,        setHistory]       = useState([]);
+  const [loading,        setLoading]       = useState(false);
+  const [error,          setError]         = useState('');
+  const [systemPrompt,   setSystemPrompt]  = useState('');
+  const [pageQuestions,  setPageQuestions] = useState(QUICK_QUESTIONS.default);
+  const [welcomeMsg,     setWelcomeMsg]    = useState(getWelcomeMessage('default'));
+  const [contextLoading, setCtxLoading]   = useState(false);
+  const [currentPage,    setCurrentPage]   = useState('default');
   const bottomRef = useRef(null);
   const inputRef  = useRef(null);
 
-  /* Auto-scroll ke bawah saat ada pesan baru */
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [history, loading]);
 
-  /* Fokus input saat panel dibuka */
+  const loadContextAndHistory = useCallback(async () => {
+    const { page, member_id } = getPageInfo();
+    setCurrentPage(page);
+    setPageQuestions(QUICK_QUESTIONS[page] || QUICK_QUESTIONS.default);
+    setWelcomeMsg(getWelcomeMessage(page));
+    setCtxLoading(true);
+
+    try {
+      const params = { page, bulan: getCurrentBulan() };
+      if (member_id) params.member_id = member_id;
+
+      const [ctxRes, histRes] = await Promise.all([
+        getAiContext(params),
+        getChatHistory({ page, limit: 20 }),
+      ]);
+
+      if (ctxRes?.systemPrompt) setSystemPrompt(ctxRes.systemPrompt);
+
+      if (histRes?.length) {
+        setHistory(histRes.map(h => ({
+          role: h.role === 'model' ? 'ai' : 'user',
+          text: h.message,
+        })));
+      }
+    } catch (err) {
+      console.warn('AI context load failed:', err.message);
+    } finally {
+      setCtxLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
-    if (open) setTimeout(() => inputRef.current?.focus(), 150);
-  }, [open]);
+    if (open) {
+      loadContextAndHistory();
+      setTimeout(() => inputRef.current?.focus(), 150);
+    }
+  }, [open, loadContextAndHistory]);
 
   async function send(text) {
     const msg = (text || input).trim();
@@ -64,11 +185,16 @@ export default function AiChat() {
     setLoading(true);
 
     try {
-      const { reply } = await sendAiMessage(msg, history);
+      const { reply } = await sendAiMessage(msg, history, systemPrompt);
       setHistory(h => [...h, { role: 'ai', text: reply }]);
+
+      /* Simpan ke DB (silent) */
+      const page = currentPage;
+      saveChatMessage({ role: 'user',  message: msg,   page }).catch(() => {});
+      saveChatMessage({ role: 'model', message: reply, page }).catch(() => {});
     } catch (err) {
-      const msg = err.response?.data?.error || 'Gagal mendapat respons. Coba lagi.';
-      setError(msg);
+      const errMsg = err.response?.data?.error || 'Gagal mendapat respons. Coba lagi.';
+      setError(errMsg);
     } finally {
       setLoading(false);
     }
@@ -78,10 +204,13 @@ export default function AiChat() {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
   }
 
-  function clearChat() {
+  async function clearChat() {
     setHistory([]);
     setError('');
+    deleteChatHistory(currentPage).catch(() => {});
   }
+
+  const hasHistory = history.length > 0;
 
   return (
     <>
@@ -93,10 +222,8 @@ export default function AiChat() {
         aria-label="AI Chat"
       >
         <i className={'ti ' + (open ? 'ti-x' : 'ti-message-chatbot')} />
-        {!open && history.length === 0 && (
-          <span className="aic-fab-label">Tanya AI</span>
-        )}
-        {!open && history.length > 0 && (
+        {!open && !hasHistory && <span className="aic-fab-label">Tanya AI</span>}
+        {!open && hasHistory && (
           <span className="aic-fab-badge">{history.filter(h => h.role === 'ai').length}</span>
         )}
       </button>
@@ -111,11 +238,11 @@ export default function AiChat() {
             </div>
             <div>
               <div className="aic-header-title">BRIC AI Assistant</div>
-              <div className="aic-header-sub">Powered by Gemini · Selalu siap membantu</div>
+              <div className="aic-header-sub">Powered by Gemini 2.5 · Data real-time</div>
             </div>
           </div>
           <div className="aic-header-actions">
-            {history.length > 0 && (
+            {hasHistory && (
               <button className="aic-icon-btn" onClick={clearChat} title="Hapus percakapan">
                 <i className="ti ti-trash" />
               </button>
@@ -129,22 +256,32 @@ export default function AiChat() {
         {/* Messages */}
         <div className="aic-messages">
           {/* Welcome state */}
-          {history.length === 0 && (
+          {!hasHistory && (
             <div className="aic-welcome">
               <div className="aic-welcome-icon">
                 <i className="ti ti-robot" />
               </div>
               <div className="aic-welcome-title">Halo! Saya BRIC AI</div>
               <div className="aic-welcome-sub">
-                Tanyakan apa saja seputar dashboard, data performa, atau strategi bisnis.
+                {contextLoading
+                  ? 'Membaca data dashboard...'
+                  : welcomeMsg
+                }
               </div>
-              <div className="aic-suggestions">
-                {SUGGESTIONS.map((s, i) => (
-                  <button key={i} className="aic-suggestion" onClick={() => send(s)}>
-                    {s}
-                  </button>
-                ))}
-              </div>
+              {!contextLoading && (
+                <div className="aic-suggestions">
+                  {pageQuestions.map((q, i) => (
+                    <button key={i} className="aic-suggestion" onClick={() => send(q)}>
+                      {q}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {contextLoading && (
+                <div className="aic-ctx-loading">
+                  <i className="ti ti-loader-2 aic-spin" /> Memuat konteks halaman...
+                </div>
+              )}
             </div>
           )}
 
@@ -152,7 +289,12 @@ export default function AiChat() {
           {history.map((msg, i) => <Bubble key={i} msg={msg} />)}
 
           {/* Typing indicator */}
-          {loading && <div className="aic-row aic-row-ai"><div className="aic-avatar-ai"><i className="ti ti-sparkles" /></div><TypingDots /></div>}
+          {loading && (
+            <div className="aic-row aic-row-ai">
+              <div className="aic-avatar-ai"><i className="ti ti-sparkles" /></div>
+              <TypingDots />
+            </div>
+          )}
 
           {/* Error */}
           {error && (
@@ -163,6 +305,17 @@ export default function AiChat() {
 
           <div ref={bottomRef} />
         </div>
+
+        {/* Quick question chips (muncul juga saat ada history) */}
+        {hasHistory && !loading && (
+          <div className="aic-chips-bar">
+            {pageQuestions.slice(0, 2).map((q, i) => (
+              <button key={i} className="aic-chip" onClick={() => send(q)}>
+                {q}
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* Input */}
         <div className="aic-input-wrap">
@@ -175,12 +328,12 @@ export default function AiChat() {
             placeholder="Ketik pertanyaan... (Enter untuk kirim)"
             rows={1}
             maxLength={2000}
-            disabled={loading}
+            disabled={loading || contextLoading}
           />
           <button
             className="aic-send"
             onClick={() => send()}
-            disabled={!input.trim() || loading}
+            disabled={!input.trim() || loading || contextLoading}
             title="Kirim (Enter)"
           >
             {loading
@@ -190,7 +343,7 @@ export default function AiChat() {
           </button>
         </div>
         <div className="aic-footer-note">
-          Gemini 1.5 Flash · Respons dapat berbeda tiap sesi
+          Gemini 2.5 Flash · Data rahasia internal BMS Retail
         </div>
       </div>
     </>

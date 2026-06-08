@@ -13,6 +13,7 @@ const dompetDigitalRoutes = require('./routes/dompetdigital');
 const membersRoutes       = require('./routes/members');
 const presenceRoutes      = require('./routes/presence');
 const aiRoutes            = require('./routes/ai');
+const aiContextRoutes     = require('./routes/ai-context');
 const requireAuth         = require('./middleware/auth');
 
 const app  = express();
@@ -60,6 +61,7 @@ app.use('/api/dompetdigital',  requireAuth, dompetDigitalRoutes);
 app.use('/api/members',        requireAuth, membersRoutes);
 app.use('/api/presence',       requireAuth, presenceRoutes);
 app.use('/api/ai',             requireAuth, aiRoutes);
+app.use('/api/ai-context',     requireAuth, aiContextRoutes);
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 

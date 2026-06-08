@@ -128,11 +128,40 @@ export const updatePencapaian = async (targetId, data) => {
 };
 
 /* AI Chat — kirim pesan ke Gemini via backend */
-export const sendAiMessage = async (message, history = []) => {
-  const res = await axios.post(`${API_URL}/api/ai/chat`, { message, history }, {
+export const sendAiMessage = async (message, history = [], pageContext = '') => {
+  const res = await axios.post(`${API_URL}/api/ai/chat`, { message, history, pageContext }, {
     headers: authHeaders()
   });
   return res.data; // { reply: string }
+};
+
+/* AI Context — ambil system prompt berbasis halaman aktif */
+export const getAiContext = async (params = {}) => {
+  const res = await axios.get(`${API_URL}/api/ai-context`, {
+    params,
+    headers: authHeaders(),
+  });
+  return res.data; // { systemPrompt, page, bulan }
+};
+
+/* Chat History */
+export const saveChatMessage = async ({ role, message, page }) => {
+  await axios.post(`${API_URL}/api/ai-context/history`, { role, message, page }, {
+    headers: authHeaders()
+  });
+};
+export const getChatHistory = async ({ page, limit = 30 } = {}) => {
+  const res = await axios.get(`${API_URL}/api/ai-context/history`, {
+    params: { page, limit },
+    headers: authHeaders(),
+  });
+  return res.data;
+};
+export const deleteChatHistory = async (page) => {
+  await axios.delete(`${API_URL}/api/ai-context/history`, {
+    params: { page },
+    headers: authHeaders()
+  });
 };
 
 /* Presence — ping setiap 30 detik, returns active user list */
