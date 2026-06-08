@@ -264,8 +264,8 @@ body {
 .main-content {
   padding: 28px 28px 48px;
   flex: 1;
-  max-width: 1200px;
   width: 100%;
+  min-width: 0;
 }
 
 /* ═══════════════════════════════════════════
