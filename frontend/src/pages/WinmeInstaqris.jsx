@@ -1,8 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { Chart, registerables } from 'chart.js';
 import Layout from '../components/Layout';
-import LeaderManagement from '../components/LeaderManagement';
 import { getWinmeData } from '../services/api';
 
 Chart.register(...registerables);
@@ -120,8 +118,6 @@ function SkeletonCards() {
 
 /* ── Main page ── */
 export default function WinmeInstaqris() {
-  const navigate  = useNavigate();
-  const [tab,     setTab]     = useState('analitik');
   const [data,    setData]    = useState(null);
   const [bulan,   setBulan]   = useState('JUN_2026');
   const [loading, setLoading] = useState(true);
@@ -165,46 +161,24 @@ export default function WinmeInstaqris() {
             Analitik mendalam 2 produk · Data 1–{data?.days_elapsed ?? '…'} {bulanLabel} · {data?.days_left ?? '…'} hari tersisa
           </div>
         </div>
-        {tab === 'analitik' && (
-          <div className="header-controls">
-            <select
-              className="select-input"
-              value={bulan}
-              onChange={e => setBulan(e.target.value)}
-            >
-              {BULAN_OPTIONS.map(b => (
-                <option key={b} value={b}>{b.replace('_', ' ')}</option>
-              ))}
-            </select>
-            <button className="sync-btn" onClick={handleSync} disabled={syncing || loading}>
-              <span className={syncing ? 'spin' : ''}>↻</span> Refresh
-            </button>
-          </div>
-        )}
+        <div className="header-controls">
+          <select
+            className="select-input"
+            value={bulan}
+            onChange={e => setBulan(e.target.value)}
+          >
+            {BULAN_OPTIONS.map(b => (
+              <option key={b} value={b}>{b.replace('_', ' ')}</option>
+            ))}
+          </select>
+          <button className="sync-btn" onClick={handleSync} disabled={syncing || loading}>
+            <span className={syncing ? 'spin' : ''}>↻</span> Refresh
+          </button>
+        </div>
       </div>
 
-      {/* ── Tab switcher ── */}
-      <div className="winme-tabs">
-        <button
-          className={'winme-tab' + (tab === 'analitik' ? ' winme-tab--active' : '')}
-          onClick={() => setTab('analitik')}
-        >
-          <i className="ti ti-chart-bar" /> Pencapaian Unit
-        </button>
-        <button
-          className={'winme-tab' + (tab === 'tim' ? ' winme-tab--active' : '')}
-          onClick={() => setTab('tim')}
-        >
-          <i className="ti ti-users" /> Scoreboard Tim
-        </button>
-      </div>
+      {error && <div className="alert-error">{error}</div>}
 
-      {/* ── Tim Management Tab ── */}
-      {tab === 'tim' && <LeaderManagement navigate={navigate} />}
-
-      {tab === 'analitik' && error && <div className="alert-error">{error}</div>}
-
-      {tab === 'analitik' && (
       <>
       {/* ── 6 Summary cards ── */}
       {loading ? <SkeletonCards /> : data && (
@@ -447,7 +421,6 @@ export default function WinmeInstaqris() {
         </div>
       )}
       </>
-      )}
     </Layout>
   );
 }

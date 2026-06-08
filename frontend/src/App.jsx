@@ -6,6 +6,7 @@ import WinmeInstaqris from './pages/WinmeInstaqris';
 import PaymentAgent from './pages/PaymentAgent';
 import DompetDigital from './pages/DompetDigital';
 import AnggotaDetail from './pages/AnggotaDetail';
+import ScoreboardTim from './pages/ScoreboardTim';
 import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './components/Layout';
 
@@ -32,7 +33,8 @@ export default function App() {
         <Route path="/payment-agent"  element={<ProtectedRoute><PaymentAgent /></ProtectedRoute>} />
         <Route path="/dompet-digital" element={<ProtectedRoute><DompetDigital /></ProtectedRoute>} />
         <Route path="/users"      element={<ProtectedRoute><UserManagement /></ProtectedRoute>} />
-        <Route path="/anggota/:id" element={<ProtectedRoute><AnggotaDetail /></ProtectedRoute>} />
+        <Route path="/anggota/:id"     element={<ProtectedRoute><AnggotaDetail /></ProtectedRoute>} />
+        <Route path="/scoreboard-tim" element={<ProtectedRoute><ScoreboardTim /></ProtectedRoute>} />
         <Route path="/dashboard"  element={<ProtectedRoute><ComingSoon title="Dashboard Pencapaian" /></ProtectedRoute>} />
         <Route path="/tren"       element={<ProtectedRoute><ComingSoon title="Tren Harian" /></ProtectedRoute>} />
         <Route path="/per-unit"   element={<ProtectedRoute><ComingSoon title="Per Unit" /></ProtectedRoute>} />
