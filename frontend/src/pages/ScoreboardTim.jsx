@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import LeaderManagement from '../components/LeaderManagement';
-import { getMembers } from '../services/api';
+import { getMembers, clearMembersCache } from '../services/api';
 
 /* ── Helpers ── */
 function fmtRev(n) {
@@ -199,6 +199,7 @@ export default function ScoreboardTim({
   useEffect(() => { load(); }, []);
 
   const handleMembersUpdated = () => {
+    clearMembersCache();
     load();
     window.dispatchEvent(new Event('membersUpdated'));
   };

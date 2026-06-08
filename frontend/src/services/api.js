@@ -57,11 +57,31 @@ export const getWinmeData = async (bulan) => {
   return res.data;
 };
 
+/* In-flight deduplication + 20s TTL cache untuk getMembers */
+const _membersCache = {};
+const MEMBERS_TTL   = 20_000;
+
+export const clearMembersCache = () => {
+  Object.keys(_membersCache).forEach(k => delete _membersCache[k]);
+};
+
 export const getMembers = async (unit = 'winme_instaqris') => {
-  const res = await axios.get(`${API_URL}/api/members`, {
-    params: { unit }, headers: authHeaders()
+  const now = Date.now();
+  const c   = _membersCache[unit];
+  if (c?.data && now - c.at < MEMBERS_TTL) return c.data;
+  if (c?.promise) return c.promise;
+
+  const promise = axios.get(`${API_URL}/api/members`, {
+    params: { unit }, headers: authHeaders(),
+  }).then(res => {
+    _membersCache[unit] = { data: res.data, at: Date.now() };
+    return res.data;
+  }).finally(() => {
+    if (_membersCache[unit]) delete _membersCache[unit].promise;
   });
-  return res.data;
+
+  _membersCache[unit] = { ...(c || {}), promise };
+  return promise;
 };
 export const getMemberDetail = async (id) => {
   const res = await axios.get(`${API_URL}/api/members/${id}/detail`, {

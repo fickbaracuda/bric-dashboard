@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import {
-  getMembers, createMember, updateMember, deleteMember,
+  getMembers, clearMembersCache,
+  createMember, updateMember, deleteMember,
   addMemberTarget, deleteMemberTarget, updatePencapaian
 } from '../services/api';
 
@@ -437,6 +438,7 @@ export default function LeaderManagement({ navigate, unit = 'winme_instaqris' })
     if (form.id) await updateMember(form.id, form);
     else         await createMember(form);
     await load();
+    clearMembersCache();
     window.dispatchEvent(new Event('membersUpdated'));
     showToast(form.id ? 'Anggota berhasil diperbarui.' : 'Anggota baru berhasil ditambahkan.');
   }
@@ -445,6 +447,7 @@ export default function LeaderManagement({ navigate, unit = 'winme_instaqris' })
     if (!window.confirm(`Hapus anggota "${member.nama}"? Data tidak akan hilang, hanya dinonaktifkan.`)) return;
     await deleteMember(member.id);
     await load();
+    clearMembersCache();
     window.dispatchEvent(new Event('membersUpdated'));
     showToast('Anggota berhasil dihapus.');
   }
