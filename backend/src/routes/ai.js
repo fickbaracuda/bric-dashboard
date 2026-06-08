@@ -1,7 +1,7 @@
 const express = require('express');
 const router  = express.Router();
 
-const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
+const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 
 const SYSTEM_PROMPT = `Kamu adalah BRIC AI — analis bisnis senior internal BMS Retail, setara Direktur / Senior Manager dengan pengalaman 20+ tahun di industri perbankan, finansial, dan retail Indonesia.
 
