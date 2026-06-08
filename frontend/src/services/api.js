@@ -127,6 +127,14 @@ export const updatePencapaian = async (targetId, data) => {
   return res.data;
 };
 
+/* AI Chat — kirim pesan ke Gemini via backend */
+export const sendAiMessage = async (message, history = []) => {
+  const res = await axios.post(`${API_URL}/api/ai/chat`, { message, history }, {
+    headers: authHeaders()
+  });
+  return res.data; // { reply: string }
+};
+
 /* Presence — ping setiap 30 detik, returns active user list */
 export const pingPresence = async () => {
   const res = await axios.post(`${API_URL}/api/presence/ping`, {}, {

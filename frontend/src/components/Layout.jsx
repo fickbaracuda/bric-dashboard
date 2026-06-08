@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import Sidebar from './Sidebar';
+import AiChat from './AiChat';
 import { pingPresence } from '../services/api';
 
 /* Avatar color berdasarkan hash username */
@@ -83,6 +84,9 @@ export default function Layout({ children, syncedAt, bulan }) {
         <main className="main-content">
           {children}
         </main>
+
+        {/* AI Chat floating button */}
+        <AiChat />
 
         {/* Footer — siapa yang sedang aktif membuka dashboard */}
         <footer className="presence-footer">

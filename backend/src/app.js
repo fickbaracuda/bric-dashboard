@@ -12,6 +12,7 @@ const paymentAgentRoutes  = require('./routes/paymentagent');
 const dompetDigitalRoutes = require('./routes/dompetdigital');
 const membersRoutes       = require('./routes/members');
 const presenceRoutes      = require('./routes/presence');
+const aiRoutes            = require('./routes/ai');
 const requireAuth         = require('./middleware/auth');
 
 const app  = express();
@@ -58,6 +59,7 @@ app.use('/api/paymentagent',   requireAuth, paymentAgentRoutes);
 app.use('/api/dompetdigital',  requireAuth, dompetDigitalRoutes);
 app.use('/api/members',        requireAuth, membersRoutes);
 app.use('/api/presence',       requireAuth, presenceRoutes);
+app.use('/api/ai',             requireAuth, aiRoutes);
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
