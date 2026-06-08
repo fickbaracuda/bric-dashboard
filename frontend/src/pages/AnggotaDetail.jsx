@@ -316,8 +316,8 @@ export default function AnggotaDetail() {
       <div className="error-wrap">
         <div className="error-icon"><i className="ti ti-alert-circle" /></div>
         <div className="error-msg">{error}</div>
-        <button className="lm-btn-primary" onClick={() => navigate('/winme')}>
-          Kembali ke Winme
+        <button className="lm-btn-primary" onClick={() => navigate(-1)}>
+          Kembali
         </button>
       </div>
     </Layout>
@@ -328,13 +328,19 @@ export default function AnggotaDetail() {
   const { member, targets, analisis } = data;
   const { avg_pencapaian, trend, target_terbaik, target_terlemah, rekomendasi } = analisis;
 
+  const BACK = {
+    winme_instaqris: { path: '/scoreboard-tim',    label: 'Winme & InstaQris' },
+    payment_agent:   { path: '/scoreboard-tim-pa', label: 'Payment Agent' },
+  };
+  const back = BACK[member.unit] || { path: -1, label: 'Kembali' };
+
   return (
     <Layout>
       <div className="ad-page">
 
         {/* ── Back ── */}
-        <button className="ad-back" onClick={() => navigate('/winme')}>
-          <i className="ti ti-arrow-left" /> Kembali ke Winme &amp; InstaQris
+        <button className="ad-back" onClick={() => navigate(back.path)}>
+          <i className="ti ti-arrow-left" /> Kembali ke {back.label}
         </button>
 
         {/* ── Profile Header ── */}
