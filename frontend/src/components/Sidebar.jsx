@@ -430,7 +430,7 @@ export default function Sidebar({ onClose }) {
                   }
                 >
                   <i className="ti ti-users" aria-hidden="true" />
-                  <span style={{ flex: 1 }}>Scoreboard Tim SpeedCash</span>
+                  <span style={{ flex: 1 }}>Scoreboard Tim</span>
                   {hasMemberSC && (
                     <i
                       className={'ti ti-chevron-down sidebar-chevron' + (scTimOpen ? ' sidebar-chevron--open' : '')}
