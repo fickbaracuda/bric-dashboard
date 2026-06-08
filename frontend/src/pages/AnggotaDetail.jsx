@@ -331,6 +331,7 @@ export default function AnggotaDetail() {
   const BACK = {
     winme_instaqris: { path: '/scoreboard-tim',    label: 'Winme & InstaQris' },
     payment_agent:   { path: '/scoreboard-tim-pa', label: 'Payment Agent' },
+    speedcash:       { path: '/scoreboard-tim-sc', label: 'SpeedCash' },
   };
   const back = BACK[member.unit] || { path: -1, label: 'Kembali' };
 

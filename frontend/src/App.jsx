@@ -36,6 +36,7 @@ export default function App() {
         <Route path="/anggota/:id"     element={<ProtectedRoute><AnggotaDetail /></ProtectedRoute>} />
         <Route path="/scoreboard-tim" element={<ProtectedRoute><ScoreboardTim /></ProtectedRoute>} />
         <Route path="/scoreboard-tim-pa" element={<ProtectedRoute><ScoreboardTim unit="payment_agent" unitLabel="PAYMENT AGENT" unitColor="#639922" /></ProtectedRoute>} />
+        <Route path="/scoreboard-tim-sc" element={<ProtectedRoute><ScoreboardTim unit="speedcash" unitLabel="SPEEDCASH" unitColor="#EF4444" /></ProtectedRoute>} />
         <Route path="/dashboard"  element={<ProtectedRoute><ComingSoon title="Dashboard Pencapaian" /></ProtectedRoute>} />
         <Route path="/tren"       element={<ProtectedRoute><ComingSoon title="Tren Harian" /></ProtectedRoute>} />
         <Route path="/per-unit"   element={<ProtectedRoute><ComingSoon title="Per Unit" /></ProtectedRoute>} />

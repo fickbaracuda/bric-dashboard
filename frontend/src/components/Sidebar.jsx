@@ -140,6 +140,7 @@ export default function Sidebar({ onClose }) {
   const user       = getUser();
   const [members,   setMembers]   = useState([]);
   const [membersPA, setMembersPA] = useState([]);
+  const [membersSC, setMembersSC] = useState([]);
 
   /* ── Path detection ── */
   const anggotaId = location.pathname.startsWith('/anggota/')
@@ -147,27 +148,35 @@ export default function Sidebar({ onClose }) {
 
   const isWinmeMember = anggotaId ? members.some(m => String(m.id) === anggotaId)   : false;
   const isPAMember    = anggotaId ? membersPA.some(m => String(m.id) === anggotaId) : false;
+  const isSCMember    = anggotaId ? membersSC.some(m => String(m.id) === anggotaId) : false;
 
   const isWinmePath    = location.pathname === '/winme';
-  const isWinmeTimPath = location.pathname === '/scoreboard-tim' || isWinmeMember;
+  const isWinmeTimPath = location.pathname === '/scoreboard-tim'    || isWinmeMember;
   const isPABasePath   = location.pathname === '/payment-agent';
   const isPATimPath    = location.pathname === '/scoreboard-tim-pa' || isPAMember;
+  const isDDPath       = location.pathname === '/dompet-digital';
+  const isSCTimPath    = location.pathname === '/scoreboard-tim-sc' || isSCMember;
 
   const [winmeOpen, setWinmeOpen] = useState(isWinmePath || isWinmeTimPath);
   const [timOpen,   setTimOpen]   = useState(isWinmeTimPath);
   const [paOpen,    setPAOpen]    = useState(isPABasePath || isPATimPath);
   const [paTimOpen, setPATimOpen] = useState(isPATimPath);
+  const [ddOpen,    setDDOpen]    = useState(isDDPath || isSCTimPath);
+  const [scTimOpen, setSCTimOpen] = useState(isSCTimPath);
 
   useEffect(() => {
     if (isWinmePath || isWinmeTimPath) setWinmeOpen(true);
     if (isWinmeTimPath) setTimOpen(true);
     if (isPABasePath || isPATimPath) setPAOpen(true);
     if (isPATimPath) setPATimOpen(true);
-  }, [location.pathname, members, membersPA]);
+    if (isDDPath || isSCTimPath) setDDOpen(true);
+    if (isSCTimPath) setSCTimOpen(true);
+  }, [location.pathname, members, membersPA, membersSC]);
 
   const loadAllMembers = () => {
     getMembers('winme_instaqris').then(setMembers).catch(() => setMembers([]));
     getMembers('payment_agent').then(setMembersPA).catch(() => setMembersPA([]));
+    getMembers('speedcash').then(setMembersSC).catch(() => setMembersSC([]));
   };
 
   useEffect(() => {
@@ -176,10 +185,12 @@ export default function Sidebar({ onClose }) {
     return () => window.removeEventListener('membersUpdated', loadAllMembers);
   }, []);
 
-  const leaders    = members.filter(m => m.posisi === 'leader');
-  const leadersPA  = membersPA.filter(m => m.posisi === 'leader');
-  const hasMember  = members.length > 0;
+  const leaders     = members.filter(m => m.posisi === 'leader');
+  const leadersPA   = membersPA.filter(m => m.posisi === 'leader');
+  const leadersSC   = membersSC.filter(m => m.posisi === 'leader');
+  const hasMember   = members.length > 0;
   const hasMemberPA = membersPA.length > 0;
+  const hasMemberSC = membersSC.length > 0;
 
   return (
     <div className="sidebar-inner">
@@ -386,12 +397,93 @@ export default function Sidebar({ onClose }) {
 
         <div className="sidebar-menu-sep" />
 
-        {/* Dompet Digital */}
-        <NavLink to="/dompet-digital" onClick={onClose}
-          className={({ isActive }) => 'sidebar-link' + (isActive ? ' sidebar-link--active' : '')}>
-          <i className="ti ti-wallet" aria-hidden="true" />
-          <span>Dompet Digital</span>
-        </NavLink>
+        {/* ── Dompet Digital — level 1 accordion ── */}
+        <div className="sidebar-accordion-wrap">
+          <NavLink
+            to="/dompet-digital"
+            onClick={() => { setDDOpen(o => !o); onClose(); }}
+            className={({ isActive }) =>
+              'sidebar-link sidebar-link-accordion' +
+              (isActive || isDDPath || isSCTimPath ? ' sidebar-link--active' : '')
+            }
+          >
+            <i className="ti ti-wallet" aria-hidden="true" />
+            <span style={{ flex: 1 }}>Dompet Digital</span>
+            <i
+              className={'ti ti-chevron-down sidebar-chevron' + (ddOpen ? ' sidebar-chevron--open' : '')}
+              onClick={e => { e.preventDefault(); e.stopPropagation(); setDDOpen(o => !o); }}
+              aria-hidden="true"
+            />
+          </NavLink>
+
+          <Accordion open={ddOpen}>
+            <div className="sidebar-submenu">
+
+              {/* ── Scoreboard Tim SpeedCash — level 2 accordion ── */}
+              <div className="sidebar-accordion-wrap">
+                <NavLink
+                  to="/scoreboard-tim-sc"
+                  onClick={() => { if (hasMemberSC) setSCTimOpen(o => !o); onClose(); }}
+                  className={({ isActive }) =>
+                    'sidebar-link sidebar-link-accordion sidebar-link-sub' +
+                    (isActive || isSCTimPath ? ' sidebar-link--active' : '')
+                  }
+                >
+                  <i className="ti ti-users" aria-hidden="true" />
+                  <span style={{ flex: 1 }}>Scoreboard Tim SpeedCash</span>
+                  {hasMemberSC && (
+                    <i
+                      className={'ti ti-chevron-down sidebar-chevron' + (scTimOpen ? ' sidebar-chevron--open' : '')}
+                      onClick={e => { e.preventDefault(); e.stopPropagation(); setSCTimOpen(o => !o); }}
+                      aria-hidden="true"
+                    />
+                  )}
+                </NavLink>
+
+                <Accordion open={scTimOpen && hasMemberSC}>
+                  <div className="sidebar-submenu sidebar-submenu--deep">
+
+                    {leadersSC.map(leader => {
+                      const timList = membersSC.filter(
+                        m => m.posisi === 'tim' && String(m.leader_id) === String(leader.id)
+                      );
+                      return (
+                        <LeaderAccordion
+                          key={leader.id}
+                          leader={leader}
+                          timList={timList}
+                          onClose={onClose}
+                          currentPath={location.pathname}
+                        />
+                      );
+                    })}
+
+                    {membersSC.filter(m => m.posisi === 'tim' && !m.leader_id).map(tim => (
+                      <NavLink
+                        key={tim.id} to={`/anggota/${tim.id}`} onClick={onClose}
+                        className={({ isActive }) =>
+                          'sidebar-link sidebar-link-member' + (isActive ? ' sidebar-link--active' : '')
+                        }
+                        title={getStatusLabel(tim)}
+                      >
+                        <div className="sidebar-avatar-sm" style={{ background: tim.avatar_warna }}>
+                          {getInisial(tim.nama)}
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div className="sidebar-member-name">{tim.nama}</div>
+                          <div className="sidebar-member-role">Tim</div>
+                        </div>
+                        <span className="sidebar-status-dot" style={{ background: getStatusColor(tim) }} />
+                      </NavLink>
+                    ))}
+
+                  </div>
+                </Accordion>
+              </div>
+
+            </div>
+          </Accordion>
+        </div>
 
         {/* Kelola User (admin only) */}
         {user?.role === 'admin' && (

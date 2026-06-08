@@ -409,6 +409,7 @@ function MemberCard({ member, onEdit, onDelete, onAddTarget, onDeleteTarget, onI
 const UNIT_LABEL = {
   winme_instaqris: 'Winme / InstaQris',
   payment_agent:   'Payment Agent',
+  speedcash:       'SpeedCash',
 };
 
 /* ─────── Main export ─────── */
