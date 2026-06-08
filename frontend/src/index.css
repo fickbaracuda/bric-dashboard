@@ -1306,6 +1306,50 @@ body {
   opacity: 0.88;
 }
 
+/* Leader group accordion */
+.sidebar-leader-group {
+  margin-bottom: 2px;
+}
+.sidebar-leader-row {
+  display: flex;
+  align-items: center;
+}
+.sidebar-leader-row .sidebar-link-leader-item {
+  flex: 1;
+  min-width: 0;
+  border-radius: 8px 0 0 8px;
+}
+.sidebar-leader-chevron {
+  flex-shrink: 0;
+  background: none; border: none;
+  padding: 6px 6px 6px 2px;
+  cursor: pointer;
+  color: var(--text-4);
+  display: flex; align-items: center;
+  border-radius: 0 8px 8px 0;
+  transition: color 0.15s, background 0.15s;
+  margin-top: 1px;
+}
+.sidebar-leader-chevron:hover { color: var(--primary); background: var(--primary-bg); }
+
+/* Tim list di bawah leader */
+.sidebar-tim-list {
+  margin-left: 10px;
+  padding-left: 10px;
+  border-left: 2px solid #E5E7EB;
+  margin-bottom: 4px;
+}
+.sidebar-link-tim-item {
+  padding: 5px 10px;
+  gap: 7px;
+}
+.sidebar-avatar-tim {
+  width: 20px !important;
+  height: 20px !important;
+  font-size: 8px !important;
+  flex-shrink: 0;
+}
+
 .sidebar-link-member {
   padding: 6px 10px;
   gap: 8px;

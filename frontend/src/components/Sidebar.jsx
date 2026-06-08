@@ -29,11 +29,11 @@ function getStatusLabel(member) {
   return `Avg pencapaian: ${avg.toFixed(1)}%`;
 }
 
-/* ── Reusable animated accordion ── */
+/* ── Animated height accordion ── */
 function Accordion({ open, children }) {
-  const ref = useRef(null);
-  const [height, setHeight] = useState(open ? 'auto' : '0px');
+  const ref     = useRef(null);
   const mounted = useRef(false);
+  const [height, setHeight] = useState(open ? 'auto' : '0px');
 
   useEffect(() => {
     if (!mounted.current) { mounted.current = true; return; }
@@ -51,28 +51,100 @@ function Accordion({ open, children }) {
   }, [open]);
 
   return (
-    <div
-      ref={ref}
-      style={{ height, overflow: 'hidden', transition: 'height 0.25s ease' }}
-    >
+    <div ref={ref} style={{ height, overflow: 'hidden', transition: 'height 0.25s ease' }}>
       {children}
     </div>
   );
 }
 
+/* ── Per-leader accordion: leader row + tim rows di bawahnya ── */
+function LeaderAccordion({ leader, timList, onClose, currentPath }) {
+  const hasTim     = timList.length > 0;
+  const isTimActive = timList.some(t => currentPath === `/anggota/${t.id}`);
+  const [open, setOpen] = useState(isTimActive);
+
+  useEffect(() => {
+    if (isTimActive) setOpen(true);
+  }, [currentPath]);
+
+  return (
+    <div className="sidebar-leader-group">
+      {/* Leader row */}
+      <div className="sidebar-leader-row">
+        <NavLink
+          to={`/anggota/${leader.id}`} onClick={onClose}
+          className={({ isActive }) =>
+            'sidebar-link sidebar-link-member sidebar-link-leader-item' +
+            (isActive ? ' sidebar-link--active' : '')
+          }
+          title={getStatusLabel(leader)}
+          style={{ flex: 1 }}
+        >
+          <div className="sidebar-avatar-sm" style={{ background: leader.avatar_warna }}>
+            {getInisial(leader.nama)}
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="sidebar-member-name">{leader.nama}</div>
+            <div className="sidebar-member-role" style={{ color: '#7F77DD', fontWeight: 600 }}>
+              Leader {hasTim && <span style={{ color: '#9CA3AF', fontWeight: 400 }}>· {timList.length} tim</span>}
+            </div>
+          </div>
+          <span className="sidebar-status-dot" style={{ background: getStatusColor(leader) }} />
+        </NavLink>
+        {hasTim && (
+          <button
+            className="sidebar-leader-chevron"
+            onClick={() => setOpen(o => !o)}
+            title={open ? 'Sembunyikan tim' : 'Tampilkan tim'}
+          >
+            <i className={'ti ti-chevron-down sidebar-chevron' + (open ? ' sidebar-chevron--open' : '')} />
+          </button>
+        )}
+      </div>
+
+      {/* Tim rows — accordion */}
+      {hasTim && (
+        <Accordion open={open}>
+          <div className="sidebar-tim-list">
+            {timList.map(tim => (
+              <NavLink
+                key={tim.id} to={`/anggota/${tim.id}`} onClick={onClose}
+                className={({ isActive }) =>
+                  'sidebar-link sidebar-link-member sidebar-link-tim-item' +
+                  (isActive ? ' sidebar-link--active' : '')
+                }
+                title={getStatusLabel(tim)}
+              >
+                <div className="sidebar-avatar-sm sidebar-avatar-tim"
+                  style={{ background: tim.avatar_warna }}>
+                  {getInisial(tim.nama)}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="sidebar-member-name">{tim.nama}</div>
+                  <div className="sidebar-member-role">Tim</div>
+                </div>
+                <span className="sidebar-status-dot" style={{ background: getStatusColor(tim) }} />
+              </NavLink>
+            ))}
+          </div>
+        </Accordion>
+      )}
+    </div>
+  );
+}
+
+/* ── Main Sidebar ── */
 export default function Sidebar({ onClose }) {
   const navigate  = useNavigate();
   const location  = useLocation();
   const user      = getUser();
   const [members, setMembers] = useState([]);
 
-  const isWinmePath    = location.pathname === '/winme';
-  const isTimPath      = location.pathname === '/scoreboard-tim' ||
-                         location.pathname.startsWith('/anggota/');
+  const isWinmePath = location.pathname === '/winme';
+  const isTimPath   = location.pathname === '/scoreboard-tim' ||
+                      location.pathname.startsWith('/anggota/');
 
-  /* Winme accordion — buka jika di /winme, /scoreboard-tim, atau /anggota/* */
   const [winmeOpen, setWinmeOpen] = useState(isWinmePath || isTimPath);
-  /* Scoreboard Tim accordion — buka jika di /scoreboard-tim atau /anggota/* */
   const [timOpen,   setTimOpen]   = useState(isTimPath);
 
   useEffect(() => {
@@ -93,6 +165,7 @@ export default function Sidebar({ onClose }) {
     return () => window.removeEventListener('membersUpdated', handler);
   }, []);
 
+  const leaders  = members.filter(m => m.posisi === 'leader');
   const hasMember = members.length > 0;
 
   return (
@@ -116,7 +189,7 @@ export default function Sidebar({ onClose }) {
           <span>Unit Scoreboard</span>
         </NavLink>
 
-        {/* ── Winme & InstaQris (level 1 accordion) ── */}
+        {/* ── Winme & InstaQris — level 1 accordion ── */}
         <div className="sidebar-accordion-wrap">
           <NavLink
             to="/winme"
@@ -138,7 +211,7 @@ export default function Sidebar({ onClose }) {
           <Accordion open={winmeOpen}>
             <div className="sidebar-submenu">
 
-              {/* ── Scoreboard Tim (level 2 accordion) ── */}
+              {/* ── Scoreboard Tim — level 2 accordion ── */}
               <div className="sidebar-accordion-wrap">
                 <NavLink
                   to="/scoreboard-tim"
@@ -161,51 +234,24 @@ export default function Sidebar({ onClose }) {
 
                 <Accordion open={timOpen && hasMember}>
                   <div className="sidebar-submenu sidebar-submenu--deep">
-                    {/* Leaders + Tim di bawahnya */}
-                    {members.filter(m => m.posisi === 'leader').map(leader => {
-                      const timList = members.filter(m => m.posisi === 'tim' && String(m.leader_id) === String(leader.id));
+
+                    {/* Tiap leader punya accordion tim-nya sendiri */}
+                    {leaders.map(leader => {
+                      const timList = members.filter(
+                        m => m.posisi === 'tim' && String(m.leader_id) === String(leader.id)
+                      );
                       return (
-                        <div key={leader.id}>
-                          {/* Leader row */}
-                          <NavLink
-                            to={`/anggota/${leader.id}`} onClick={onClose}
-                            className={({ isActive }) =>
-                              'sidebar-link sidebar-link-member' + (isActive ? ' sidebar-link--active' : '')
-                            }
-                            title={getStatusLabel(leader)}
-                          >
-                            <div className="sidebar-avatar-sm" style={{ background: leader.avatar_warna }}>
-                              {getInisial(leader.nama)}
-                            </div>
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              <div className="sidebar-member-name">{leader.nama}</div>
-                              <div className="sidebar-member-role">Leader</div>
-                            </div>
-                            <span className="sidebar-status-dot" style={{ background: getStatusColor(leader) }} />
-                          </NavLink>
-                          {/* Tim rows di bawah leader */}
-                          {timList.map(tim => (
-                            <NavLink
-                              key={tim.id} to={`/anggota/${tim.id}`} onClick={onClose}
-                              className={({ isActive }) =>
-                                'sidebar-link sidebar-link-member sidebar-link-tim-child' + (isActive ? ' sidebar-link--active' : '')
-                              }
-                              title={getStatusLabel(tim)}
-                            >
-                              <div className="sidebar-avatar-sm" style={{ background: tim.avatar_warna, width: 20, height: 20, fontSize: 8 }}>
-                                {getInisial(tim.nama)}
-                              </div>
-                              <div style={{ flex: 1, minWidth: 0 }}>
-                                <div className="sidebar-member-name">{tim.nama}</div>
-                                <div className="sidebar-member-role">Tim</div>
-                              </div>
-                              <span className="sidebar-status-dot" style={{ background: getStatusColor(tim) }} />
-                            </NavLink>
-                          ))}
-                        </div>
+                        <LeaderAccordion
+                          key={leader.id}
+                          leader={leader}
+                          timList={timList}
+                          onClose={onClose}
+                          currentPath={location.pathname}
+                        />
                       );
                     })}
-                    {/* Tim tanpa leader */}
+
+                    {/* Tim tanpa leader (fallback) */}
                     {members.filter(m => m.posisi === 'tim' && !m.leader_id).map(tim => (
                       <NavLink
                         key={tim.id} to={`/anggota/${tim.id}`} onClick={onClose}
@@ -224,6 +270,7 @@ export default function Sidebar({ onClose }) {
                         <span className="sidebar-status-dot" style={{ background: getStatusColor(tim) }} />
                       </NavLink>
                     ))}
+
                   </div>
                 </Accordion>
               </div>
