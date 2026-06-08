@@ -213,6 +213,8 @@ export default function Sidebar({ onClose }) {
           <span>Unit Scoreboard</span>
         </NavLink>
 
+        <div className="sidebar-menu-sep" />
+
         {/* Leader Scoreboard */}
         <NavLink to="/leader-scoreboard" onClick={onClose}
           className={({ isActive }) => 'sidebar-link' + (isActive ? ' sidebar-link--active' : '')}>
@@ -494,11 +496,14 @@ export default function Sidebar({ onClose }) {
 
         {/* Kelola User (admin only) */}
         {user?.role === 'admin' && (
+          <>
+          <div className="sidebar-menu-sep" />
           <NavLink to="/users" onClick={onClose}
             className={({ isActive }) => 'sidebar-link' + (isActive ? ' sidebar-link--active' : '')}>
             <i className="ti ti-users" aria-hidden="true" />
             <span>Kelola User</span>
           </NavLink>
+          </>
         )}
       </nav>
 
