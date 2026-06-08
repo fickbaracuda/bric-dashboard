@@ -1774,3 +1774,217 @@ body {
   .lm-card-grid { grid-template-columns: 1fr; }
   .ad-targets-grid { grid-template-columns: 1fr; }
 }
+
+/* ═══════════════════════════════════════════
+   SCOREBOARD TIM (st-*)
+═══════════════════════════════════════════ */
+
+/* Stats row */
+.st-stats-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.st-stat-card {
+  background: var(--bg-card);
+  border: 0.5px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  display: flex; align-items: center; gap: 12px;
+  box-shadow: var(--shadow-sm);
+}
+.st-stat-icon {
+  width: 40px; height: 40px; border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px; flex-shrink: 0;
+}
+.st-stat-val {
+  font-size: 22px; font-weight: 800; color: var(--text-1);
+  line-height: 1;
+}
+.st-stat-lbl {
+  font-size: 11px; color: var(--text-4); margin-top: 3px;
+  font-weight: 500;
+}
+
+/* Legend */
+.st-legend {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  margin-bottom: 20px;
+}
+
+/* Status badges */
+.st-status-badge {
+  display: inline-flex; align-items: center;
+  padding: 3px 10px; border-radius: 20px;
+  font-size: 11px; font-weight: 700;
+  white-space: nowrap;
+}
+.st-unggul  { background: #ECFDF5; color: #065F46; border: 0.5px solid #6EE7B7; }
+.st-ontrack { background: #FFFBEB; color: #92400E; border: 0.5px solid #FCD34D; }
+.st-waspada { background: #FFF7ED; color: #9A3412; border: 0.5px solid #FDBA74; }
+.st-danger  { background: #FEF2F2; color: #991B1B; border: 0.5px solid #FCA5A5; }
+.st-nodata  { background: #F9FAFB; color: #6B7280; border: 0.5px solid #D1D5DB; }
+
+/* Per-leader groups */
+.st-groups {
+  display: flex; flex-direction: column; gap: 16px;
+}
+.st-leader-group {
+  background: var(--bg-card);
+  border: 0.5px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+}
+
+/* Leader header */
+.st-leader-header {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 14px 16px;
+  background: var(--bg-page);
+  border-bottom: 0.5px solid var(--border);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.st-leader-header:hover { background: #F0FBF7; }
+.st-leader-header--orphan { cursor: default; }
+.st-leader-header--orphan:hover { background: var(--bg-page); }
+
+.st-leader-left {
+  display: flex; align-items: center; gap: 12px;
+}
+.st-leader-name {
+  font-size: 15px; font-weight: 700; color: var(--text-1);
+}
+.st-leader-meta {
+  display: flex; align-items: center; gap: 8px; margin-top: 3px; flex-wrap: wrap;
+}
+.st-posisi-leader {
+  display: inline-block; padding: 1px 7px; border-radius: 20px;
+  font-size: 10px; font-weight: 700; text-transform: uppercase;
+  background: #F5F3FF; color: #7C3AED; border: 0.5px solid #C4B5FD;
+}
+.st-fungsi { font-size: 11px; color: var(--text-4); }
+.st-tim-count { font-size: 11px; color: var(--text-4); }
+
+.st-leader-stats {
+  display: flex; align-items: center; gap: 14px; flex-shrink: 0;
+}
+.st-leader-pct-box { text-align: center; }
+.st-leader-pct-val { font-size: 18px; font-weight: 800; line-height: 1; }
+.st-leader-pct-lbl { font-size: 10px; color: var(--text-4); margin-top: 2px; font-weight: 500; }
+
+/* Avatars */
+.st-avatar-lg {
+  width: 44px; height: 44px; border-radius: 50%;
+  font-size: 14px; font-weight: 800; color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.st-avatar-sm2 {
+  width: 30px; height: 30px; border-radius: 50%;
+  font-size: 10px; font-weight: 700; color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+
+/* Tim table */
+.st-tim-table { width: 100%; }
+.st-tim-table-header {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1.5fr 1fr;
+  gap: 8px; padding: 8px 16px;
+  font-size: 10px; font-weight: 700; color: var(--text-4);
+  text-transform: uppercase; letter-spacing: 0.6px;
+  border-bottom: 0.5px solid var(--border);
+  background: var(--bg-page);
+}
+.st-tim-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1.5fr 1fr;
+  gap: 8px; padding: 10px 16px;
+  align-items: center;
+  border-bottom: 0.5px solid var(--border);
+  cursor: pointer; transition: background 0.12s;
+}
+.st-tim-row:last-child { border-bottom: none; }
+.st-tim-row:hover { background: #F9FAFB; }
+
+.st-tim-member {
+  display: flex; align-items: center; gap: 8px;
+}
+.st-tim-name {
+  font-size: 13px; font-weight: 600; color: var(--text-1);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.st-tim-fungsi { font-size: 11px; color: var(--text-4); margin-top: 1px; }
+.st-tim-cell   { font-size: 12px; color: var(--text-2); }
+
+/* Rank badge */
+.st-rank {
+  width: 22px; height: 22px; border-radius: 50%;
+  font-size: 10px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+
+/* Progress bar in table */
+.st-pct-wrap {
+  display: flex; align-items: center; gap: 6px;
+}
+.st-pct-bar-bg {
+  flex: 1; height: 5px; border-radius: 3px;
+  background: var(--border); overflow: hidden;
+  min-width: 40px;
+}
+.st-pct-bar-fill {
+  height: 100%; border-radius: 3px;
+  transition: width 0.4s;
+}
+.st-pct-num {
+  font-size: 12px; font-weight: 700;
+  min-width: 40px; text-align: right;
+}
+
+/* No tim placeholder */
+.st-no-tim {
+  padding: 14px 16px;
+  font-size: 12px; color: var(--text-4); font-style: italic;
+  border-top: 0.5px solid var(--border);
+}
+
+/* Empty state */
+.st-empty {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 12px; padding: 64px 20px; text-align: center;
+}
+
+/* Kelola modal */
+.st-kelola-panel {
+  background: var(--bg-card);
+  border-radius: 12px;
+  width: 100%; max-width: 800px;
+  max-height: 90vh;
+  display: flex; flex-direction: column;
+  box-shadow: 0 20px 60px rgba(0,0,0,.2);
+}
+.st-kelola-body {
+  flex: 1; overflow-y: auto;
+  padding: 20px;
+}
+
+@media (max-width: 768px) {
+  .st-stats-row { grid-template-columns: 1fr 1fr; }
+  .st-tim-table-header,
+  .st-tim-row {
+    grid-template-columns: 2fr 0 0 1.5fr 1fr;
+  }
+  .st-tim-table-header span:nth-child(2),
+  .st-tim-table-header span:nth-child(3),
+  .st-tim-row .st-tim-cell:nth-child(2),
+  .st-tim-row .st-tim-cell:nth-child(3) {
+    display: none;
+  }
+}
