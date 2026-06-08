@@ -2639,6 +2639,9 @@ body {
 .wr-select       { padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-card); color: var(--text-1); font-size: 12px; }
 .wr-btn-refresh  { padding: 6px 14px; background: #E24B4A; color: #fff; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; }
 .wr-btn-refresh:disabled { opacity: 0.6; cursor: not-allowed; }
+.wr-btn-update   { display: flex; align-items: center; gap: 6px; padding: 8px 18px; background: #E24B4A; color: #fff; border: none; border-radius: 8px; font-size: 13px; font-weight: 700; cursor: pointer; transition: background 0.15s; }
+.wr-btn-update:hover:not(:disabled) { background: #c73b3a; }
+.wr-btn-update:disabled { opacity: 0.65; cursor: not-allowed; }
 .wr-btn-retry    { margin-left: 10px; padding: 4px 12px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px; font-size: 12px; cursor: pointer; }
 
 /* Error */

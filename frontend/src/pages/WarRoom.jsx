@@ -280,6 +280,7 @@ export default function WarRoom() {
   const [tglList,     setTglList]     = useState([]);
   const [modalRow,    setModalRow]    = useState(null);
   const [historyData, setHistoryData] = useState({});
+  const [lastUpdated, setLastUpdated] = useState(null);
 
   const fetchHistory = useCallback(async (mcc) => {
     if (!mcc || historyData[mcc]) return;
@@ -298,7 +299,7 @@ export default function WarRoom() {
       if (res.top_rev?.[1]?.mcc) fetchHistory(res.top_rev[1].mcc);
     } catch (err) {
       setError(err.response?.data?.error || err.message || 'Gagal memuat data');
-    } finally { setLoading(false); }
+    } finally { setLoading(false); setLastUpdated(new Date()); }
   }, [tanggal]);
 
   useEffect(() => {
@@ -336,15 +337,25 @@ export default function WarRoom() {
               <h1 className="wr-title">WAR-ROOM</h1>
               <span className="war-badge">LIVE</span>
             </div>
-            <p className="wr-sub">Monitoring intensif real-time · InstaQris · Data s/d {data?.tanggal ?? '–'}</p>
+            <p className="wr-sub">
+              Monitoring intensif real-time · InstaQris · Snapshot data: {data?.tanggal ? String(data.tanggal).slice(0, 10) : '–'}
+              {lastUpdated && (
+                <span style={{ marginLeft: 8, color: 'var(--text-4)' }}>
+                  · Terakhir dimuat {lastUpdated.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                </span>
+              )}
+            </p>
           </div>
           <div className="wr-header-right">
             <select className="wr-select" value={tanggal} onChange={e => setTanggal(e.target.value)}>
               <option value="">Terkini</option>
               {tglList.map(t => <option key={t} value={String(t)}>{String(t).slice(0, 10)}</option>)}
             </select>
-            <button className="wr-btn-refresh" onClick={fetchData} disabled={loading}>
-              {loading ? '...' : '↻ Refresh'}
+            <button className="wr-btn-update" onClick={fetchData} disabled={loading}>
+              {loading
+                ? <><i className="ti ti-loader-2" style={{ animation: 'aic-rotate 0.8s linear infinite' }} /> Memuat...</>
+                : <><i className="ti ti-refresh" /> Update Data</>
+              }
             </button>
           </div>
         </div>
