@@ -46,19 +46,25 @@ routes/
 
 ## Struktur Frontend (`frontend/src/`)
 ```
-App.jsx             — routes: /scoreboard, /winme, /payment-agent, /dompet-digital, /users, /anggota/:id
+App.jsx             — routes: /scoreboard, /winme, /payment-agent, /dompet-digital, /users, /anggota/:id, /scoreboard-tim
 index.css           — semua CSS (CSS variables: --primary #1D9E75, --text-1/2/3/4, --border, --bg-page, --bg-card, dll)
+                      CSS prefix: lm-* (LeaderManagement), ad-* (AnggotaDetail), st-* (ScoreboardTim)
+                      .main-content: TIDAK ada max-width — full width
 services/api.js     — semua API calls pakai authHeaders()
 utils/auth.js       — getToken, getUser, logout
 components/
   Layout.jsx
-  Sidebar.jsx       — dinamis: load members, accordion Winme, member links dengan avatar + status dot
+  Sidebar.jsx       — nested accordion: Winme (L1) → Scoreboard Tim (L2) → LeaderAccordion per-leader (L3)
+                      separator antar menu utama: .sidebar-menu-sep
   ProtectedRoute.jsx
   LeaderManagement.jsx  — CRUD modal: tambah/edit anggota, targets, input pencapaian harian
+                          posisi Tim wajib memilih leader_id
 pages/
   Login.jsx
   Scoreboard.jsx
-  WinmeInstaqris.jsx    — tab: Pencapaian Unit | Scoreboard Tim
+  WinmeInstaqris.jsx    — hanya Pencapaian Unit (tab Scoreboard Tim sudah dipindah ke halaman sendiri)
+  ScoreboardTim.jsx     — /scoreboard-tim, analytics dashboard: stats row, per-leader group + tim ranking table
+                          (rank badge 🥇🥈🥉, progress bar, status badge), modal Kelola Tim
   PaymentAgent.jsx      — unit PAYMENT AGENT, warna #639922
   DompetDigital.jsx     — grup SpeedCash/Travel B2C/Pulsagram
   UserManagement.jsx
@@ -71,21 +77,31 @@ pages/
 daily_snapshot (id, unit_nama, tanggal, revenue, ...)
 
 -- Leader & Tim
-members (id, unit, nama, posisi CHECK('leader','tim'), fungsi, avatar_warna DEFAULT '#7F77DD', is_active, created_at, updated_at)
+members (id, unit, nama, posisi CHECK('leader','tim'), fungsi, avatar_warna DEFAULT '#7F77DD',
+         leader_id INTEGER REFERENCES members(id) ON DELETE SET NULL,  -- FK: tim → leader
+         is_active, created_at, updated_at)
 member_targets (id, member_id FK CASCADE, nama_target, key_result, target_revenue, periode, urutan, created_at)
 member_pencapaian (id, member_id FK, target_id FK, tanggal, pencapaian_kr, pencapaian_revenue, pct_kr, pct_revenue, catatan, UNIQUE(target_id, tanggal))
 ```
 
 ## Sidebar Accordion
-- Winme & InstaQris punya accordion untuk menampilkan member links
-- Auto-buka jika path `/winme` atau `/anggota/:id`
-- Chevron rotate 180° saat terbuka
+- Nested 3 level: Winme (L1) → Scoreboard Tim (L2) → LeaderAccordion per-leader (L3)
+- Auto-buka jika path `/winme`, `/scoreboard-tim`, atau `/anggota/:id`
+- Chevron rotate 180° saat terbuka (class `sidebar-chevron--open`)
+- Animasi height via `scrollHeight` + `requestAnimationFrame` (komponen `Accordion`)
+- Tiap leader punya accordion sendiri (`LeaderAccordion`) — Tim tampil sebagai sub-item di bawah leader-nya
 - Event `membersUpdated` untuk refresh list setelah CRUD
+- Separator antar menu utama: `<div className="sidebar-menu-sep" />` (garis tipis 1px)
 
 ## Menu Order (Sidebar)
 1. Unit Scoreboard
-2. Winme & InstaQris (+ accordion member links di bawahnya)
+   ── [separator] ──
+2. Winme & InstaQris (L1 accordion)
+   └─ Scoreboard Tim (L2 accordion)
+      └─ [Leader accordion] → Tim sub-list
+   ── [separator] ──
 3. Payment Agent
+   ── [separator] ──
 4. Dompet Digital
 5. Kelola User (admin only)
 
