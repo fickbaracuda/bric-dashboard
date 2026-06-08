@@ -7,6 +7,7 @@ import PaymentAgent from './pages/PaymentAgent';
 import DompetDigital from './pages/DompetDigital';
 import AnggotaDetail from './pages/AnggotaDetail';
 import ScoreboardTim from './pages/ScoreboardTim';
+import LeaderScoreboard from './pages/LeaderScoreboard';
 import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './components/Layout';
 
@@ -28,7 +29,8 @@ export default function App() {
       <Routes>
         <Route path="/login"    element={<Login />} />
         <Route path="/"         element={<Navigate to="/scoreboard" replace />} />
-        <Route path="/scoreboard" element={<ProtectedRoute><Scoreboard /></ProtectedRoute>} />
+        <Route path="/scoreboard"        element={<ProtectedRoute><Scoreboard /></ProtectedRoute>} />
+        <Route path="/leader-scoreboard" element={<ProtectedRoute><LeaderScoreboard /></ProtectedRoute>} />
         <Route path="/winme"          element={<ProtectedRoute><WinmeInstaqris /></ProtectedRoute>} />
         <Route path="/payment-agent"  element={<ProtectedRoute><PaymentAgent /></ProtectedRoute>} />
         <Route path="/dompet-digital" element={<ProtectedRoute><DompetDigital /></ProtectedRoute>} />

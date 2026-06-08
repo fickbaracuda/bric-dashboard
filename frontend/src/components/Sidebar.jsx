@@ -213,6 +213,13 @@ export default function Sidebar({ onClose }) {
           <span>Unit Scoreboard</span>
         </NavLink>
 
+        {/* Leader Scoreboard */}
+        <NavLink to="/leader-scoreboard" onClick={onClose}
+          className={({ isActive }) => 'sidebar-link' + (isActive ? ' sidebar-link--active' : '')}>
+          <i className="ti ti-medal" aria-hidden="true" />
+          <span>Leader Scoreboard</span>
+        </NavLink>
+
         <div className="sidebar-menu-sep" />
 
         {/* ── Winme & InstaQris — level 1 accordion ── */}
