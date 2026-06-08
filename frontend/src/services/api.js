@@ -127,6 +127,14 @@ export const updatePencapaian = async (targetId, data) => {
   return res.data;
 };
 
+/* Presence — ping setiap 30 detik, returns active user list */
+export const pingPresence = async () => {
+  const res = await axios.post(`${API_URL}/api/presence/ping`, {}, {
+    headers: authHeaders()
+  });
+  return res.data;
+};
+
 export const getDompetDigitalData = async (bulan) => {
   const res = await axios.get(`${API_URL}/api/dompetdigital`, {
     params: { bulan },

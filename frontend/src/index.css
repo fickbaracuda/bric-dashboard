@@ -262,7 +262,7 @@ body {
 
 /* ── Content ── */
 .main-content {
-  padding: 28px 28px 48px;
+  padding: 28px 28px 76px; /* 76 = 48 normal + 40 footer clearance */
   flex: 1;
   width: 100%;
   min-width: 0;
@@ -942,7 +942,7 @@ body {
   /* Hamburger visible */
   .hamburger { display: flex; }
 
-  .main-content { padding: 20px 16px 40px; }
+  .main-content { padding: 20px 16px 68px; }
 
   .podium-layout { flex-direction: column; align-items: center; }
   .podium-rank-1 { transform: none; order: -1; }
@@ -2149,4 +2149,87 @@ body {
   .ls-rev-row { gap: 8px; }
   .ls-rev-sep { display: none; }
   .ls-rev-item { padding: 0; }
+}
+
+/* ═══════════════════════════════════════════
+   PRESENCE FOOTER — siapa yang sedang aktif
+═══════════════════════════════════════════ */
+.presence-footer {
+  position: fixed;
+  bottom: 0;
+  left: var(--sidebar-w);
+  right: 0;
+  height: 40px;
+  background: var(--bg-card);
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 20px;
+  z-index: 100;
+  overflow: hidden;
+}
+
+.presence-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--text-4);
+  font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.presence-label .ti { font-size: 14px; }
+
+.presence-list {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.presence-list::-webkit-scrollbar { display: none; }
+
+.presence-user {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--bg-page);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 8px 2px 3px;
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.presence-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-weight: 700;
+  color: #fff;
+  flex-shrink: 0;
+  letter-spacing: 0.02em;
+}
+
+.presence-name {
+  color: var(--text-2);
+  font-weight: 500;
+}
+
+.presence-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #22c55e;
+  flex-shrink: 0;
+}
+
+@media (max-width: 768px) {
+  .presence-footer { left: 0; }
 }
