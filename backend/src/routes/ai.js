@@ -303,35 +303,54 @@ router.post('/chat', async (req, res) => {
     { role: 'user', parts: [{ text: message.trim() }] },
   ];
 
-  try {
-    const resp = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: fullSystemPrompt }] },
-        contents,
-        generationConfig: {
-          temperature:     0.3,
-          maxOutputTokens: 8192,
-        },
-      }),
-    });
+  const payload = JSON.stringify({
+    systemInstruction: { parts: [{ text: fullSystemPrompt }] },
+    contents,
+    generationConfig: { temperature: 0.3, maxOutputTokens: 8192 },
+  });
 
-    if (!resp.ok) {
-      const errBody = await resp.json().catch(() => ({}));
-      console.error('Gemini error:', errBody);
-      return res.status(502).json({ error: 'Gemini API error: ' + (errBody?.error?.message || resp.statusText) });
+  /* Retry otomatis hingga 3x untuk error sementara (503/429 dari Gemini) */
+  const MAX_RETRIES = 3;
+  let lastErr = null;
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const resp = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: payload,
+      });
+
+      /* Retry jika Gemini kelebihan beban atau rate limit */
+      if (resp.status === 503 || resp.status === 429) {
+        const waitMs = attempt * 3000; // 3s, 6s, 9s
+        console.warn(`Gemini overloaded (${resp.status}), retry ${attempt}/${MAX_RETRIES} in ${waitMs}ms`);
+        await new Promise(r => setTimeout(r, waitMs));
+        lastErr = { status: resp.status, msg: 'Server AI sedang padat. Sedang mencoba ulang...' };
+        continue;
+      }
+
+      if (!resp.ok) {
+        const errBody = await resp.json().catch(() => ({}));
+        const msg = errBody?.error?.message || resp.statusText;
+        console.error('Gemini error:', msg);
+        return res.status(502).json({ error: 'Gagal mendapat respons dari AI. Coba lagi.' });
+      }
+
+      const data  = await resp.json();
+      const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!reply) return res.status(502).json({ error: 'Respons AI kosong.' });
+
+      return res.json({ reply });
+
+    } catch (err) {
+      console.error(`AI attempt ${attempt} error:`, err.message);
+      lastErr = { status: 500, msg: err.message };
+      if (attempt < MAX_RETRIES) await new Promise(r => setTimeout(r, attempt * 2000));
     }
-
-    const data  = await resp.json();
-    const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!reply) return res.status(502).json({ error: 'Respons AI kosong.' });
-
-    res.json({ reply });
-  } catch (err) {
-    console.error('AI chat error:', err.message);
-    res.status(500).json({ error: 'Gagal menghubungi AI. Coba lagi.' });
   }
+
+  res.status(503).json({ error: 'AI sedang padat permintaan. Tunggu beberapa detik lalu coba lagi.' });
 });
 
 module.exports = router;

@@ -193,7 +193,11 @@ export default function AiChat() {
       saveChatMessage({ role: 'user',  message: msg,   page }).catch(() => {});
       saveChatMessage({ role: 'model', message: reply, page }).catch(() => {});
     } catch (err) {
-      const errMsg = err.response?.data?.error || 'Gagal mendapat respons. Coba lagi.';
+      const status = err.response?.status;
+      const serverMsg = err.response?.data?.error;
+      let errMsg = serverMsg || 'Gagal mendapat respons. Coba lagi.';
+      if (status === 503) errMsg = 'AI sedang padat permintaan. Tunggu beberapa detik lalu kirim ulang.';
+      if (status === 429) errMsg = 'Terlalu banyak pesan. Tunggu sebentar lalu coba lagi.';
       setError(errMsg);
     } finally {
       setLoading(false);
