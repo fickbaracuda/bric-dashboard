@@ -1293,6 +1293,14 @@ body {
 .sidebar-submenu--animate {
   transition: height 0.25s ease;
 }
+.sidebar-submenu--deep {
+  margin-left: 10px;
+  padding-left: 8px;
+  border-left: 2px solid #E5E7EB;
+}
+.sidebar-link-sub {
+  font-size: 13px;
+}
 
 .sidebar-link-member {
   padding: 6px 10px;

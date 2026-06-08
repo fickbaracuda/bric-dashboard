@@ -29,76 +29,56 @@ function getStatusLabel(member) {
   return `Avg pencapaian: ${avg.toFixed(1)}%`;
 }
 
-/* ── Accordion submenu dengan animasi height ── */
-function AccordionMenu({ to, icon, label, children, autoOpenPaths = [] }) {
-  const location   = useLocation();
-  const submenuRef = useRef(null);
-  const isActivePath = autoOpenPaths.some(p =>
-    location.pathname === p || location.pathname.startsWith(p + '/')
-  );
-  const [open, setOpen]     = useState(isActivePath);
-  const [height, setHeight] = useState(isActivePath ? 'auto' : '0px');
-  const [didMount, setDidMount] = useState(false);
-
-  useEffect(() => { setDidMount(true); }, []);
+/* ── Reusable animated accordion ── */
+function Accordion({ open, children }) {
+  const ref = useRef(null);
+  const [height, setHeight] = useState(open ? 'auto' : '0px');
+  const mounted = useRef(false);
 
   useEffect(() => {
-    if (isActivePath && !open) setOpen(true);
-  }, [location.pathname]);
-
-  useEffect(() => {
-    if (!submenuRef.current || !didMount) return;
+    if (!mounted.current) { mounted.current = true; return; }
+    if (!ref.current) return;
     if (open) {
-      setHeight(submenuRef.current.scrollHeight + 'px');
+      setHeight(ref.current.scrollHeight + 'px');
       const t = setTimeout(() => setHeight('auto'), 260);
       return () => clearTimeout(t);
     } else {
-      setHeight(submenuRef.current.scrollHeight + 'px');
+      setHeight(ref.current.scrollHeight + 'px');
       requestAnimationFrame(() =>
         requestAnimationFrame(() => setHeight('0px'))
       );
     }
   }, [open]);
 
-  const hasChildren = !!children;
-
   return (
-    <div className="sidebar-accordion-wrap">
-      <NavLink
-        to={to}
-        className={({ isActive }) =>
-          'sidebar-link sidebar-link-accordion' +
-          (isActive || isActivePath ? ' sidebar-link--active' : '')
-        }
-      >
-        <i className={`ti ${icon}`} aria-hidden="true" />
-        <span style={{ flex: 1 }}>{label}</span>
-        {hasChildren && (
-          <i
-            className={'ti ti-chevron-down sidebar-chevron' + (open ? ' sidebar-chevron--open' : '')}
-            aria-hidden="true"
-            onClick={e => { e.preventDefault(); e.stopPropagation(); setOpen(o => !o); }}
-          />
-        )}
-      </NavLink>
-
-      {hasChildren && (
-        <div
-          ref={submenuRef}
-          className="sidebar-submenu sidebar-submenu--animate"
-          style={{ height, overflow: 'hidden' }}
-        >
-          {children}
-        </div>
-      )}
+    <div
+      ref={ref}
+      style={{ height, overflow: 'hidden', transition: 'height 0.25s ease' }}
+    >
+      {children}
     </div>
   );
 }
 
 export default function Sidebar({ onClose }) {
-  const navigate = useNavigate();
-  const user     = getUser();
+  const navigate  = useNavigate();
+  const location  = useLocation();
+  const user      = getUser();
   const [members, setMembers] = useState([]);
+
+  const isWinmePath    = location.pathname === '/winme';
+  const isTimPath      = location.pathname === '/scoreboard-tim' ||
+                         location.pathname.startsWith('/anggota/');
+
+  /* Winme accordion — buka jika di /winme, /scoreboard-tim, atau /anggota/* */
+  const [winmeOpen, setWinmeOpen] = useState(isWinmePath || isTimPath);
+  /* Scoreboard Tim accordion — buka jika di /scoreboard-tim atau /anggota/* */
+  const [timOpen,   setTimOpen]   = useState(isTimPath);
+
+  useEffect(() => {
+    if (isWinmePath || isTimPath) setWinmeOpen(true);
+    if (isTimPath) setTimOpen(true);
+  }, [location.pathname]);
 
   const loadMembers = () => {
     getMembers('winme_instaqris')
@@ -112,6 +92,8 @@ export default function Sidebar({ onClose }) {
     window.addEventListener('membersUpdated', handler);
     return () => window.removeEventListener('membersUpdated', handler);
   }, []);
+
+  const hasMember = members.length > 0;
 
   return (
     <div className="sidebar-inner">
@@ -128,86 +110,103 @@ export default function Sidebar({ onClose }) {
         <div className="sidebar-nav-label">MENU</div>
 
         {/* Unit Scoreboard */}
-        <NavLink
-          to="/scoreboard" onClick={onClose}
-          className={({ isActive }) =>
-            'sidebar-link' + (isActive ? ' sidebar-link--active' : '')
-          }
-        >
+        <NavLink to="/scoreboard" onClick={onClose}
+          className={({ isActive }) => 'sidebar-link' + (isActive ? ' sidebar-link--active' : '')}>
           <i className="ti ti-trophy" aria-hidden="true" />
           <span>Unit Scoreboard</span>
         </NavLink>
 
-        {/* Winme & InstaQris — plain link, no accordion */}
-        <NavLink
-          to="/winme" onClick={onClose}
-          className={({ isActive }) =>
-            'sidebar-link' + (isActive ? ' sidebar-link--active' : '')
-          }
-        >
-          <i className="ti ti-bolt" aria-hidden="true" />
-          <span>Winme &amp; InstaQris</span>
-        </NavLink>
+        {/* ── Winme & InstaQris (level 1 accordion) ── */}
+        <div className="sidebar-accordion-wrap">
+          <NavLink
+            to="/winme"
+            onClick={() => { setWinmeOpen(o => !o); onClose(); }}
+            className={({ isActive }) =>
+              'sidebar-link sidebar-link-accordion' +
+              (isActive || isWinmePath || isTimPath ? ' sidebar-link--active' : '')
+            }
+          >
+            <i className="ti ti-bolt" aria-hidden="true" />
+            <span style={{ flex: 1 }}>Winme &amp; InstaQris</span>
+            <i
+              className={'ti ti-chevron-down sidebar-chevron' + (winmeOpen ? ' sidebar-chevron--open' : '')}
+              onClick={e => { e.preventDefault(); e.stopPropagation(); setWinmeOpen(o => !o); }}
+              aria-hidden="true"
+            />
+          </NavLink>
 
-        {/* Scoreboard Tim — accordion dengan member links */}
-        <AccordionMenu
-          to="/scoreboard-tim"
-          icon="ti-users"
-          label="Scoreboard Tim"
-          autoOpenPaths={['/scoreboard-tim', '/anggota']}
-        >
-          {members.map(m => (
-            <NavLink
-              key={m.id} to={`/anggota/${m.id}`} onClick={onClose}
-              className={({ isActive }) =>
-                'sidebar-link sidebar-link-member' + (isActive ? ' sidebar-link--active' : '')
-              }
-              title={getStatusLabel(m)}
-            >
-              <div className="sidebar-avatar-sm" style={{ background: m.avatar_warna }}>
-                {getInisial(m.nama)}
+          <Accordion open={winmeOpen}>
+            <div className="sidebar-submenu">
+
+              {/* ── Scoreboard Tim (level 2 accordion) ── */}
+              <div className="sidebar-accordion-wrap">
+                <NavLink
+                  to="/scoreboard-tim"
+                  onClick={() => { if (hasMember) setTimOpen(o => !o); onClose(); }}
+                  className={({ isActive }) =>
+                    'sidebar-link sidebar-link-accordion sidebar-link-sub' +
+                    (isActive || isTimPath ? ' sidebar-link--active' : '')
+                  }
+                >
+                  <i className="ti ti-users" aria-hidden="true" />
+                  <span style={{ flex: 1 }}>Scoreboard Tim</span>
+                  {hasMember && (
+                    <i
+                      className={'ti ti-chevron-down sidebar-chevron' + (timOpen ? ' sidebar-chevron--open' : '')}
+                      onClick={e => { e.preventDefault(); e.stopPropagation(); setTimOpen(o => !o); }}
+                      aria-hidden="true"
+                    />
+                  )}
+                </NavLink>
+
+                <Accordion open={timOpen && hasMember}>
+                  <div className="sidebar-submenu sidebar-submenu--deep">
+                    {members.map(m => (
+                      <NavLink
+                        key={m.id} to={`/anggota/${m.id}`} onClick={onClose}
+                        className={({ isActive }) =>
+                          'sidebar-link sidebar-link-member' + (isActive ? ' sidebar-link--active' : '')
+                        }
+                        title={getStatusLabel(m)}
+                      >
+                        <div className="sidebar-avatar-sm" style={{ background: m.avatar_warna }}>
+                          {getInisial(m.nama)}
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div className="sidebar-member-name">{m.nama}</div>
+                          <div className="sidebar-member-role">
+                            {m.posisi === 'leader' ? 'Leader' : 'Tim'}
+                          </div>
+                        </div>
+                        <span className="sidebar-status-dot" style={{ background: getStatusColor(m) }} />
+                      </NavLink>
+                    ))}
+                  </div>
+                </Accordion>
               </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div className="sidebar-member-name">{m.nama}</div>
-                <div className="sidebar-member-role">
-                  {m.posisi === 'leader' ? 'Leader' : 'Tim'}
-                </div>
-              </div>
-              <span className="sidebar-status-dot" style={{ background: getStatusColor(m) }} />
-            </NavLink>
-          ))}
-        </AccordionMenu>
+
+            </div>
+          </Accordion>
+        </div>
 
         {/* Payment Agent */}
-        <NavLink
-          to="/payment-agent" onClick={onClose}
-          className={({ isActive }) =>
-            'sidebar-link' + (isActive ? ' sidebar-link--active' : '')
-          }
-        >
+        <NavLink to="/payment-agent" onClick={onClose}
+          className={({ isActive }) => 'sidebar-link' + (isActive ? ' sidebar-link--active' : '')}>
           <i className="ti ti-building-bank" aria-hidden="true" />
           <span>Payment Agent</span>
         </NavLink>
 
         {/* Dompet Digital */}
-        <NavLink
-          to="/dompet-digital" onClick={onClose}
-          className={({ isActive }) =>
-            'sidebar-link' + (isActive ? ' sidebar-link--active' : '')
-          }
-        >
+        <NavLink to="/dompet-digital" onClick={onClose}
+          className={({ isActive }) => 'sidebar-link' + (isActive ? ' sidebar-link--active' : '')}>
           <i className="ti ti-wallet" aria-hidden="true" />
           <span>Dompet Digital</span>
         </NavLink>
 
         {/* Kelola User (admin only) */}
         {user?.role === 'admin' && (
-          <NavLink
-            to="/users" onClick={onClose}
-            className={({ isActive }) =>
-              'sidebar-link' + (isActive ? ' sidebar-link--active' : '')
-            }
-          >
+          <NavLink to="/users" onClick={onClose}
+            className={({ isActive }) => 'sidebar-link' + (isActive ? ' sidebar-link--active' : '')}>
             <i className="ti ti-users" aria-hidden="true" />
             <span>Kelola User</span>
           </NavLink>
