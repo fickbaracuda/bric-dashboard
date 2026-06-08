@@ -12,8 +12,9 @@ async function syncHandler(req, res) {
 
   let count = 0;
   for (const r of rows) {
-    // skip baris total/summary (mcc kosong atau kategori mengandung kata "total")
-    if (!r.mcc || String(r.mcc).trim() === '' || /total/i.test(String(r.kategori || ''))) continue;
+    // skip baris total/summary: mcc kosong, bukan 4-digit angka, atau label "total/subtotal"
+    const mccStr = String(r.mcc || '').trim();
+    if (!mccStr || /total/i.test(mccStr) || /total/i.test(String(r.kategori || '')) || !/^\d+$/.test(mccStr)) continue;
     await pool.query(`
       INSERT INTO segmen_snapshot
         (tanggal,mcc,kategori,
