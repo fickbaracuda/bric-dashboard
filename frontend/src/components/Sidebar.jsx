@@ -494,6 +494,16 @@ export default function Sidebar({ onClose }) {
           </Accordion>
         </div>
 
+        <div className="sidebar-menu-sep" />
+
+        {/* ── WAR-ROOM ── */}
+        <div className="sidebar-nav-label sidebar-nav-label-war">⚔ WAR-ROOM</div>
+        <NavLink to="/war-room/instaqris" onClick={onClose}
+          className={({ isActive }) => 'sidebar-link sidebar-link-war' + (isActive ? ' sidebar-link--active' : '')}>
+          <i className="ti ti-sword" aria-hidden="true" />
+          <span>InstaQris</span>
+        </NavLink>
+
         {/* Kelola User (admin only) */}
         {user?.role === 'admin' && (
           <>

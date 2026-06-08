@@ -172,6 +172,20 @@ export const pingPresence = async () => {
   return res.data;
 };
 
+/* WAR-ROOM — Segmen InstaQris */
+export const getSegmenData = async (params = {}) => {
+  const res = await axios.get(`${API_URL}/api/warroom/segmen`, { params, headers: authHeaders() });
+  return res.data;
+};
+export const getSegmenHistory = async (mcc, days = 30) => {
+  const res = await axios.get(`${API_URL}/api/warroom/segmen/history`, { params: { mcc, days }, headers: authHeaders() });
+  return res.data;
+};
+export const getSegmenTanggalList = async () => {
+  const res = await axios.get(`${API_URL}/api/warroom/segmen/tanggal-list`, { headers: authHeaders() });
+  return res.data;
+};
+
 export const getDompetDigitalData = async (bulan) => {
   const res = await axios.get(`${API_URL}/api/dompetdigital`, {
     params: { bulan },
