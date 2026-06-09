@@ -164,58 +164,85 @@ router.post('/speedcash/sync', speedcashSyncHandler);
 /* ── GET /api/warroom/speedcash ── */
 router.get('/speedcash', async (req, res) => {
   try {
-    let { tanggal } = req.query;
+    let { tanggal, filter = 'semua', sort = 'margin' } = req.query;
     if (!tanggal) {
       const r = await pool.query('SELECT MAX(tanggal) as t FROM speedcash_snapshot');
       tanggal = r.rows[0]?.t;
     }
-    if (!tanggal) return res.json({ tanggal: null, rows: [], summary: {}, top_margin: [], top_growth: [], outlet_masalah: [], anomali: [], tabel: [] });
+    if (!tanggal) return res.json({ tanggal: null, summary: {}, top_margin: [], top_growth: [], outlet_masalah: [], anomali: [], tabel: [], tabel_total: 0 });
 
-    const { rows } = await pool.query(
-      'SELECT * FROM speedcash_snapshot WHERE tanggal=$1 ORDER BY margin_jun DESC NULLS LAST',
+    const FLAGS = `
+      (tgl_reg IS NOT NULL AND tgl_reg >= $1::date - INTERVAL '1 month') AS is_outlet_baru,
+      (dev_trx > 0 AND dev_margin < 0) AS is_anomali
+    `;
+
+    // Semua query paralel — jauh lebih cepat dari fetch 40k baris sekaligus
+    const [sumRes, topMRes, topGRes, masalahRes, anomaliRes] = await Promise.all([
+      // 1. Summary via SQL aggregation
+      pool.query(`
+        SELECT
+          COUNT(*)                                                        AS total_outlet,
+          COALESCE(SUM(trx_jun),    0)                                   AS total_trx_jun,
+          COALESCE(SUM(trx_mei),    0)                                   AS total_trx_mei,
+          COALESCE(SUM(margin_jun), 0)                                   AS total_margin_jun,
+          COALESCE(SUM(margin_mei), 0)                                   AS total_margin_mei,
+          COUNT(*) FILTER (WHERE dev_margin > 0)                         AS outlet_tumbuh,
+          COUNT(*) FILTER (WHERE dev_margin < 0)                         AS outlet_turun,
+          COUNT(*) FILTER (WHERE dev_trx > 0 AND dev_margin < 0)        AS outlet_anomali,
+          COUNT(*) FILTER (WHERE tgl_reg >= $1::date - INTERVAL '1 month') AS outlet_baru
+        FROM speedcash_snapshot WHERE tanggal = $1`, [tanggal]),
+      // 2. Top 10 margin
+      pool.query(`SELECT *, ${FLAGS} FROM speedcash_snapshot WHERE tanggal=$1 ORDER BY margin_jun DESC NULLS LAST LIMIT 10`, [tanggal]),
+      // 3. Top 10 growth
+      pool.query(`SELECT *, ${FLAGS} FROM speedcash_snapshot WHERE tanggal=$1 AND dev_margin > 0 ORDER BY dev_margin DESC NULLS LAST LIMIT 10`, [tanggal]),
+      // 4. Outlet masalah (semua turun, diurutkan terburuk dulu)
+      pool.query(`SELECT *, ${FLAGS} FROM speedcash_snapshot WHERE tanggal=$1 AND dev_margin < 0 ORDER BY dev_margin ASC NULLS LAST`, [tanggal]),
+      // 5. Anomali
+      pool.query(`SELECT *, ${FLAGS} FROM speedcash_snapshot WHERE tanggal=$1 AND dev_trx > 0 AND dev_margin < 0`, [tanggal]),
+    ]);
+
+    const s = sumRes.rows[0];
+    const summary = {
+      total_outlet    : Number(s.total_outlet),
+      total_trx_jun   : Number(s.total_trx_jun),
+      total_trx_mei   : Number(s.total_trx_mei),
+      total_margin_jun: Number(s.total_margin_jun),
+      total_margin_mei: Number(s.total_margin_mei),
+      dev_margin      : Number(s.total_margin_jun) - Number(s.total_margin_mei),
+      outlet_tumbuh   : Number(s.outlet_tumbuh),
+      outlet_turun    : Number(s.outlet_turun),
+      outlet_baru     : Number(s.outlet_baru),
+      outlet_anomali  : Number(s.outlet_anomali),
+    };
+
+    // Tabel: server-side filter + sort, max 500 baris
+    const sortCol = { margin: 'margin_jun', dev_margin: 'dev_margin', trx: 'trx_jun', dev_trx: 'dev_trx' }[sort] || 'margin_jun';
+    const filterMap = {
+      tumbuh : 'AND dev_margin > 0',
+      turun  : 'AND dev_margin < 0',
+      anomali: 'AND dev_trx > 0 AND dev_margin < 0',
+      baru   : "AND tgl_reg IS NOT NULL AND tgl_reg >= $1::date - INTERVAL '1 month'",
+    };
+    const filterWhere = filterMap[filter] || '';
+    const tabelLimit  = filter === 'top10' ? 10 : 500;
+
+    const tabelRes = await pool.query(
+      `SELECT *, ${FLAGS} FROM speedcash_snapshot
+       WHERE tanggal = $1 ${filterWhere}
+       ORDER BY ${sortCol} DESC NULLS LAST LIMIT ${tabelLimit}`,
       [tanggal]
     );
 
-    const anomaliSet = new Set(
-      rows.filter(r => Number(r.dev_trx) > 0 && Number(r.dev_margin) < 0).map(r => r.id_outlet)
-    );
-
-    const oneMonthAgo = new Date(tanggal);
-    oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
-    const outletBaruSet = new Set(
-      rows.filter(r => r.tgl_reg && new Date(r.tgl_reg) >= oneMonthAgo).map(r => r.id_outlet)
-    );
-
-    const totalMarginJun = rows.reduce((s, r) => s + Number(r.margin_jun || 0), 0);
-    const totalMarginMei = rows.reduce((s, r) => s + Number(r.margin_mei || 0), 0);
-
-    const summary = {
-      total_outlet   : rows.length,
-      total_trx_jun  : rows.reduce((s, r) => s + Number(r.trx_jun  || 0), 0),
-      total_trx_mei  : rows.reduce((s, r) => s + Number(r.trx_mei  || 0), 0),
-      total_margin_jun: totalMarginJun,
-      total_margin_mei: totalMarginMei,
-      dev_margin     : totalMarginJun - totalMarginMei,
-      outlet_tumbuh  : rows.filter(r => Number(r.dev_margin) > 0).length,
-      outlet_turun   : rows.filter(r => Number(r.dev_margin) < 0).length,
-      outlet_baru    : outletBaruSet.size,
-      outlet_anomali : anomaliSet.size,
-    };
-
-    const withFlags = rows.map(r => ({
-      ...r,
-      is_anomali    : anomaliSet.has(r.id_outlet),
-      is_outlet_baru: outletBaruSet.has(r.id_outlet),
-    }));
-
-    const top_margin    = [...rows].sort((a,b) => Number(b.margin_jun) - Number(a.margin_jun)).slice(0, 10);
-    const top_growth    = [...withFlags].filter(r => Number(r.dev_margin) > 0)
-                                        .sort((a,b) => Number(b.dev_margin) - Number(a.dev_margin)).slice(0, 10);
-    const outlet_masalah = [...withFlags].filter(r => Number(r.dev_margin) < 0)
-                                         .sort((a,b) => Number(a.dev_margin) - Number(b.dev_margin));
-    const anomali       = withFlags.filter(r => r.is_anomali);
-
-    res.json({ tanggal, summary, top_margin, top_growth, outlet_masalah, anomali, tabel: withFlags });
+    res.json({
+      tanggal,
+      summary,
+      top_margin    : topMRes.rows,
+      top_growth    : topGRes.rows,
+      outlet_masalah: masalahRes.rows,
+      anomali       : anomaliRes.rows,
+      tabel         : tabelRes.rows,
+      tabel_total   : Number(s.total_outlet),
+    });
   } catch (e) {
     console.error('warroom speedcash error:', e.message);
     res.status(500).json({ error: e.message });

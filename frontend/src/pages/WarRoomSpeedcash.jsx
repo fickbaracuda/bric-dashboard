@@ -228,27 +228,33 @@ export default function WarRoomSpeedcash() {
     } catch {}
   }, [historyData]);
 
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (f = filter, s = sort) => {
     setLoading(true);
     setError(null);
     try {
+      const params = { filter: f, sort: s };
+      if (tanggal) params.tanggal = tanggal;
       const [dataRes, tglRes] = await Promise.all([
-        getSpeedcashData(tanggal ? { tanggal } : {}),
-        getSpeedcashTanggalList(),
+        getSpeedcashData(params),
+        tglList.length ? Promise.resolve({ list: tglList }) : getSpeedcashTanggalList(),
       ]);
       setData(dataRes);
-      setTglList(tglRes.list || []);
+      if (tglRes.list) setTglList(tglRes.list);
+      // Prefetch history top 2 — TIDAK blocking loading
       const top2 = (dataRes.top_margin || []).slice(0, 2);
-      await Promise.all(top2.map(r => fetchHistory(r.id_outlet)));
+      top2.forEach(r => fetchHistory(r.id_outlet));
     } catch (e) {
       setError(e.response?.data?.error || e.message);
     } finally {
       setLoading(false);
       setLastUpdated(new Date());
     }
-  }, [tanggal]);
+  }, [tanggal, tglList]);
 
-  useEffect(() => { fetchData(); }, [tanggal]);
+  useEffect(() => { fetchData(filter, sort); }, [tanggal]);
+
+  const handleFilter = (f) => { setFilter(f); fetchData(f, sort); };
+  const handleSort   = (s) => { setSort(s);   fetchData(filter, s); };
 
   const openModal = (row) => {
     setModalRow(row);
@@ -320,16 +326,9 @@ export default function WarRoomSpeedcash() {
 
   const s = data?.summary || {};
 
-  /* ── Filter + Sort tabel (client-side) ── */
-  let displayRows = [...(data?.tabel || [])];
-  if (filter === 'tumbuh')  displayRows = displayRows.filter(r => Number(r.dev_margin) > 0);
-  if (filter === 'turun')   displayRows = displayRows.filter(r => Number(r.dev_margin) < 0);
-  if (filter === 'top10')   displayRows = displayRows.slice(0, 10);
-  if (filter === 'baru')    displayRows = displayRows.filter(r => r.is_outlet_baru);
-  if (filter === 'anomali') displayRows = displayRows.filter(r => r.is_anomali);
-
-  const sortKey = { margin: 'margin_jun', dev_margin: 'dev_margin', trx: 'trx_jun', dev_trx: 'dev_trx' }[sort] || 'margin_jun';
-  displayRows.sort((a, b) => Number(b[sortKey]) - Number(a[sortKey]));
+  // Tabel sudah difilter + diurutkan dari server
+  const displayRows = data?.tabel || [];
+  const tabelTotal  = data?.tabel_total || 0;
 
   const top2  = (data?.top_margin || []).slice(0, 2);
   const hist1 = historyData[top2[0]?.id_outlet] || [];
@@ -449,7 +448,7 @@ export default function WarRoomSpeedcash() {
         {/* Tabel Detail */}
         <div className="wr-table-section">
           <div className="wr-table-controls">
-            <select className="wr-select" value={sort} onChange={e => setSort(e.target.value)}>
+            <select className="wr-select" value={sort} onChange={e => handleSort(e.target.value)} disabled={loading}>
               <option value="margin">Margin ↓</option>
               <option value="dev_margin">DEV Margin ↓</option>
               <option value="trx">TRX Jun ↓</option>
@@ -460,14 +459,15 @@ export default function WarRoomSpeedcash() {
                 <button
                   key={f}
                   className={`war-tab${filter === f ? ' war-tab--active' : ''}`}
-                  onClick={() => setFilter(f)}
+                  onClick={() => handleFilter(f)}
+                  disabled={loading}
                 >
                   {{ semua:'Semua', tumbuh:'Tumbuh', turun:'Turun', top10:'Top 10', baru:'Baru', anomali:'Anomali' }[f]}
                 </button>
               ))}
             </div>
             <span style={{ fontSize: 12, color: 'var(--text-3)', marginLeft: 'auto' }}>
-              {displayRows.length} outlet ditampilkan
+              {loading ? '...' : `${displayRows.length} dari ${fmtNum(tabelTotal)} outlet`}
             </span>
           </div>
 
