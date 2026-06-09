@@ -72,6 +72,7 @@ App.jsx             — routes: /scoreboard, /winme, /payment-agent, /dompet-dig
 index.css           — semua CSS (CSS variables: --primary #1D9E75, --text-1/2/3/4, --border, --bg-page, --bg-card, dll)
                       CSS prefix: lm-* (LeaderManagement), ad-* (AnggotaDetail), st-* (ScoreboardTim)
                       CSS prefix: wr-* (WAR-ROOM shared), aic-* (AI Chat)
+                      CSS prefix: wrd-* (WAR-ROOM Speedcash Dashboard — tab nav, KPI cards, chart cards, badges)
                       .main-content: TIDAK ada max-width — full width
 services/api.js     — semua API calls pakai authHeaders()
 utils/auth.js       — getToken, getUser, logout
@@ -93,7 +94,13 @@ pages/
   UserManagement.jsx
   AnggotaDetail.jsx     — /anggota/:id, profil + target cards + bar chart riwayat
   WarRoom.jsx           — /war-room/instaqris, monitoring segmen MCC InstaQris
-  WarRoomSpeedcash.jsx  — /war-room/speedcash, monitoring outlet Speedcash
+  WarRoomSpeedcash.jsx  — /war-room/speedcash, dashboard analitik 6 tab outlet Speedcash
+                          Tab: Executive Summary · Growth & Churn · Merchant Segmentation
+                               Margin Analysis · Cohort Analysis · Action Center
+                          Semua data dari endpoint /api/warroom/speedcash/analytics
+                          Komponen internal: KPICard, ChartCard, InsightBox, StatusBadge,
+                          SegmentBadge, HBarChart, VGroupedBar, DonutChart, ScatterPlot
+                          Export CSV tersedia di tab Growth, Segmentation, dan Action Center
   LeaderScoreboard.jsx  — /leader-scoreboard
 ```
 
@@ -189,6 +196,45 @@ CDN sudah ada di `frontend/index.html`.
 - Outlet baru: `tgl_reg >= tanggal - 1 bulan`
 - Upsert: UNIQUE(tanggal, id_outlet)
 - Trigger harian: `setupSpeedcashTrigger()` → jam 23.00 UTC (06.00 WIB)
+
+#### Endpoint Analytics (`GET /api/warroom/speedcash/analytics`)
+Endpoint baru untuk dashboard 6 tab. Satu request → 20 query paralel.
+- **Step 1**: Hitung threshold percentile via `PERCENTILE_CONT` (P25/P50/P75 TRX & Margin)
+- **Step 2**: Inject threshold ke inline SQL CASE WHEN untuk segmentasi server-side
+- Data yang dikembalikan:
+  - `summary` — aggregasi total outlet, TRX, margin, growth counts
+  - `thresholds` — `{ trxP75, trxP25, trxP50, marginP75, marginP25 }`
+  - `growth_counts` — jumlah per status: growing/declining/churned/new_active/stable
+  - `segment_counts` — jumlah per segmen merchant
+  - `top10_trx`, `top10_margin` — top 10 untuk Executive Summary
+  - `top20_dt_pos/neg`, `top20_dm_pos/neg` — top/bottom 20 DEV TRX & Margin
+  - `growth_table` — union 5 kategori (150+150+300+300+50 rows) dengan field `growth_status`
+  - `scatter_data` — max 4000 outlet aktif dengan field `segment` & `avg_margin_per_trx`
+  - `top20_margin_jun`, `top20_dev_margin`, `bot20_dev_margin` — untuk Margin Analysis
+  - `cohort_year` — agregasi per tahun registrasi
+  - `cohort_month` — agregasi per bulan+tahun registrasi (untuk heatmap)
+  - `action_drop`, `action_growth`, `action_high_trx`, `action_rising` — daftar prioritas Action Center (max 50 each)
+
+#### Segmentasi Merchant (threshold-based, computed server-side)
+| Segmen | Kondisi |
+|--------|---------|
+| superstar | trx_jun ≥ P75 AND margin_jun ≥ P75 |
+| rising_star | (trx_mei=0 OR trx_mei < P25) AND trx_jun > P50 AND dev_margin > 0 |
+| at_risk | trx_mei ≥ P75 AND trx_jun < trx_mei × 0.75 |
+| high_trx_low_margin | trx_jun ≥ P75 AND margin_jun < P25 |
+| low_trx_high_margin | trx_jun < P25 AND margin_jun ≥ P75 |
+| low_value | else (aktif) |
+| inactive | trx_jun = 0 |
+
+#### Warna Segmen (SEGMENT_COLORS di WarRoomSpeedcash.jsx)
+- superstar: `#7C3AED`, rising_star: `#059669`, at_risk: `#DC2626`
+- high_trx_low_margin: `#D97706`, low_trx_high_margin: `#2563EB`, low_value: `#9CA3AF`
+
+#### Action Center — 4 Prioritas
+- `drop` (🚨 Wajib Diselamatkan) — outlet dengan dev_trx negatif terbesar
+- `growth` (📈 Wajib Dihubungi) — outlet dev_trx & dev_margin positif terbesar
+- `optimize` (⚡ Wajib Dioptimasi) — outlet high TRX tapi low margin
+- `testimony` (⭐ Wajib Testimoni) — rising stars / outlet baru dengan growth besar
 
 ### Nginx — Sync Endpoints
 File: `/etc/nginx/sites-enabled/bric`
