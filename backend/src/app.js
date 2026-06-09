@@ -50,7 +50,7 @@ const loginLimiter = rateLimit({
 });
 
 app.use(cors({ origin: process.env.ALLOWED_ORIGIN || '*' }));
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: '30mb' }));
 
 app.use('/api/auth/login', loginLimiter);
 app.use('/api/auth',       authRoutes);
