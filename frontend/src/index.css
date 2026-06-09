@@ -42,7 +42,7 @@ body {
 /* ── Sidebar ── */
 .sidebar {
   width: var(--sidebar-w);
-  min-height: 100vh;
+  height: 100vh;
   background: var(--bg-card);
   border-right: 1px solid var(--border);
   position: fixed;
