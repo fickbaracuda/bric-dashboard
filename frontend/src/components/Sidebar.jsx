@@ -152,12 +152,13 @@ export default function Sidebar({ onClose }) {
 
   const isWinmePath    = location.pathname === '/winme';
   const isWinmeTimPath = location.pathname === '/scoreboard-tim'    || isWinmeMember;
+  const isWRIQPath     = location.pathname === '/war-room/instaqris';
   const isPABasePath   = location.pathname === '/payment-agent';
   const isPATimPath    = location.pathname === '/scoreboard-tim-pa' || isPAMember;
   const isDDPath       = location.pathname === '/dompet-digital';
   const isSCTimPath    = location.pathname === '/scoreboard-tim-sc' || isSCMember;
 
-  const [winmeOpen, setWinmeOpen] = useState(isWinmePath || isWinmeTimPath);
+  const [winmeOpen, setWinmeOpen] = useState(isWinmePath || isWinmeTimPath || isWRIQPath);
   const [timOpen,   setTimOpen]   = useState(isWinmeTimPath);
   const [paOpen,    setPAOpen]    = useState(isPABasePath || isPATimPath);
   const [paTimOpen, setPATimOpen] = useState(isPATimPath);
@@ -165,7 +166,7 @@ export default function Sidebar({ onClose }) {
   const [scTimOpen, setSCTimOpen] = useState(isSCTimPath);
 
   useEffect(() => {
-    if (isWinmePath || isWinmeTimPath) setWinmeOpen(true);
+    if (isWinmePath || isWinmeTimPath || isWRIQPath) setWinmeOpen(true);
     if (isWinmeTimPath) setTimOpen(true);
     if (isPABasePath || isPATimPath) setPAOpen(true);
     if (isPATimPath) setPATimOpen(true);
@@ -309,6 +310,16 @@ export default function Sidebar({ onClose }) {
                   </div>
                 </Accordion>
               </div>
+
+              {/* ── WAR-ROOM InstaQris — sub-menu Winme ── */}
+              <NavLink to="/war-room/instaqris" onClick={onClose}
+                className={({ isActive }) =>
+                  'sidebar-link sidebar-link-sub sidebar-link-war' +
+                  (isActive ? ' sidebar-link--active' : '')
+                }>
+                <i className="ti ti-sword" aria-hidden="true" />
+                <span>⚔ WAR-ROOM InstaQris</span>
+              </NavLink>
 
             </div>
           </Accordion>
@@ -493,16 +504,6 @@ export default function Sidebar({ onClose }) {
             </div>
           </Accordion>
         </div>
-
-        <div className="sidebar-menu-sep" />
-
-        {/* ── WAR-ROOM ── */}
-        <div className="sidebar-nav-label sidebar-nav-label-war">⚔ WAR-ROOM</div>
-        <NavLink to="/war-room/instaqris" onClick={onClose}
-          className={({ isActive }) => 'sidebar-link sidebar-link-war' + (isActive ? ' sidebar-link--active' : '')}>
-          <i className="ti ti-sword" aria-hidden="true" />
-          <span>InstaQris</span>
-        </NavLink>
 
         <div className="sidebar-menu-sep" />
 

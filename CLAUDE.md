@@ -151,6 +151,7 @@ speedcash_snapshot (id, tanggal, id_outlet VARCHAR(30), tgl_reg DATE,
 3. Winme & InstaQris (L1 accordion)
    └─ Scoreboard Tim (L2 accordion)
       └─ [Leader accordion] → Tim sub-list
+   └─ ⚔ WAR-ROOM InstaQris → /war-room/instaqris
    ── [separator] ──
 4. Payment Agent (L1 accordion)
    └─ Scoreboard Tim PA
@@ -158,13 +159,10 @@ speedcash_snapshot (id, tanggal, id_outlet VARCHAR(30), tgl_reg DATE,
 5. Dompet Digital (L1 accordion)
    └─ Scoreboard Tim SpeedCash
    ── [separator] ──
-6. ⚔ WAR-ROOM (label merah #E24B4A)
-   └─ InstaQris → /war-room/instaqris
-   ── [separator] ──
-7. ⚡ WAR-ROOM SPEEDCASH (label oranye #F97316)
+6. ⚡ WAR-ROOM SPEEDCASH (label oranye #F97316)
    └─ Speedcash → /war-room/speedcash
    ── [separator] ──
-8. Kelola User (admin only)
+7. Kelola User (admin only)
 
 ## Icons
 Tabler Icons webfont — gunakan `<i className="ti ti-xxx" />` bukan SVG.
