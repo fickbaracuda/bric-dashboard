@@ -36,7 +36,19 @@ export default function Layout({ children, syncedAt, bulan }) {
   const [open, setOpen]               = useState(false);
   const [activeUsers, setActiveUsers] = useState([]);
   const timerRef                      = useRef(null);
+  const sidebarRef                    = useRef(null);
   const syncStr                       = formatSync(syncedAt);
+
+  useEffect(() => {
+    const el = sidebarRef.current;
+    if (!el) return;
+    const obs = new ResizeObserver(([entry]) => {
+      const w = entry.borderBoxSize[0].inlineSize;
+      document.documentElement.style.setProperty('--sidebar-w', w + 'px');
+    });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, []);
 
   async function doPing() {
     try {
@@ -55,7 +67,7 @@ export default function Layout({ children, syncedAt, bulan }) {
 
   return (
     <div className="layout">
-      <aside className={`sidebar ${open ? 'sidebar--open' : ''}`}>
+      <aside ref={sidebarRef} className={`sidebar ${open ? 'sidebar--open' : ''}`}>
         <Sidebar onClose={() => setOpen(false)} />
       </aside>
 
