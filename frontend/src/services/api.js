@@ -199,6 +199,10 @@ export const getSpeedcashTanggalList = async () => {
   const res = await axios.get(`${API_URL}/api/warroom/speedcash/tanggal-list`, { headers: authHeaders() });
   return res.data;
 };
+export const getSpeedcashAnalytics = async (params = {}) => {
+  const res = await axios.get(`${API_URL}/api/warroom/speedcash/analytics`, { params, headers: authHeaders() });
+  return res.data;
+};
 
 export const getDompetDigitalData = async (bulan) => {
   const res = await axios.get(`${API_URL}/api/dompetdigital`, {

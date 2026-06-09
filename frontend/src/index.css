@@ -2754,3 +2754,84 @@ body {
 .wr-table-controls { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
 .wr-table-wrap     { overflow-x: auto; }
 .wr-modal-head     { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+
+/* ═══════════════════════════════════════════
+   WAR-ROOM SPEEDCASH DASHBOARD (wrd-*)
+═══════════════════════════════════════════ */
+
+/* Tab Navigation */
+.wrd-tabs { display: flex; gap: 2px; border-bottom: 2px solid var(--border); margin-bottom: 20px; overflow-x: auto; flex-wrap: nowrap; scrollbar-width: none; }
+.wrd-tabs::-webkit-scrollbar { display: none; }
+.wrd-tab  { display: flex; align-items: center; padding: 10px 16px; font-size: 12.5px; font-weight: 500; border: none; background: none; cursor: pointer; color: var(--text-3); border-bottom: 3px solid transparent; margin-bottom: -2px; white-space: nowrap; transition: color 0.15s, border-color 0.15s; border-radius: 6px 6px 0 0; }
+.wrd-tab:hover { color: #F97316; background: #FFF7ED; }
+.wrd-tab.active { color: #F97316; border-bottom-color: #F97316; background: #FFF7ED; font-weight: 700; }
+
+/* Tab content wrapper */
+.wrd-tab-content { display: flex; flex-direction: column; gap: 16px; }
+
+/* Section title */
+.wrd-section-head  { margin-bottom: 4px; }
+.wrd-section-title { font-size: 18px; font-weight: 700; color: var(--text-1); }
+.wrd-section-sub   { font-size: 12px; color: var(--text-4); margin-top: 2px; }
+
+/* KPI Grid */
+.wrd-kpi-grid      { display: grid; gap: 12px; }
+.wrd-kpi-grid-4    { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+.wrd-kpi-grid-3    { grid-template-columns: repeat(auto-fit, minmax(175px, 1fr)); }
+.wrd-kpi-card      { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; transition: box-shadow 0.15s; }
+.wrd-kpi-card:hover{ box-shadow: var(--shadow-md); }
+.wrd-kpi-icon      { font-size: 18px; margin-bottom: 4px; }
+.wrd-kpi-label     { font-size: 11px; color: var(--text-3); margin-bottom: 4px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.4px; }
+.wrd-kpi-value     { font-size: 22px; font-weight: 700; line-height: 1.1; }
+.wrd-kpi-sub       { font-size: 11px; color: var(--text-3); margin-top: 5px; }
+
+/* Chart cards */
+.wrd-chart-card    { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+.wrd-chart-head    { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }
+.wrd-chart-title   { font-size: 13px; font-weight: 700; color: var(--text-1); }
+.wrd-chart-sub     { font-size: 11px; color: var(--text-4); margin-top: 2px; }
+.wrd-charts-row    { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.wrd-charts-row-3  { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+
+/* Badges */
+.wrd-badge { display: inline-flex; align-items: center; padding: 2px 9px; border-radius: 99px; font-size: 10.5px; font-weight: 600; white-space: nowrap; }
+
+/* Insight grid */
+.wrd-insight-grid { display: flex; flex-direction: column; gap: 6px; }
+.wrd-insight-item { padding: 9px 12px; border-radius: 6px; line-height: 1.4; }
+
+/* Filter row */
+.wrd-filter-row { display: flex; align-items: center; gap: 8px; padding: 10px 0 12px; flex-wrap: wrap; }
+.wrd-search { padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-card); color: var(--text-1); font-size: 12px; min-width: 160px; }
+.wrd-search:focus { outline: none; border-color: #F97316; }
+
+/* Override wr-filter-tab active for Speedcash (orange) */
+.wrd-tab-content .wr-filter-tab.active { background: #F97316; border-color: #F97316; }
+
+/* Export button */
+.wrd-export-btn { display: flex; align-items: center; gap: 4px; padding: 5px 12px; background: none; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; color: var(--text-2); cursor: pointer; white-space: nowrap; transition: 0.15s; }
+.wrd-export-btn:hover { background: var(--bg-page); border-color: #F97316; color: #F97316; }
+
+/* Segment guide */
+.wrd-seg-guide     { display: flex; flex-direction: column; gap: 8px; padding: 4px 0; }
+.wrd-seg-guide-row { display: flex; align-items: center; gap: 8px; }
+.wrd-seg-dot       { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.wrd-seg-count     { font-size: 12px; font-weight: 700; color: var(--text-2); }
+
+/* Cohort table */
+.wrd-cohort-table      { width: 100%; border-collapse: collapse; font-size: 12px; }
+.wrd-cohort-table th   { padding: 8px 12px; background: var(--bg-page); font-size: 11px; font-weight: 600; color: var(--text-3); border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
+.wrd-cohort-table td   { padding: 8px 12px; border-bottom: 0.5px solid var(--border); white-space: nowrap; }
+
+/* Action priority card */
+.wrd-action-priority-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; transition: box-shadow 0.15s; }
+.wrd-action-priority-card:hover { box-shadow: var(--shadow-md); }
+
+/* Responsive */
+@media (max-width: 900px) {
+  .wrd-charts-row, .wrd-charts-row-3 { grid-template-columns: 1fr; }
+  .wrd-kpi-grid-4 { grid-template-columns: repeat(2, 1fr); }
+  .wrd-kpi-grid-3 { grid-template-columns: repeat(2, 1fr); }
+  .wrd-tabs { gap: 0; }
+  .wrd-tab  { padding: 8px 10px; font-size: 11px; }
+}
