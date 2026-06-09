@@ -186,6 +186,20 @@ export const getSegmenTanggalList = async () => {
   return res.data;
 };
 
+/* WAR-ROOM — Speedcash */
+export const getSpeedcashData = async (params = {}) => {
+  const res = await axios.get(`${API_URL}/api/warroom/speedcash`, { params, headers: authHeaders() });
+  return res.data;
+};
+export const getSpeedcashHistory = async (id_outlet, days = 30) => {
+  const res = await axios.get(`${API_URL}/api/warroom/speedcash/history`, { params: { id_outlet, days }, headers: authHeaders() });
+  return res.data;
+};
+export const getSpeedcashTanggalList = async () => {
+  const res = await axios.get(`${API_URL}/api/warroom/speedcash/tanggal-list`, { headers: authHeaders() });
+  return res.data;
+};
+
 export const getDompetDigitalData = async (bulan) => {
   const res = await axios.get(`${API_URL}/api/dompetdigital`, {
     params: { bulan },

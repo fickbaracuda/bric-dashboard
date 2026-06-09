@@ -2724,3 +2724,33 @@ body {
   .wr-panels, .wr-analysis-grid { grid-template-columns: 1fr; }
   .wr-summary-grid { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* ─── WAR-ROOM SPEEDCASH ─────────────────────────────────── */
+.war-badge-sc { font-size: 11px; padding: 3px 10px; border-radius: 99px; background: #FFF0E0; color: #92400E; font-weight: 500; }
+
+/* Sidebar */
+.sidebar-nav-label-war-sc { color: #F97316; }
+.sidebar-link-war-sc { color: var(--text-2); }
+.sidebar-link-war-sc--active { background: #FFF7ED !important; color: #9A3412 !important; border-left: 2px solid #F97316; }
+
+/* Tabs */
+.war-tabs-sc { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
+.war-tab-sc  { padding: 8px 18px; font-size: 13px; font-weight: 500; border: none; background: none; cursor: pointer; color: var(--text-3); border-bottom: 2px solid transparent; transition: color 0.15s; }
+.war-tab-sc.active   { color: #F97316; border-bottom-color: #F97316; }
+.war-tab-sc.disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Summary cards val */
+.wr-card-val { font-size: 22px; font-weight: 700; line-height: 1.1; }
+
+/* Badge outlet baru */
+.pill-baru { background: #DBEAFE; color: #1E40AF; border-radius: 99px; padding: 2px 8px; font-size: 10px; font-weight: 600; }
+
+/* Rank rows Speedcash */
+.rank-row-sc { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 0.5px solid var(--border); }
+.rank-row-sc:last-child { border-bottom: none; }
+.rbar-sc     { height: 4px; border-radius: 99px; }
+
+/* Table controls */
+.wr-table-controls { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+.wr-table-wrap     { overflow-x: auto; }
+.wr-modal-head     { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }

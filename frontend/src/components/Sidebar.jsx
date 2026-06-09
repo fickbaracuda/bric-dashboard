@@ -504,6 +504,16 @@ export default function Sidebar({ onClose }) {
           <span>InstaQris</span>
         </NavLink>
 
+        <div className="sidebar-menu-sep" />
+
+        {/* ── WAR-ROOM SPEEDCASH ── */}
+        <div className="sidebar-nav-label sidebar-nav-label-war-sc">⚡ WAR-ROOM SPEEDCASH</div>
+        <NavLink to="/war-room/speedcash" onClick={onClose}
+          className={({ isActive }) => 'sidebar-link sidebar-link-war-sc' + (isActive ? ' sidebar-link--active sidebar-link-war-sc--active' : '')}>
+          <i className="ti ti-bolt" aria-hidden="true" />
+          <span>Speedcash</span>
+        </NavLink>
+
         {/* Kelola User (admin only) */}
         {user?.role === 'admin' && (
           <>
