@@ -157,12 +157,13 @@ export default function Sidebar({ onClose }) {
   const isPATimPath    = location.pathname === '/scoreboard-tim-pa' || isPAMember;
   const isDDPath       = location.pathname === '/dompet-digital';
   const isSCTimPath    = location.pathname === '/scoreboard-tim-sc' || isSCMember;
+  const isWRSCPath     = location.pathname === '/war-room/speedcash';
 
   const [winmeOpen, setWinmeOpen] = useState(isWinmePath || isWinmeTimPath || isWRIQPath);
   const [timOpen,   setTimOpen]   = useState(isWinmeTimPath);
   const [paOpen,    setPAOpen]    = useState(isPABasePath || isPATimPath);
   const [paTimOpen, setPATimOpen] = useState(isPATimPath);
-  const [ddOpen,    setDDOpen]    = useState(isDDPath || isSCTimPath);
+  const [ddOpen,    setDDOpen]    = useState(isDDPath || isSCTimPath || isWRSCPath);
   const [scTimOpen, setSCTimOpen] = useState(isSCTimPath);
 
   useEffect(() => {
@@ -170,7 +171,7 @@ export default function Sidebar({ onClose }) {
     if (isWinmeTimPath) setTimOpen(true);
     if (isPABasePath || isPATimPath) setPAOpen(true);
     if (isPATimPath) setPATimOpen(true);
-    if (isDDPath || isSCTimPath) setDDOpen(true);
+    if (isDDPath || isSCTimPath || isWRSCPath) setDDOpen(true);
     if (isSCTimPath) setSCTimOpen(true);
   }, [location.pathname, members, membersPA, membersSC]);
 
@@ -318,7 +319,7 @@ export default function Sidebar({ onClose }) {
                   (isActive ? ' sidebar-link--active' : '')
                 }>
                 <i className="ti ti-sword" aria-hidden="true" />
-                <span>⚔ WAR-ROOM InstaQris</span>
+                <span>WAR-ROOM InstaQris</span>
               </NavLink>
 
             </div>
@@ -417,18 +418,18 @@ export default function Sidebar({ onClose }) {
 
         <div className="sidebar-menu-sep" />
 
-        {/* ── Dompet Digital — level 1 accordion ── */}
+        {/* ── Speedcash (Dompet Digital) — level 1 accordion ── */}
         <div className="sidebar-accordion-wrap">
           <NavLink
             to="/dompet-digital"
             onClick={() => { setDDOpen(o => !o); onClose(); }}
             className={({ isActive }) =>
               'sidebar-link sidebar-link-accordion' +
-              (isActive || isDDPath || isSCTimPath ? ' sidebar-link--active' : '')
+              (isActive || isDDPath || isSCTimPath || isWRSCPath ? ' sidebar-link--active' : '')
             }
           >
             <i className="ti ti-wallet" aria-hidden="true" />
-            <span style={{ flex: 1 }}>Dompet Digital</span>
+            <span style={{ flex: 1 }}>Speedcash</span>
             <i
               className={'ti ti-chevron-down sidebar-chevron' + (ddOpen ? ' sidebar-chevron--open' : '')}
               onClick={e => { e.preventDefault(); e.stopPropagation(); setDDOpen(o => !o); }}
@@ -501,19 +502,19 @@ export default function Sidebar({ onClose }) {
                 </Accordion>
               </div>
 
+              {/* ── WAR-ROOM Speedcash — sub-menu Speedcash/DD ── */}
+              <NavLink to="/war-room/speedcash" onClick={onClose}
+                className={({ isActive }) =>
+                  'sidebar-link sidebar-link-sub sidebar-link-war-sc' +
+                  (isActive ? ' sidebar-link--active sidebar-link-war-sc--active' : '')
+                }>
+                <i className="ti ti-bolt" aria-hidden="true" />
+                <span>WAR-ROOM Speedcash</span>
+              </NavLink>
+
             </div>
           </Accordion>
         </div>
-
-        <div className="sidebar-menu-sep" />
-
-        {/* ── WAR-ROOM SPEEDCASH ── */}
-        <div className="sidebar-nav-label sidebar-nav-label-war-sc">⚡ WAR-ROOM SPEEDCASH</div>
-        <NavLink to="/war-room/speedcash" onClick={onClose}
-          className={({ isActive }) => 'sidebar-link sidebar-link-war-sc' + (isActive ? ' sidebar-link--active sidebar-link-war-sc--active' : '')}>
-          <i className="ti ti-bolt" aria-hidden="true" />
-          <span>Speedcash</span>
-        </NavLink>
 
         {/* Kelola User (admin only) */}
         {user?.role === 'admin' && (
