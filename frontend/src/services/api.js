@@ -216,6 +216,12 @@ export const getFastpayAnalytics = async (params = {}) => {
   return res.data;
 };
 
+/* WAR-ROOM — Farming */
+export const getFarmingAnalytics = async (params = {}) => {
+  const res = await axios.get(`${API_URL}/api/warroom/farming/analytics`, { params, headers: authHeaders() });
+  return res.data;
+};
+
 export const getDompetDigitalData = async (bulan) => {
   const res = await axios.get(`${API_URL}/api/dompetdigital`, {
     params: { bulan },

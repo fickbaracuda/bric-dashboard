@@ -3227,6 +3227,28 @@ body {
 /* Empty state inside card */
 .wrfp-empty-msg { padding: 20px; text-align: center; color: var(--text-4); font-size: 13px; }
 
+/* ══ WAR-ROOM Farming overrides (reuses wrfp-* structure, changes color to green) ══ */
+.wrfm-page .wrfp-badge-owner  { background: #D1FAE5; color: #065F46; }
+.wrfm-page .wrfp-badge-hari   { background: #10B98120; color: #065F46; }
+.wrfm-page .wrfp-tab--active  { color: #10B981; border-bottom-color: #10B981; }
+.wrfm-page .wrfp-refresh-btn:hover { color: #10B981; }
+.wrfm-page .wrfp-copy-btn     { border-color: #10B981; background: #D1FAE5; color: #065F46; }
+.wrfm-page .wrfp-copy-btn:hover { background: #A7F3D0; }
+.wrfm-page .wrfp-page-btn:hover:not(:disabled) { border-color: #10B981; color: #10B981; }
+
+/* Context bar — Mei Full baseline info */
+.wrfm-context-bar {
+  display: flex; align-items: center; gap: 8px;
+  background: #ECFDF5; border: 1px solid #6EE7B7;
+  border-radius: 8px; padding: 8px 14px;
+  font-size: 12.5px; color: #065F46; margin-bottom: 16px;
+}
+.wrfm-context-bar i { font-size: 14px; flex-shrink: 0; }
+.wrfm-context-note {
+  margin-left: auto; font-size: 11px;
+  color: #059669; font-weight: 600; white-space: nowrap;
+}
+
 /* Responsive */
 @media (max-width: 1200px) {
   .wrfp-kpi-grid { grid-template-columns: repeat(3, 1fr); }

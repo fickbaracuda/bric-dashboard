@@ -160,10 +160,11 @@ export default function Sidebar({ onClose }) {
   const isWRSCPath     = location.pathname === '/war-room/speedcash';
   const isWREkspPath   = location.pathname === '/war-room/ekspedisi';
   const isWRFPPath     = location.pathname === '/war-room/fastpayglobal';
+  const isWRFarmPath   = location.pathname === '/war-room/farming';
 
   const [winmeOpen, setWinmeOpen] = useState(isWinmePath || isWinmeTimPath || isWRIQPath);
   const [timOpen,   setTimOpen]   = useState(isWinmeTimPath);
-  const [paOpen,    setPAOpen]    = useState(isPABasePath || isPATimPath || isWREkspPath || isWRFPPath);
+  const [paOpen,    setPAOpen]    = useState(isPABasePath || isPATimPath || isWREkspPath || isWRFPPath || isWRFarmPath);
   const [paTimOpen, setPATimOpen] = useState(isPATimPath);
   const [ddOpen,    setDDOpen]    = useState(isDDPath || isSCTimPath || isWRSCPath);
   const [scTimOpen, setSCTimOpen] = useState(isSCTimPath);
@@ -171,7 +172,7 @@ export default function Sidebar({ onClose }) {
   useEffect(() => {
     if (isWinmePath || isWinmeTimPath || isWRIQPath) setWinmeOpen(true);
     if (isWinmeTimPath) setTimOpen(true);
-    if (isPABasePath || isPATimPath || isWREkspPath || isWRFPPath) setPAOpen(true);
+    if (isPABasePath || isPATimPath || isWREkspPath || isWRFPPath || isWRFarmPath) setPAOpen(true);
     if (isPATimPath) setPATimOpen(true);
     if (isDDPath || isSCTimPath || isWRSCPath) setDDOpen(true);
     if (isSCTimPath) setSCTimOpen(true);
@@ -440,6 +441,17 @@ export default function Sidebar({ onClose }) {
                 <i className="ti ti-world" style={{ color: '#F59E0B' }} aria-hidden="true" />
                 <span>Fastpay Global</span>
                 <span className="sidebar-warroom-badge" style={{ background: '#F59E0B' }}>Ainul</span>
+              </NavLink>
+              <NavLink
+                to="/war-room/farming"
+                onClick={onClose}
+                className={({ isActive }) =>
+                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                }
+              >
+                <i className="ti ti-plant" style={{ color: '#10B981' }} aria-hidden="true" />
+                <span>Farming</span>
+                <span className="sidebar-warroom-badge" style={{ background: '#10B981' }}>Nizar</span>
               </NavLink>
 
             </div>

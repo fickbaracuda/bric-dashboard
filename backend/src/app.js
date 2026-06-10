@@ -17,6 +17,7 @@ const aiContextRoutes     = require('./routes/ai-context');
 const warroomRoutes       = require('./routes/warroom');
 const ekspedisiRoutes     = require('./routes/warroom-ekspedisi');
 const fastpayRoutes       = require('./routes/warroom-fastpay');
+const farmingRoutes       = require('./routes/warroom-farming');
 const requireAuth         = require('./middleware/auth');
 
 const app  = express();
@@ -71,6 +72,8 @@ app.post('/api/warroom/ekspedisi/sync',    ekspedisiRoutes.syncHandler);        
 app.get('/api/warroom/ekspedisi/analytics', requireAuth, ekspedisiRoutes.analyticsHandler);
 app.post('/api/warroom/fastpay/sync',     fastpayRoutes.syncHandler);             // token auth, no JWT
 app.get('/api/warroom/fastpay/analytics', requireAuth, fastpayRoutes.analyticsHandler);
+app.post('/api/warroom/farming/sync',     farmingRoutes.syncHandler);             // token auth, no JWT
+app.get('/api/warroom/farming/analytics', requireAuth, farmingRoutes.analyticsHandler);
 app.use('/api/warroom',        requireAuth, warroomRoutes);
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
