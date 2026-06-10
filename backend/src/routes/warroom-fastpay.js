@@ -116,7 +116,7 @@ async function analyticsHandler(req, res) {
       top15TrxRes, top15RevRes,
       top15GrowthTrxRes, top15DeclineTrxRes, top15GrowthRevRes,
       newRes, churnedRes, rocketRes,
-      prefixRes, trxDistRes, allOutletsRes, anomaliRes
+      prefixRes, trxDistRes, scatterRes, anomaliRes
     ] = await Promise.all([
 
       // meta
@@ -238,13 +238,11 @@ async function analyticsHandler(req, res) {
          ORDER BY MIN(trx_jun)`, [tanggal]
       ),
 
-      // all outlets (for detail tab)
+      // scatter data for Revenue Analysis (max 3000 active outlets, 3 cols only)
       pool.query(
-        `SELECT id_outlet, trx_mei, trx_jun, rev_mei, rev_jun,
-                dev_trx, dev_rev, pct_trx_growth, pct_rev_growth,
-                avg_rev_per_trx_mei, avg_rev_per_trx_jun, status
-         FROM fastpay_snapshot WHERE tanggal = $1
-         ORDER BY trx_jun DESC`, [tanggal]
+        `SELECT id_outlet, trx_jun, avg_rev_per_trx_jun, status
+         FROM fastpay_snapshot WHERE tanggal = $1 AND trx_jun > 0
+         ORDER BY trx_jun DESC LIMIT 3000`, [tanggal]
       ),
 
       // anomali: free TRX (trx > 0 but rev = 0)
@@ -298,7 +296,7 @@ async function analyticsHandler(req, res) {
       rocket_outlets:     rocketRes.rows,
       prefix_breakdown:   prefixRes.rows,
       trx_distribution:   trxDistRes.rows,
-      all_outlets:        allOutletsRes.rows,
+      scatter_data:       scatterRes.rows,
       anomali_free_trx:   anomaliRes.rows,
     });
   } catch (err) {
@@ -307,4 +305,49 @@ async function analyticsHandler(req, res) {
   }
 }
 
-module.exports = { syncHandler, analyticsHandler };
+/* ─────────────────────────────────────────────
+   GET /api/warroom/fastpay/outlets
+   Server-side paginated outlet detail
+───────────────────────────────────────────── */
+async function outletsHandler(req, res) {
+  try {
+    const { rows: dateRows } = await pool.query(`SELECT MAX(tanggal) AS tanggal FROM fastpay_snapshot`);
+    const tanggal = dateRows[0]?.tanggal;
+    if (!tanggal) return res.json({ rows: [], total: 0 });
+
+    const page   = Math.max(1, parseInt(req.query.page)  || 1);
+    const limit  = Math.min(200, parseInt(req.query.limit) || 50);
+    const offset = (page - 1) * limit;
+    const search = (req.query.search || '').trim();
+    const status = req.query.status || 'all';
+    const validCols = { trx_mei:1, trx_jun:1, rev_mei:1, rev_jun:1, dev_trx:1, dev_rev:1, pct_trx_growth:1, pct_rev_growth:1, avg_rev_per_trx_jun:1 };
+    const col    = validCols[req.query.sortBy] ? req.query.sortBy : 'trx_jun';
+    const dir    = req.query.sortDir === 'asc' ? 'ASC' : 'DESC';
+
+    const conditions = [`tanggal = $1`];
+    const params = [tanggal];
+    if (status !== 'all') { params.push(status); conditions.push(`status = $${params.length}`); }
+    if (search)           { params.push(`%${search.toLowerCase()}%`); conditions.push(`LOWER(id_outlet) LIKE $${params.length}`); }
+
+    const where = conditions.join(' AND ');
+    const [countRes, dataRes] = await Promise.all([
+      pool.query(`SELECT COUNT(*) FROM fastpay_snapshot WHERE ${where}`, params),
+      pool.query(
+        `SELECT id_outlet, trx_mei, trx_jun, rev_mei, rev_jun,
+                dev_trx, dev_rev, pct_trx_growth, pct_rev_growth,
+                avg_rev_per_trx_mei, avg_rev_per_trx_jun, status
+         FROM fastpay_snapshot WHERE ${where}
+         ORDER BY ${col} ${dir}
+         LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+        [...params, limit, offset]
+      ),
+    ]);
+
+    res.json({ rows: dataRes.rows, total: parseInt(countRes.rows[0].count), page, limit });
+  } catch (err) {
+    console.error('[fastpay outlets]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+}
+
+module.exports = { syncHandler, analyticsHandler, outletsHandler };

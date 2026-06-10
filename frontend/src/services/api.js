@@ -215,10 +215,18 @@ export const getFastpayAnalytics = async (params = {}) => {
   const res = await axios.get(`${API_URL}/api/warroom/fastpay/analytics`, { params, headers: authHeaders() });
   return res.data;
 };
+export const getFastpayOutlets = async (params = {}) => {
+  const res = await axios.get(`${API_URL}/api/warroom/fastpay/outlets`, { params, headers: authHeaders() });
+  return res.data;
+};
 
 /* WAR-ROOM — Farming */
 export const getFarmingAnalytics = async (params = {}) => {
   const res = await axios.get(`${API_URL}/api/warroom/farming/analytics`, { params, headers: authHeaders() });
+  return res.data;
+};
+export const getFarmingOutlets = async (params = {}) => {
+  const res = await axios.get(`${API_URL}/api/warroom/farming/outlets`, { params, headers: authHeaders() });
   return res.data;
 };
 

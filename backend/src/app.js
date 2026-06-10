@@ -71,10 +71,12 @@ app.post('/api/warroom/segmen/sync',      warroomRoutes.syncHandler);           
 app.post('/api/warroom/speedcash/sync',  warroomRoutes.speedcashSyncHandler);   // token auth, no JWT
 app.post('/api/warroom/ekspedisi/sync',    ekspedisiRoutes.syncHandler);          // token auth, no JWT
 app.get('/api/warroom/ekspedisi/analytics', requireAuth, ekspedisiRoutes.analyticsHandler);
-app.post('/api/warroom/fastpay/sync',     fastpayRoutes.syncHandler);             // token auth, no JWT
+app.post('/api/warroom/fastpay/sync',      fastpayRoutes.syncHandler);            // token auth, no JWT
 app.get('/api/warroom/fastpay/analytics', requireAuth, fastpayRoutes.analyticsHandler);
+app.get('/api/warroom/fastpay/outlets',   requireAuth, fastpayRoutes.outletsHandler);
 app.post('/api/warroom/farming/sync',     farmingRoutes.syncHandler);             // token auth, no JWT
 app.get('/api/warroom/farming/analytics', requireAuth, farmingRoutes.analyticsHandler);
+app.get('/api/warroom/farming/outlets',   requireAuth, farmingRoutes.outletsHandler);
 app.use('/api/warroom',        requireAuth, warroomRoutes);
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));

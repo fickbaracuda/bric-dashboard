@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import Layout from '../components/Layout';
 import Chart from 'chart.js/auto';
-import { getFastpayAnalytics } from '../services/api';
+import { getFastpayAnalytics, getFastpayOutlets } from '../services/api';
 
 /* ─── Constants ─── */
 const THEME = '#F59E0B';
@@ -489,107 +489,100 @@ function GrowthDeclineTab({ data }) {
   );
 }
 
-/* ─── TAB 2: Outlet Detail ─── */
-function OutletDetailTab({ data }) {
-  const allOutlets = data.all_outlets || [];
+/* ─── TAB 2: Outlet Detail (server-side paginated) ─── */
+function OutletDetailTab() {
+  const [rows, setRows]               = useState([]);
+  const [total, setTotal]             = useState(0);
+  const [page, setPage]               = useState(1);
+  const [loading, setLoading]         = useState(true);
   const [search, setSearch]           = useState('');
+  const [dSearch, setDSearch]         = useState('');
   const [filterStatus, setFilterStatus] = useState('all');
   const [sortBy, setSortBy]           = useState('trx_jun');
   const [sortDir, setSortDir]         = useState('desc');
-  const [page, setPage]               = useState(1);
   const PER_PAGE = 50;
 
-  const filtered = useMemo(() => {
-    let result = allOutlets;
-    if (search)               result = result.filter(o => o.id_outlet.toLowerCase().includes(search.toLowerCase()));
-    if (filterStatus !== 'all') result = result.filter(o => o.status === filterStatus);
-    const dir = sortDir === 'asc' ? 1 : -1;
-    result = [...result].sort((a, b) => dir * ((Number(a[sortBy]) || 0) - (Number(b[sortBy]) || 0)));
-    return result;
-  }, [allOutlets, search, filterStatus, sortBy, sortDir]);
+  useEffect(() => {
+    const t = setTimeout(() => { setDSearch(search); setPage(1); }, 400);
+    return () => clearTimeout(t);
+  }, [search]);
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PER_PAGE));
-  const displayed  = filtered.slice((page - 1) * PER_PAGE, page * PER_PAGE);
+  useEffect(() => {
+    setLoading(true);
+    getFastpayOutlets({ page, limit: PER_PAGE, search: dSearch, status: filterStatus, sortBy, sortDir })
+      .then(d => { setRows(d.rows || []); setTotal(d.total || 0); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [page, dSearch, filterStatus, sortBy, sortDir]);
 
+  const totalPages = Math.max(1, Math.ceil(total / PER_PAGE));
   const handleSort = col => {
     if (sortBy === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
     else { setSortBy(col); setSortDir('desc'); }
     setPage(1);
   };
-
-  const SortIcon = ({ col }) => {
-    if (sortBy !== col) return <i className="ti ti-arrows-sort" style={{ opacity: 0.3, fontSize: 11 }} />;
-    return <i className={`ti ti-sort-${sortDir === 'asc' ? 'ascending' : 'descending'}`} style={{ fontSize: 11, color: THEME }} />;
-  };
+  const SortIcon = ({ col }) => sortBy !== col
+    ? <i className="ti ti-arrows-sort" style={{ opacity:0.3, fontSize:11 }} />
+    : <i className={`ti ti-sort-${sortDir==='asc'?'ascending':'descending'}`} style={{ fontSize:11, color:THEME }} />;
 
   return (
     <div className="wrfp-chart-card">
-      {/* Filters */}
       <div className="wrfp-filter-bar">
         <div className="wrfp-search-wrap">
           <i className="ti ti-search" />
-          <input
-            className="wrfp-search"
-            placeholder="Cari ID Outlet…"
-            value={search}
-            onChange={e => { setSearch(e.target.value); setPage(1); }}
-          />
+          <input className="wrfp-search" placeholder="Cari ID Outlet…" value={search}
+            onChange={e => setSearch(e.target.value)} />
         </div>
-        <select
-          className="wrfp-select"
-          value={filterStatus}
-          onChange={e => { setFilterStatus(e.target.value); setPage(1); }}
-        >
+        <select className="wrfp-select" value={filterStatus}
+          onChange={e => { setFilterStatus(e.target.value); setPage(1); }}>
           <option value="all">Semua Status</option>
-          {Object.entries(STATUS_LABEL).map(([k, v]) => (
-            <option key={k} value={k}>{v}</option>
-          ))}
+          {Object.entries(STATUS_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
-        <span className="wrfp-filter-count">{fmtN(filtered.length)} outlet</span>
+        <span className="wrfp-filter-count">{fmtN(total)} outlet</span>
       </div>
 
-      {/* Table */}
-      <div className="wrfp-table-wrap">
-        <table className="wrfp-table">
-          <thead>
-            <tr>
+      {loading ? (
+        <div style={{ padding:'20px', textAlign:'center', color:'#9CA3AF' }}>
+          <i className="ti ti-loader-2 wrfp-spin" /> Memuat…
+        </div>
+      ) : (
+        <div className="wrfp-table-wrap">
+          <table className="wrfp-table">
+            <thead><tr>
               <th>ID Outlet</th>
-              <th className="wrfp-th-sort" onClick={() => handleSort('trx_mei')}>TRX Mei <SortIcon col="trx_mei" /></th>
-              <th className="wrfp-th-sort" onClick={() => handleSort('trx_jun')}>TRX Jun <SortIcon col="trx_jun" /></th>
-              <th className="wrfp-th-sort" onClick={() => handleSort('dev_trx')}>Dev TRX <SortIcon col="dev_trx" /></th>
-              <th className="wrfp-th-sort" onClick={() => handleSort('pct_trx_growth')}>Growth % <SortIcon col="pct_trx_growth" /></th>
-              <th className="wrfp-th-sort" onClick={() => handleSort('rev_jun')}>Rev Juni <SortIcon col="rev_jun" /></th>
-              <th className="wrfp-th-sort" onClick={() => handleSort('avg_rev_per_trx_jun')}>Avg Rev/TRX <SortIcon col="avg_rev_per_trx_jun" /></th>
+              <th className="wrfp-th-sort" onClick={() => handleSort('trx_mei')}>TRX Mei <SortIcon col="trx_mei"/></th>
+              <th className="wrfp-th-sort" onClick={() => handleSort('trx_jun')}>TRX Jun <SortIcon col="trx_jun"/></th>
+              <th className="wrfp-th-sort" onClick={() => handleSort('dev_trx')}>Dev TRX <SortIcon col="dev_trx"/></th>
+              <th className="wrfp-th-sort" onClick={() => handleSort('pct_trx_growth')}>Growth % <SortIcon col="pct_trx_growth"/></th>
+              <th className="wrfp-th-sort" onClick={() => handleSort('rev_jun')}>Rev Juni <SortIcon col="rev_jun"/></th>
+              <th className="wrfp-th-sort" onClick={() => handleSort('avg_rev_per_trx_jun')}>Avg Rev/TRX <SortIcon col="avg_rev_per_trx_jun"/></th>
               <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {displayed.map((o, i) => (
-              <tr key={i}>
-                <td style={{ fontWeight: 600, fontFamily: 'monospace', fontSize: 12 }}>{o.id_outlet}</td>
-                <td>{fmtN(o.trx_mei)}</td>
-                <td style={{ fontWeight: 600 }}>{fmtN(o.trx_jun)}</td>
-                <td><DevCell value={o.dev_trx} /></td>
-                <td><PctCell value={o.pct_trx_growth} /></td>
-                <td>{fmtRp(o.rev_jun)}</td>
-                <td>{o.trx_jun > 0 ? fmtRp(o.avg_rev_per_trx_jun) : '-'}</td>
-                <td><StatusBadge status={o.status} /></td>
-              </tr>
-            ))}
-            {displayed.length === 0 && (
-              <tr><td colSpan={8} style={{ textAlign:'center', padding:'20px', color:'#9CA3AF' }}>Tidak ada data</td></tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+            </tr></thead>
+            <tbody>
+              {rows.map((o, i) => (
+                <tr key={i}>
+                  <td style={{ fontWeight:600, fontFamily:'monospace', fontSize:12 }}>{o.id_outlet}</td>
+                  <td>{fmtN(o.trx_mei)}</td>
+                  <td style={{ fontWeight:600 }}>{fmtN(o.trx_jun)}</td>
+                  <td><DevCell value={o.dev_trx}/></td>
+                  <td><PctCell value={o.pct_trx_growth}/></td>
+                  <td>{fmtRp(o.rev_jun)}</td>
+                  <td>{o.trx_jun > 0 ? fmtRp(o.avg_rev_per_trx_jun) : '-'}</td>
+                  <td><StatusBadge status={o.status}/></td>
+                </tr>
+              ))}
+              {!rows.length && <tr><td colSpan={8} style={{ textAlign:'center', padding:'20px', color:'#9CA3AF' }}>Tidak ada data</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
 
-      {/* Pagination */}
       <div className="wrfp-pagination">
-        <button className="wrfp-page-btn" onClick={() => setPage(1)} disabled={page === 1}>«</button>
-        <button className="wrfp-page-btn" onClick={() => setPage(p => Math.max(1, p-1))} disabled={page === 1}>‹</button>
+        <button className="wrfp-page-btn" onClick={() => setPage(1)} disabled={page===1}>«</button>
+        <button className="wrfp-page-btn" onClick={() => setPage(p => Math.max(1,p-1))} disabled={page===1}>‹</button>
         <span className="wrfp-page-info">Hal {page} / {totalPages}</span>
-        <button className="wrfp-page-btn" onClick={() => setPage(p => Math.min(totalPages, p+1))} disabled={page === totalPages}>›</button>
-        <button className="wrfp-page-btn" onClick={() => setPage(totalPages)} disabled={page === totalPages}>»</button>
+        <button className="wrfp-page-btn" onClick={() => setPage(p => Math.min(totalPages,p+1))} disabled={page===totalPages}>›</button>
+        <button className="wrfp-page-btn" onClick={() => setPage(totalPages)} disabled={page===totalPages}>»</button>
       </div>
     </div>
   );
@@ -597,21 +590,19 @@ function OutletDetailTab({ data }) {
 
 /* ─── TAB 3: Revenue Analysis ─── */
 function RevenueAnalysisTab({ data }) {
-  const { all_outlets, prefix_breakdown, trx_distribution, anomali_free_trx } = data;
+  const { scatter_data, prefix_breakdown, trx_distribution, anomali_free_trx } = data;
 
-  // Build scatter groups by status (max 2000 points total)
   const scatterGroups = useMemo(() => {
     const statusOrder = ['rocket','growing','stable','declining','new','churned'];
     const grouped = {};
-    for (const o of (all_outlets || [])) {
-      if (Number(o.trx_jun) === 0) continue;
+    for (const o of (scatter_data || [])) {
       if (!grouped[o.status]) grouped[o.status] = [];
       grouped[o.status].push({ x: Number(o.trx_jun), y: Number(o.avg_rev_per_trx_jun) });
     }
     return statusOrder
       .filter(s => grouped[s]?.length > 0)
       .map(s => ({ status: s, points: grouped[s].slice(0, 500) }));
-  }, [all_outlets]);
+  }, [scatter_data]);
 
   const distId = `fp-dist-${data.meta.sync_date}`;
   const scatterId = `fp-scatter-${data.meta.sync_date}`;
@@ -905,7 +896,7 @@ export default function WarRoomFastpay() {
         <div className="wrfp-tab-content">
           {tab === 0 && <ExecutiveSummaryTab data={data} />}
           {tab === 1 && <GrowthDeclineTab    data={data} />}
-          {tab === 2 && <OutletDetailTab     data={data} />}
+          {tab === 2 && <OutletDetailTab />}
           {tab === 3 && <RevenueAnalysisTab  data={data} />}
           {tab === 4 && <ActionCenterTab     data={data} />}
         </div>
