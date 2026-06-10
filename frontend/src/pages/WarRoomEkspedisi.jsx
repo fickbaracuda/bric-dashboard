@@ -210,6 +210,121 @@ function CopyBtn({ text }) {
   );
 }
 
+/* ── Insight builder ── */
+function buildInsights(data) {
+  const { summary: s = {}, status_counts: sc = {}, anomali = [] } = data;
+  const growing      = sc.growing   || 0;
+  const declining    = sc.declining || 0;
+  const churned      = sc.churned   || 0;
+  const newOut       = sc.new       || 0;
+  const stable       = sc.stable    || 0;
+  const anomaliCount = anomali.length;
+  const growthTrx    = Number(s.pct_growth_trx || 0);
+  const growthRev    = Number(s.pct_growth_rev || 0);
+  const total        = s.total_aktif_jun || 0;
+  const hari         = s.hari_berjalan || '-';
+
+  const kondisi  = growthTrx >= 5 ? 'baik' : growthTrx >= 0 ? 'stabil' : 'perlu perhatian';
+  const tTrx     = growthTrx >= 0 ? `tumbuh ${growthTrx.toFixed(1)}%` : `turun ${Math.abs(growthTrx).toFixed(1)}%`;
+  const tRev     = growthRev >= 0 ? `tumbuh ${growthRev.toFixed(1)}%` : `turun ${Math.abs(growthRev).toFixed(1)}%`;
+  const dominant = growing > declining ? 'pertumbuhan outlet lebih banyak dari yang turun' : declining > growing ? 'lebih banyak outlet yang mengalami penurunan TRX' : 'TRX outlet terbilang seimbang';
+
+  const ringkasan =
+    `Pada hari ke-${hari} Juni, ${fmtNum(total)} outlet aktif dengan TRX ${tTrx} dan revenue ${tRev} dibanding Mei (bulan penuh). ` +
+    `Kondisi keseluruhan ${kondisi} — ${dominant}. ` +
+    `Dari total outlet: ${growing} growing, ${declining} declining, ${newOut} baru, ${churned} churned, ${stable} stable.` +
+    (anomaliCount > 0 ? ` Terdapat ${anomaliCount} outlet anomali (TRX naik namun revenue turun) yang perlu diinvestigasi.` : '');
+
+  const recs = [];
+
+  if (churned > 0)
+    recs.push({ level: 'high', icon: '🚨',
+      title: 'Recovery Call Outlet Hilang',
+      text: `${churned} outlet churned bulan ini. Hubungi segera sebelum akhir Juni agar bisa diaktifkan kembali dan tidak kehilangan revenue bulan depan.` });
+
+  if (declining > growing)
+    recs.push({ level: 'high', icon: '⚠️',
+      title: 'Intervensi Outlet Declining',
+      text: `Outlet declining (${declining}) melebihi growing (${growing}). Identifikasi pola penyebab (hari libur, kompetitor, kendala teknis) dan berikan pendampingan langsung kepada outlet dengan penurunan terbesar.` });
+
+  if (anomaliCount > 0)
+    recs.push({ level: 'medium', icon: '🔍',
+      title: 'Investigasi Anomali Margin',
+      text: `${anomaliCount} outlet menunjukkan TRX naik tapi revenue turun. Cek apakah ada pergeseran ke jenis transaksi bernilai rendah atau potongan fee yang meningkat.` });
+
+  if (newOut > 0)
+    recs.push({ level: 'medium', icon: '✨',
+      title: 'Onboarding Outlet Baru',
+      text: `${newOut} outlet baru aktif bulan ini. Lakukan onboarding terstruktur dan pendampingan rutin agar konsisten aktif di bulan-bulan berikutnya.` });
+
+  if (growing > 0 && growing >= declining)
+    recs.push({ level: 'low', icon: '📈',
+      title: 'Pertahankan Momentum Growth',
+      text: `${growing} outlet sedang tumbuh. Lakukan komunikasi rutin, berikan apresiasi, dan dorong peningkatan nilai transaksi agar pertumbuhan berlanjut.` });
+
+  if (stable > 0)
+    recs.push({ level: 'low', icon: '📌',
+      title: 'Aktivasi Outlet Stable',
+      text: `${stable} outlet stagnan (TRX tidak berubah). Dorong dengan program insentif atau edukasi produk baru agar masuk kategori growing.` });
+
+  if (growthTrx >= 10)
+    recs.push({ level: 'low', icon: '🎯',
+      title: 'Proyeksi Akhir Bulan Positif',
+      text: `TRX sudah tumbuh ${growthTrx.toFixed(1)}% di hari ke-${hari}. Jika tren berlanjut, proyeksi akhir bulan sangat optimistis — pertimbangkan target lebih tinggi untuk Juli.` });
+
+  return { ringkasan, recs: recs.slice(0, 5) };
+}
+
+const REC_LEVEL = {
+  high:   { label: 'Prioritas Tinggi', bg: '#FEF2F2', border: '#DC2626', color: '#DC2626' },
+  medium: { label: 'Prioritas Sedang', bg: '#FFFBEB', border: '#D97706', color: '#D97706' },
+  low:    { label: 'Prioritas Rendah', bg: '#F0FDF4', border: '#059669', color: '#059669' },
+};
+
+function ExecInsightCard({ data }) {
+  const { ringkasan, recs } = buildInsights(data);
+  return (
+    <div className="wre-insight-block">
+      {/* Ringkasan Eksekutif */}
+      <div className="wre-exec-summary-card">
+        <div className="wre-exec-summary-header">
+          <i className="ti ti-report-analytics" style={{ color: THEME }} />
+          <span>Ringkasan Eksekutif</span>
+        </div>
+        <p className="wre-exec-summary-text">{ringkasan}</p>
+      </div>
+
+      {/* Rekomendasi */}
+      <div className="wre-exec-recs-card">
+        <div className="wre-exec-summary-header">
+          <i className="ti ti-bulb" style={{ color: '#D97706' }} />
+          <span>Rekomendasi</span>
+        </div>
+        <div className="wre-recs-list">
+          {recs.map((r, i) => {
+            const lv = REC_LEVEL[r.level];
+            return (
+              <div key={i} className="wre-rec-item" style={{ borderLeftColor: lv.border, background: lv.bg }}>
+                <div className="wre-rec-top">
+                  <span className="wre-rec-icon">{r.icon}</span>
+                  <span className="wre-rec-title">{r.title}</span>
+                  <span className="wre-rec-level" style={{ color: lv.color, background: lv.color + '18' }}>{lv.label}</span>
+                </div>
+                <p className="wre-rec-text">{r.text}</p>
+              </div>
+            );
+          })}
+          {recs.length === 0 && (
+            <div className="wre-empty" style={{ padding: '16px' }}>
+              ✅ Tidak ada rekomendasi khusus — kondisi outlet dalam keadaan baik.
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ── Tab 1: Executive Summary ── */
 function ExecutiveSummaryTab({ data, tanggal }) {
   const { summary, status_counts, top10_trx_jun, monthly_trend } = data;
@@ -240,6 +355,9 @@ function ExecutiveSummaryTab({ data, tanggal }) {
         <KPICard title="Avg Rev / TRX" value={fmtRp(summary.avg_rev_per_trx)} icon="chart-bar" color="#7C3AED" />
         <KPICard title="Outlet Baru Jun" value={fmtNum(summary.total_new)} icon="sparkles" color="#2563EB" />
       </div>
+
+      {/* Ringkasan Eksekutif & Rekomendasi */}
+      <ExecInsightCard data={data} />
 
       <div className="wre-charts-row">
         {/* Trend Chart */}

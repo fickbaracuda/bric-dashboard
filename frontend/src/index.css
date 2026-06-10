@@ -2953,6 +2953,22 @@ body {
 .wre-action-title { font-size: 14px; font-weight: 700; }
 .wre-action-sub   { font-size: 12px; color: var(--text-3); margin-top: 2px; }
 
+/* Ringkasan Eksekutif & Rekomendasi */
+.wre-insight-block { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+.wre-exec-summary-card,
+.wre-exec-recs-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; }
+.wre-exec-summary-header { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; color: var(--text-1); margin-bottom: 12px; }
+.wre-exec-summary-header i { font-size: 16px; }
+.wre-exec-summary-text { font-size: 13.5px; color: var(--text-2); line-height: 1.7; margin: 0; }
+
+.wre-recs-list { display: flex; flex-direction: column; gap: 10px; }
+.wre-rec-item { border-left: 3px solid; border-radius: 8px; padding: 10px 14px; }
+.wre-rec-top { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+.wre-rec-icon { font-size: 16px; }
+.wre-rec-title { font-size: 13px; font-weight: 700; color: var(--text-1); flex: 1; }
+.wre-rec-level { font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 20px; white-space: nowrap; }
+.wre-rec-text { font-size: 12.5px; color: var(--text-2); line-height: 1.6; margin: 0; }
+
 /* Responsive */
 @media (max-width: 1100px) {
   .wre-kpi-grid { grid-template-columns: repeat(3, 1fr); }
@@ -2961,6 +2977,7 @@ body {
   .wre-kpi-grid    { grid-template-columns: repeat(2, 1fr); }
   .wre-charts-row  { grid-template-columns: 1fr; }
   .wre-insight-grid { grid-template-columns: repeat(2, 1fr); }
+  .wre-insight-block { grid-template-columns: 1fr; }
   .wre-tab-btn { padding: 8px 10px; font-size: 11px; }
   .wre-tab-content { padding: 14px 12px; }
   .wre-header { padding: 16px 12px 10px; }
