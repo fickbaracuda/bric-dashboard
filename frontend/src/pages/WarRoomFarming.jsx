@@ -40,10 +40,8 @@ function buildInsights(data) {
   const total = meta.total_outlets || 0;
   const growing = (sc.rocket||0) + (sc.growing||0);
   const pctGrowing = s.active_jun > 0 ? ((growing/s.active_jun)*100).toFixed(0) : 0;
-  const hari = meta.sync_date ? parseInt(String(meta.sync_date).substring(8,10)) : 0;
-
   const paragraph =
-    `Total ${fmtN(total)} outlet farming dipantau. Periode 1–${hari} Juni vs periode sama Mei: ` +
+    `Total ${fmtN(total)} outlet farming dipantau. Periode 1–9 Juni vs 1–9 Mei: ` +
     `TRX ${s.pct_dev_trx >= 0 ? 'naik' : 'turun'} ${Math.abs(s.pct_dev_trx).toFixed(1)}%, ` +
     `revenue ${s.pct_dev_rev >= 0 ? 'naik' : 'turun'} ${Math.abs(s.pct_dev_rev).toFixed(1)}%. ` +
     `${pctGrowing}% outlet aktif tumbuh positif. ` +
@@ -208,7 +206,7 @@ function ExecInsightCard({ insights }) {
 function ExecutiveSummaryTab({ data }) {
   const { summary: s, status_counts: sc, top15_trx_jun, top15_rev_jun, meta } = data;
   const hari = meta.sync_date ? parseInt(String(meta.sync_date).substring(8,10)) : '';
-  const periodeLabel = hari ? `1–${hari}` : '';
+  const periodeLabel = '1–9';
 
   const kpis = [
     { label: 'Total Outlet',            value: fmtN(meta.total_outlets) },
@@ -364,8 +362,7 @@ function OutletDetailTab({ data }) {
     ? <i className="ti ti-arrows-sort" style={{opacity:0.3,fontSize:11}}/>
     : <i className={`ti ti-sort-${sortDir==='asc'?'ascending':'descending'}`} style={{fontSize:11,color:THEME}}/>;
 
-  const hari = data.meta.sync_date ? parseInt(String(data.meta.sync_date).substring(8,10)) : '';
-  const p = hari ? `1–${hari}` : '';
+  const p = '1–9';
 
   return (
     <div className="wrfp-chart-card">
@@ -441,8 +438,7 @@ function RevenueAnalysisTab({ data }) {
   const distLabels = bucketOrder.filter(b=>distMap[b]!==undefined);
   const distValues = distLabels.map(b=>distMap[b]||0);
 
-  const hari = data.meta.sync_date ? parseInt(String(data.meta.sync_date).substring(8,10)) : '';
-  const p = hari ? `1–${hari}` : '';
+  const p = '1–9';
 
   return (
     <div>
