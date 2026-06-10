@@ -791,17 +791,28 @@ const TABS = [
 ];
 
 export default function WarRoomFastpay() {
-  const [tab, setTab]     = useState(0);
-  const [data, setData]   = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [tab, setTab]           = useState(0);
+  const [data, setData]         = useState(null);
+  const [loading, setLoading]   = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError]       = useState(null);
 
-  useEffect(() => {
-    setLoading(true);
-    getFastpayAnalytics()
-      .then(d => { setData(d); setLoading(false); })
-      .catch(e => { setError(e?.response?.data?.error || e.message); setLoading(false); });
-  }, []);
+  async function fetchData(isRefresh = false) {
+    if (isRefresh) setRefreshing(true);
+    else setLoading(true);
+    setError(null);
+    try {
+      const d = await getFastpayAnalytics();
+      setData(d);
+    } catch (e) {
+      setError(e?.response?.data?.error || e.message);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }
+
+  useEffect(() => { fetchData(); }, []);
 
   if (loading) {
     return (
@@ -837,6 +848,12 @@ export default function WarRoomFastpay() {
     );
   }
 
+  const syncDate = data.meta.sync_date; // "2026-06-08"
+  const tanggal  = syncDate
+    ? new Date(syncDate + 'T00:00:00').toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })
+    : '-';
+  const hari = syncDate ? parseInt(syncDate.split('-')[2]) : null;
+
   return (
     <Layout>
       <div className="wrfp-page">
@@ -846,10 +863,26 @@ export default function WarRoomFastpay() {
             <i className="ti ti-world" style={{ color: THEME, fontSize: 22 }} />
             <div>
               <div className="wrfp-header-title">WAR-ROOM FASTPAY GLOBAL</div>
-              <div className="wrfp-header-meta">
-                Update: {fmtDate(data.meta.sync_date)} &nbsp;·&nbsp; {fmtN(data.meta.total_outlets)} outlet
-              </div>
+              <div className="wrfp-header-meta">{fmtN(data.meta.total_outlets)} outlet terdaftar</div>
             </div>
+          </div>
+          <div className="wrfp-header-badges">
+            <span className="wrfp-badge wrfp-badge-owner">
+              <i className="ti ti-user" /> Ainul
+            </span>
+            <span className="wrfp-badge wrfp-badge-date">
+              <i className="ti ti-calendar" /> {tanggal}
+            </span>
+            {hari && (
+              <span className="wrfp-badge wrfp-badge-hari">Juni — Hari ke-{hari}</span>
+            )}
+            <button
+              className="wrfp-refresh-btn"
+              onClick={() => fetchData(true)}
+              title="Refresh data"
+            >
+              <i className={`ti ti-refresh${refreshing ? ' wrfp-spin' : ''}`} />
+            </button>
           </div>
         </div>
 
