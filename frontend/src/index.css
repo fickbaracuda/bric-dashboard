@@ -2845,6 +2845,18 @@ body {
    Warna tema: #8B5CF6 (ungu)
    ═══════════════════════════════════════════ */
 
+/* Sidebar group label (non-clickable section header dalam submenu) */
+.sidebar-group-label {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 10px; font-weight: 700; color: var(--text-4);
+  text-transform: uppercase; letter-spacing: 0.8px;
+  padding: 10px 12px 4px;
+}
+.sidebar-group-label i { font-size: 11px; }
+
+/* Child link di bawah group label — indent lebih dalam */
+.sidebar-link-group-child { padding-left: 22px; }
+
 /* Sidebar */
 .sidebar-link-war-eks { color: var(--text-2); }
 .sidebar-link-war-eks.sidebar-link--active { background: #F5F3FF !important; color: #4C1D95 !important; border-left: 2px solid #8B5CF6; }

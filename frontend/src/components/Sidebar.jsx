@@ -413,14 +413,18 @@ export default function Sidebar({ onClose }) {
                 </Accordion>
               </div>
 
-              {/* ── WAR-ROOM Ekspedisi — sub-menu Payment Agent ── */}
+              {/* ── War Room — grup label + sub-item ── */}
+              <div className="sidebar-group-label">
+                <i className="ti ti-sword" aria-hidden="true" />
+                War Room
+              </div>
               <NavLink to="/war-room/ekspedisi" onClick={onClose}
                 className={({ isActive }) =>
-                  'sidebar-link sidebar-link-sub sidebar-link-war-eks' +
+                  'sidebar-link sidebar-link-sub sidebar-link-war-eks sidebar-link-group-child' +
                   (isActive ? ' sidebar-link--active' : '')
                 }>
                 <i className="ti ti-truck-delivery" aria-hidden="true" />
-                <span>WAR-ROOM Ekspedisi</span>
+                <span>Ekspedisi</span>
               </NavLink>
 
             </div>

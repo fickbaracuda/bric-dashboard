@@ -356,9 +356,6 @@ function ExecutiveSummaryTab({ data, tanggal }) {
         <KPICard title="Outlet Baru Jun" value={fmtNum(summary.total_new)} icon="sparkles" color="#2563EB" />
       </div>
 
-      {/* Ringkasan Eksekutif & Rekomendasi */}
-      <ExecInsightCard data={data} />
-
       <div className="wre-charts-row">
         {/* Trend Chart */}
         <ChartCard title="Trend Bulanan — TRX &amp; Revenue" height={260}>
@@ -379,6 +376,9 @@ function ExecutiveSummaryTab({ data, tanggal }) {
           labels={(top10_trx_jun || []).map(r => r.id_outlet)}
           values={(top10_trx_jun || []).map(r => Number(r.trx_jun))} />
       </ChartCard>
+
+      {/* Ringkasan Eksekutif & Rekomendasi — di paling bawah */}
+      <ExecInsightCard data={data} />
     </div>
   );
 }
