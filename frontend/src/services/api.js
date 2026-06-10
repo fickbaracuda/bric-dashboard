@@ -210,6 +210,12 @@ export const getEkspedisiAnalytics = async (params = {}) => {
   return res.data;
 };
 
+/* WAR-ROOM — Fastpay Global */
+export const getFastpayAnalytics = async (params = {}) => {
+  const res = await axios.get(`${API_URL}/api/warroom/fastpay/analytics`, { params, headers: authHeaders() });
+  return res.data;
+};
+
 export const getDompetDigitalData = async (bulan) => {
   const res = await axios.get(`${API_URL}/api/dompetdigital`, {
     params: { bulan },
