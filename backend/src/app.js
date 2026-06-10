@@ -34,10 +34,11 @@ app.use(helmet({
 // Hide server fingerprint
 app.disable('x-powered-by');
 
-// Rate limit: semua API maksimal 100 req/menit per IP
+// Rate limit: semua API maksimal 300 req/menit per IP
+// (dinaikkan karena banyak user dari satu IP kantor + presence ping tiap 30s)
 app.use('/api/', rateLimit({
   windowMs: 60 * 1000,
-  max: 100,
+  max: 300,
   message: { error: 'Terlalu banyak request. Coba lagi sebentar.' },
   standardHeaders: true,
   legacyHeaders: false
