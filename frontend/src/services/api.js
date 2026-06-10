@@ -204,6 +204,12 @@ export const getSpeedcashAnalytics = async (params = {}) => {
   return res.data;
 };
 
+/* WAR-ROOM — Ekspedisi */
+export const getEkspedisiAnalytics = async (params = {}) => {
+  const res = await axios.get(`${API_URL}/api/warroom/ekspedisi/analytics`, { params, headers: authHeaders() });
+  return res.data;
+};
+
 export const getDompetDigitalData = async (bulan) => {
   const res = await axios.get(`${API_URL}/api/dompetdigital`, {
     params: { bulan },

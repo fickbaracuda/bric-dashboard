@@ -15,6 +15,7 @@ const presenceRoutes      = require('./routes/presence');
 const aiRoutes            = require('./routes/ai');
 const aiContextRoutes     = require('./routes/ai-context');
 const warroomRoutes       = require('./routes/warroom');
+const ekspedisiRoutes     = require('./routes/warroom-ekspedisi');
 const requireAuth         = require('./middleware/auth');
 
 const app  = express();
@@ -63,8 +64,10 @@ app.use('/api/members',        requireAuth, membersRoutes);
 app.use('/api/presence',       requireAuth, presenceRoutes);
 app.use('/api/ai',             requireAuth, aiRoutes);
 app.use('/api/ai-context',     requireAuth, aiContextRoutes);
-app.post('/api/warroom/segmen/sync',    warroomRoutes.syncHandler);          // token auth, no JWT
-app.post('/api/warroom/speedcash/sync', warroomRoutes.speedcashSyncHandler);  // token auth, no JWT
+app.post('/api/warroom/segmen/sync',      warroomRoutes.syncHandler);            // token auth, no JWT
+app.post('/api/warroom/speedcash/sync',  warroomRoutes.speedcashSyncHandler);   // token auth, no JWT
+app.post('/api/warroom/ekspedisi/sync',  ekspedisiRoutes.syncHandler);           // token auth, no JWT
+app.get('/api/warroom/ekspedisi/analytics', requireAuth, ekspedisiRoutes.analyticsHandler);
 app.use('/api/warroom',        requireAuth, warroomRoutes);
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));

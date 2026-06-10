@@ -158,10 +158,11 @@ export default function Sidebar({ onClose }) {
   const isDDPath       = location.pathname === '/dompet-digital';
   const isSCTimPath    = location.pathname === '/scoreboard-tim-sc' || isSCMember;
   const isWRSCPath     = location.pathname === '/war-room/speedcash';
+  const isWREkspPath   = location.pathname === '/war-room/ekspedisi';
 
   const [winmeOpen, setWinmeOpen] = useState(isWinmePath || isWinmeTimPath || isWRIQPath);
   const [timOpen,   setTimOpen]   = useState(isWinmeTimPath);
-  const [paOpen,    setPAOpen]    = useState(isPABasePath || isPATimPath);
+  const [paOpen,    setPAOpen]    = useState(isPABasePath || isPATimPath || isWREkspPath);
   const [paTimOpen, setPATimOpen] = useState(isPATimPath);
   const [ddOpen,    setDDOpen]    = useState(isDDPath || isSCTimPath || isWRSCPath);
   const [scTimOpen, setSCTimOpen] = useState(isSCTimPath);
@@ -169,7 +170,7 @@ export default function Sidebar({ onClose }) {
   useEffect(() => {
     if (isWinmePath || isWinmeTimPath || isWRIQPath) setWinmeOpen(true);
     if (isWinmeTimPath) setTimOpen(true);
-    if (isPABasePath || isPATimPath) setPAOpen(true);
+    if (isPABasePath || isPATimPath || isWREkspPath) setPAOpen(true);
     if (isPATimPath) setPATimOpen(true);
     if (isDDPath || isSCTimPath || isWRSCPath) setDDOpen(true);
     if (isSCTimPath) setSCTimOpen(true);
@@ -411,6 +412,16 @@ export default function Sidebar({ onClose }) {
                   </div>
                 </Accordion>
               </div>
+
+              {/* ── WAR-ROOM Ekspedisi — sub-menu Payment Agent ── */}
+              <NavLink to="/war-room/ekspedisi" onClick={onClose}
+                className={({ isActive }) =>
+                  'sidebar-link sidebar-link-sub sidebar-link-war-eks' +
+                  (isActive ? ' sidebar-link--active' : '')
+                }>
+                <i className="ti ti-truck-delivery" aria-hidden="true" />
+                <span>WAR-ROOM Ekspedisi</span>
+              </NavLink>
 
             </div>
           </Accordion>

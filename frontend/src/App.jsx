@@ -10,6 +10,7 @@ import ScoreboardTim from './pages/ScoreboardTim';
 import LeaderScoreboard from './pages/LeaderScoreboard';
 import WarRoom from './pages/WarRoom';
 import WarRoomSpeedcash from './pages/WarRoomSpeedcash';
+import WarRoomEkspedisi from './pages/WarRoomEkspedisi';
 import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './components/Layout';
 
@@ -42,7 +43,8 @@ export default function App() {
         <Route path="/scoreboard-tim-pa" element={<ProtectedRoute><ScoreboardTim unit="payment_agent" unitLabel="PAYMENT AGENT" unitColor="#639922" /></ProtectedRoute>} />
         <Route path="/scoreboard-tim-sc" element={<ProtectedRoute><ScoreboardTim unit="speedcash" unitLabel="SPEEDCASH" unitColor="#EF4444" /></ProtectedRoute>} />
         <Route path="/war-room/instaqris" element={<ProtectedRoute><WarRoom /></ProtectedRoute>} />
-        <Route path="/war-room/speedcash" element={<ProtectedRoute><WarRoomSpeedcash /></ProtectedRoute>} />
+        <Route path="/war-room/speedcash"   element={<ProtectedRoute><WarRoomSpeedcash /></ProtectedRoute>} />
+        <Route path="/war-room/ekspedisi" element={<ProtectedRoute><WarRoomEkspedisi /></ProtectedRoute>} />
         <Route path="/dashboard"  element={<ProtectedRoute><ComingSoon title="Dashboard Pencapaian" /></ProtectedRoute>} />
         <Route path="/tren"       element={<ProtectedRoute><ComingSoon title="Tren Harian" /></ProtectedRoute>} />
         <Route path="/per-unit"   element={<ProtectedRoute><ComingSoon title="Per Unit" /></ProtectedRoute>} />
