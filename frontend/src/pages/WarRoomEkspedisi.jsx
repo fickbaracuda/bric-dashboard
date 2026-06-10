@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import Chart from 'chart.js/auto';
+import Layout from '../components/Layout';
 import { getEkspedisiAnalytics } from '../services/api';
 
 /* ── Constants ── */
@@ -672,33 +673,40 @@ export default function WarRoomEkspedisi() {
 
   if (loading) {
     return (
-      <div className="wre-loading">
-        <i className="ti ti-loader-2 wre-spin" style={{ color: THEME }} />
-        <span>Memuat data ekspedisi…</span>
-      </div>
+      <Layout>
+        <div className="wre-loading">
+          <i className="ti ti-loader-2 wre-spin" style={{ color: THEME }} />
+          <span>Memuat data ekspedisi…</span>
+        </div>
+      </Layout>
     );
   }
 
   if (error) {
     return (
-      <div className="wre-error">
-        <i className="ti ti-alert-triangle" style={{ color: '#DC2626', fontSize: 32 }} />
-        <p>{error}</p>
-        <button className="wre-retry-btn" onClick={fetchData}>Coba Lagi</button>
-      </div>
+      <Layout>
+        <div className="wre-error">
+          <i className="ti ti-alert-triangle" style={{ color: '#DC2626', fontSize: 32 }} />
+          <p>{error}</p>
+          <button className="wre-retry-btn" onClick={fetchData}>Coba Lagi</button>
+        </div>
+      </Layout>
     );
   }
 
   if (!analytics?.tanggal) {
     return (
-      <div className="wre-empty-state">
-        <i className="ti ti-database-off" style={{ fontSize: 40, color: '#9CA3AF' }} />
-        <p>Belum ada data ekspedisi. Jalankan Apps Script untuk sync pertama.</p>
-      </div>
+      <Layout>
+        <div className="wre-empty-state">
+          <i className="ti ti-database-off" style={{ fontSize: 40, color: '#9CA3AF' }} />
+          <p>Belum ada data ekspedisi. Jalankan Apps Script untuk sync pertama.</p>
+        </div>
+      </Layout>
     );
   }
 
   return (
+    <Layout>
     <div className="wre-page">
       {/* Header */}
       <div className="wre-header">
@@ -740,5 +748,6 @@ export default function WarRoomEkspedisi() {
         {activeTab === 'action'       && <ActionCenterTab      data={analytics} tanggal={analytics.tanggal} />}
       </div>
     </div>
+    </Layout>
   );
 }
