@@ -848,11 +848,12 @@ export default function WarRoomFastpay() {
     );
   }
 
-  const syncDate = data.meta.sync_date; // "2026-06-08"
-  const tanggal  = syncDate
-    ? new Date(syncDate + 'T00:00:00').toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })
+  // Ambil YYYY-MM-DD dari apapun format yang dikirim Postgres
+  const isoDate  = data.meta.sync_date ? String(data.meta.sync_date).substring(0, 10) : null;
+  const tanggal  = isoDate
+    ? new Date(isoDate + 'T12:00:00').toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })
     : '-';
-  const hari = syncDate ? parseInt(syncDate.split('-')[2]) : null;
+  const hari = isoDate ? parseInt(isoDate.split('-')[2]) : null;
 
   return (
     <Layout>
