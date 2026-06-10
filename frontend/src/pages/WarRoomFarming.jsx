@@ -40,8 +40,11 @@ function buildInsights(data) {
   const total = meta.total_outlets || 0;
   const growing = (sc.rocket||0) + (sc.growing||0);
   const pctGrowing = s.active_jun > 0 ? ((growing/s.active_jun)*100).toFixed(0) : 0;
+  const isoD = meta.sync_date ? String(meta.sync_date).substring(0, 10) : null;
+  const hariD = isoD ? parseInt(isoD.split('-')[2]) : 9;
+  const periodeD = `1–${hariD}`;
   const paragraph =
-    `Total ${fmtN(total)} outlet farming dipantau. Periode 1–9 Juni vs 1–9 Mei: ` +
+    `Total ${fmtN(total)} outlet farming dipantau. Periode ${periodeD} Juni vs ${periodeD} Mei: ` +
     `TRX ${s.pct_dev_trx >= 0 ? 'naik' : 'turun'} ${Math.abs(s.pct_dev_trx).toFixed(1)}%, ` +
     `revenue ${s.pct_dev_rev >= 0 ? 'naik' : 'turun'} ${Math.abs(s.pct_dev_rev).toFixed(1)}%. ` +
     `${pctGrowing}% outlet aktif tumbuh positif. ` +
@@ -205,8 +208,8 @@ function ExecInsightCard({ insights }) {
 /* ─── TAB 0: Executive Summary ─── */
 function ExecutiveSummaryTab({ data }) {
   const { summary: s, status_counts: sc, top15_trx_jun, top15_rev_jun, meta } = data;
-  const hari = meta.sync_date ? parseInt(String(meta.sync_date).substring(8,10)) : '';
-  const periodeLabel = '1–9';
+  const hari = meta.sync_date ? parseInt(String(meta.sync_date).substring(8,10)) : null;
+  const periodeLabel = hari ? `1–${hari}` : '1–9';
 
   const kpis = [
     { label: 'Total Outlet',            value: fmtN(meta.total_outlets) },
@@ -362,7 +365,9 @@ function OutletDetailTab({ data }) {
     ? <i className="ti ti-arrows-sort" style={{opacity:0.3,fontSize:11}}/>
     : <i className={`ti ti-sort-${sortDir==='asc'?'ascending':'descending'}`} style={{fontSize:11,color:THEME}}/>;
 
-  const p = '1–9';
+  const isoDate2 = data.meta.sync_date ? String(data.meta.sync_date).substring(0, 10) : null;
+  const hari2 = isoDate2 ? parseInt(isoDate2.split('-')[2]) : null;
+  const p = hari2 ? `1–${hari2}` : '1–9';
 
   return (
     <div className="wrfp-chart-card">
@@ -438,7 +443,9 @@ function RevenueAnalysisTab({ data }) {
   const distLabels = bucketOrder.filter(b=>distMap[b]!==undefined);
   const distValues = distLabels.map(b=>distMap[b]||0);
 
-  const p = '1–9';
+  const isoDate3 = data.meta.sync_date ? String(data.meta.sync_date).substring(0, 10) : null;
+  const hari3 = isoDate3 ? parseInt(isoDate3.split('-')[2]) : null;
+  const p = hari3 ? `1–${hari3}` : '1–9';
 
   return (
     <div>
