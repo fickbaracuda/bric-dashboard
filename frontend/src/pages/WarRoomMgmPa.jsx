@@ -616,7 +616,7 @@ export default function WarRoomMgmPa() {
                 type="text"
                 value={searchQ}
                 onChange={e => onSearchChange(e.target.value)}
-                placeholder="Ketik ID Outlet (min. 2 karakter)…"
+                placeholder="Ketik ID Outlet atau ID Upline (min. 2 karakter)…"
                 autoFocus
                 style={{
                   flex: 1, border: 'none', outline: 'none', fontSize: 14,
@@ -758,8 +758,8 @@ export default function WarRoomMgmPa() {
               <div style={{ textAlign: 'center', padding: 56, color: 'var(--text-4)' }}>
                 <i className="ti ti-search" style={{ fontSize: 38, display: 'block', marginBottom: 14, opacity: 0.35 }} />
                 <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>Cari ID Outlet</div>
-                <div style={{ fontSize: 12 }}>Ketik sebagian atau seluruh ID outlet di kolom di atas</div>
-                <div style={{ fontSize: 12, marginTop: 4 }}>Hasil mencakup data dari semua bulan</div>
+                <div style={{ fontSize: 12 }}>Ketik ID outlet atau ID upline untuk mencari rekrutannya</div>
+                <div style={{ fontSize: 12, marginTop: 4 }}>Hasil mencakup data dari semua bulan yang tersedia</div>
               </div>
             )}
           </div>

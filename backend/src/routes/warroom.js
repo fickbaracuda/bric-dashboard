@@ -1009,16 +1009,16 @@ router.get('/mgm/search', async (req, res) => {
         SELECT bulan, upline, id_outlet, nama_pemilik, tipe_outlet,
                nama_kota, nama_propinsi, tanggal_aktifasi, trx, rev, is_active
         FROM mgm_aktivasi
-        WHERE UPPER(id_outlet) LIKE $1 ${bulanCond}
-        ORDER BY bulan DESC, trx DESC
+        WHERE (UPPER(id_outlet) LIKE $1 OR UPPER(upline) LIKE $1) ${bulanCond}
+        ORDER BY CASE WHEN UPPER(id_outlet) LIKE $1 THEN 0 ELSE 1 END, bulan DESC, trx DESC
         LIMIT 200
       `, [pattern]),
       pool.query(`
         SELECT bulan, upline, id_outlet, nama_pemilik, tipe_outlet,
                nama_kota, nama_propinsi, tanggal_registrasi, tanggal_aktifasi, is_active
         FROM mgm_registrasi
-        WHERE UPPER(id_outlet) LIKE $1 ${bulanCond}
-        ORDER BY bulan DESC, tanggal_registrasi DESC
+        WHERE (UPPER(id_outlet) LIKE $1 OR UPPER(upline) LIKE $1) ${bulanCond}
+        ORDER BY CASE WHEN UPPER(id_outlet) LIKE $1 THEN 0 ELSE 1 END, bulan DESC, tanggal_registrasi DESC
         LIMIT 200
       `, [pattern])
     ]);
