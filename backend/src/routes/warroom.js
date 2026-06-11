@@ -593,6 +593,43 @@ router.get('/pa-produk/analytics', async (req, res) => {
   }
 });
 
+router.get('/pa-produk/trendline', async (req, res) => {
+  try {
+    const days = Math.min(Math.max(parseInt(req.query.days) || 30, 3), 90);
+    const result = await pool.query(
+      `SELECT tanggal, produk, mat_jun, trx_jun, rev_jun
+       FROM pa_produk_snapshot
+       WHERE tanggal >= CURRENT_DATE - ($1 * interval '1 day')
+       ORDER BY tanggal ASC, rev_jun DESC`,
+      [days]
+    );
+
+    const byProduk = {};
+    for (const row of result.rows) {
+      const p = row.produk;
+      if (!byProduk[p]) byProduk[p] = [];
+      byProduk[p].push({
+        tanggal: String(row.tanggal).substring(0, 10),
+        mat_jun: Number(row.mat_jun) || 0,
+        trx_jun: Number(row.trx_jun) || 0,
+        rev_jun: Number(row.rev_jun) || 0,
+      });
+    }
+
+    const dates    = [...new Set(result.rows.map(r => String(r.tanggal).substring(0, 10)))].sort();
+    const products = Object.keys(byProduk).sort((a, b) => {
+      const lastA = byProduk[a][byProduk[a].length - 1]?.rev_jun || 0;
+      const lastB = byProduk[b][byProduk[b].length - 1]?.rev_jun || 0;
+      return lastB - lastA;
+    });
+
+    res.json({ dates, byProduk, products, days });
+  } catch (e) {
+    console.error('pa-produk trendline error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 module.exports = router;
 module.exports.syncHandler          = syncHandler;
 module.exports.speedcashSyncHandler = speedcashSyncHandler;

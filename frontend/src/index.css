@@ -3332,3 +3332,52 @@ body {
   .wrpa-tab { padding: 8px 10px; font-size: 11px; }
   .wrpa-page { padding: 16px; }
 }
+
+/* ── InsightBox (wrpa-insight-*) ── */
+.wrpa-insight-box { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-top: 16px; }
+.wrpa-insight-header { font-size: 13px; font-weight: 700; color: var(--text-1); margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+.wrpa-insight-count { margin-left: auto; background: #F3F4F6; color: #6B7280; font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 500; }
+.wrpa-insight-item { display: flex; align-items: flex-start; gap: 12px; padding: 10px 12px; border-radius: 6px; margin-bottom: 8px; border-left: 3px solid; }
+.wrpa-insight-item:last-child { margin-bottom: 0; }
+.wrpa-insight--positive { background: #F0FDF4; border-left-color: #639922; }
+.wrpa-insight--negative { background: #FFF1F0; border-left-color: #E24B4A; }
+.wrpa-insight--warning  { background: #FFFBEB; border-left-color: #F59E0B; }
+.wrpa-insight--info     { background: #EFF6FF; border-left-color: #2563EB; }
+.wrpa-insight-icon { font-size: 18px; flex-shrink: 0; margin-top: 1px; }
+.wrpa-insight-body { flex: 1; min-width: 0; }
+.wrpa-insight-title { font-size: 12px; font-weight: 600; color: var(--text-1); margin-bottom: 3px; line-height: 1.4; }
+.wrpa-insight-desc { font-size: 11px; color: var(--text-3); line-height: 1.5; margin-bottom: 4px; }
+.wrpa-insight-action { font-size: 11px; color: var(--text-2); font-style: italic; line-height: 1.4; }
+.wrpa-insight-impact { font-size: 12px; font-weight: 700; white-space: nowrap; padding: 4px 8px; border-radius: 6px; flex-shrink: 0; align-self: flex-start; }
+.wrpa-insight-impact--pos { color: #639922; background: #DCFCE7; }
+.wrpa-insight-impact--neg { color: #E24B4A; background: #FEE2E2; }
+
+/* ── Action Center strategic (wrpa-action-*) ── */
+.wrpa-action-risk-bar { display: flex; align-items: center; gap: 12px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; margin-bottom: 16px; flex-wrap: wrap; }
+.wrpa-action-risk-item { display: flex; flex-direction: column; align-items: center; padding: 8px 16px; border-radius: 8px; min-width: 68px; }
+.wrpa-action-risk--red   { background: #FFF1F0; color: #E24B4A; }
+.wrpa-action-risk--amber { background: #FFFBEB; color: #D97706; }
+.wrpa-action-risk--green { background: #F0FDF4; color: #639922; }
+.wrpa-action-risk--blue  { background: #EFF6FF; color: #2563EB; }
+.wrpa-action-risk-val  { font-size: 26px; font-weight: 800; line-height: 1; }
+.wrpa-action-risk-lbl  { font-size: 10px; font-weight: 600; margin-top: 2px; }
+.wrpa-action-risk-summary { flex: 1; font-size: 12px; color: var(--text-2); border-left: 1px solid var(--border); padding-left: 14px; line-height: 1.8; }
+.wrpa-urgency-badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 700; margin-left: 8px; }
+.wrpa-urgency--red   { background: #FEE2E2; color: #DC2626; }
+.wrpa-urgency--amber { background: #FEF3C7; color: #D97706; }
+.wrpa-action-block { border-radius: 6px; padding: 10px 12px; margin-bottom: 8px; }
+.wrpa-action-block:last-child { margin-bottom: 0; }
+.wrpa-action-block--red   { background: #FFF1F0; }
+.wrpa-action-block--amber { background: #FFFBEB; }
+.wrpa-action-block--green { background: #F0FDF4; }
+.wrpa-action-block--blue  { background: #EFF6FF; }
+.wrpa-action-block-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; gap: 8px; flex-wrap: wrap; }
+.wrpa-action-steps { margin: 6px 0 4px; display: flex; flex-direction: column; gap: 4px; }
+.wrpa-action-step { display: flex; align-items: flex-start; gap: 8px; font-size: 11px; color: var(--text-2); line-height: 1.4; }
+.wrpa-action-step > span { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; border-radius: 50%; background: #94A3B8; color: #fff; font-size: 10px; font-weight: 700; flex-shrink: 0; margin-top: 1px; }
+.wrpa-action-outcome { font-size: 11px; color: var(--text-2); padding: 6px 10px; background: rgba(0,0,0,.04); border-radius: 4px; margin-top: 6px; }
+
+/* ── Trendline filter buttons ── */
+.wrpa-filter-btn { padding: 4px 12px; border: 1px solid var(--border); border-radius: 20px; background: var(--bg-card); cursor: pointer; font-size: 11px; color: var(--text-3); font-family: inherit; transition: all .15s; }
+.wrpa-filter-btn:hover { border-color: #639922; color: #639922; }
+.wrpa-filter-btn--active { background: #639922; color: #fff; border-color: #639922; font-weight: 600; }
