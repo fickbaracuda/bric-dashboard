@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import Layout from '../components/Layout';
-import { getMgmAnalytics } from '../services/api';
+import { getMgmAnalytics, searchMgmOutlet } from '../services/api';
 import Chart from 'chart.js/auto';
 
 const COLOR_AKTIV    = '#10B981';
@@ -151,6 +151,13 @@ export default function WarRoomMgmPa() {
   const [tab, setTab]           = useState('overview');
   const [tableTab, setTableTab] = useState('aktivasi');
 
+  // Search state
+  const [searchQ, setSearchQ]         = useState('');
+  const [searchRes, setSearchRes]     = useState(null);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchErr, setSearchErr]     = useState(null);
+  const searchTimer                   = useRef(null);
+
   useEffect(() => { fetchData(bulan); }, [bulan]);
 
   async function fetchData(b) {
@@ -164,6 +171,25 @@ export default function WarRoomMgmPa() {
     } finally {
       setLoading(false);
     }
+  }
+
+  const doSearch = useCallback(async (q, b) => {
+    if (!q || q.trim().length < 2) { setSearchRes(null); return; }
+    setSearchLoading(true); setSearchErr(null);
+    try {
+      const res = await searchMgmOutlet(q.trim(), b);
+      setSearchRes(res);
+    } catch (e) {
+      setSearchErr(e.response?.data?.error || e.message);
+    } finally {
+      setSearchLoading(false);
+    }
+  }, []);
+
+  function onSearchChange(val) {
+    setSearchQ(val);
+    clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(() => doSearch(val, bulan), 500);
   }
 
   const GSHEET = {
@@ -209,6 +235,7 @@ export default function WarRoomMgmPa() {
     { id: 'upline',   label: 'Top Upline',      icon: 'ti-trophy' },
     { id: 'wilayah',  label: 'Sebaran Wilayah', icon: 'ti-map-pin' },
     { id: 'tabel',    label: 'Data Tabel',      icon: 'ti-table' },
+    { id: 'cari',     label: 'Cari Outlet',     icon: 'ti-search' },
   ];
 
   return (
@@ -574,6 +601,165 @@ export default function WarRoomMgmPa() {
                 <div style={{ textAlign: 'right', fontSize: 11, color: 'var(--text-4)', marginTop: 8 }}>
                   Menampilkan 50 terbaru
                 </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ══ TAB: CARI OUTLET ══ */}
+        {tab === 'cari' && (
+          <div className="wrd-tab-content">
+            {/* Search Box */}
+            <div className="wrd-chart-card" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px' }}>
+              <i className="ti ti-search" style={{ color: 'var(--text-4)', fontSize: 18, flexShrink: 0 }} />
+              <input
+                type="text"
+                value={searchQ}
+                onChange={e => onSearchChange(e.target.value)}
+                placeholder="Ketik ID Outlet (min. 2 karakter)…"
+                autoFocus
+                style={{
+                  flex: 1, border: 'none', outline: 'none', fontSize: 14,
+                  background: 'transparent', color: 'var(--text-1)'
+                }}
+              />
+              {searchQ && (
+                <button onClick={() => { setSearchQ(''); setSearchRes(null); setSearchErr(null); }}
+                  style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--text-4)', fontSize: 20, lineHeight: 1, padding: 0 }}>
+                  ×
+                </button>
+              )}
+              {searchLoading && <i className="ti ti-loader-2" style={{ ...SPIN, color: COLOR_AKTIV, flexShrink: 0 }} />}
+            </div>
+
+            {searchErr && (
+              <div style={{ color: '#DC2626', fontSize: 13, padding: '8px 4px', marginTop: 8 }}>
+                <i className="ti ti-alert-circle" style={{ marginRight: 6 }} />{searchErr}
+              </div>
+            )}
+
+            {searchRes && !searchLoading && (
+              <>
+                <div style={{ fontSize: 12, color: 'var(--text-4)', margin: '8px 4px 12px' }}>
+                  Hasil untuk{' '}
+                  <strong style={{ color: 'var(--text-2)' }}>"{searchRes.q}"</strong>
+                  {searchRes.bulan && <> · {fmtBulan(searchRes.bulan)}</>}
+                  {' '}— {searchRes.aktivasi.length} aktivasi, {searchRes.registrasi.length} registrasi
+                </div>
+
+                {searchRes.aktivasi.length === 0 && searchRes.registrasi.length === 0 && (
+                  <div style={{ textAlign: 'center', padding: 48, color: 'var(--text-4)' }}>
+                    <i className="ti ti-mood-empty" style={{ fontSize: 32, display: 'block', marginBottom: 10 }} />
+                    Tidak ada outlet ditemukan untuk &ldquo;{searchRes.q}&rdquo;
+                  </div>
+                )}
+
+                {/* ── Tabel AKTIVASI ── */}
+                {searchRes.aktivasi.length > 0 && (
+                  <ChartCard title={`Aktivasi — ${searchRes.aktivasi.length} outlet`}>
+                    <div className="wr-table-wrap">
+                      <table className="wr-table">
+                        <thead>
+                          <tr>
+                            <th>Bulan</th><th>ID Outlet</th><th>Nama</th><th>Tipe</th>
+                            <th>Upline</th><th>Kota</th><th>Provinsi</th>
+                            <th>Tgl Aktif</th>
+                            <th style={{ textAlign: 'right' }}>TRX</th>
+                            <th style={{ textAlign: 'right' }}>Revenue</th>
+                            <th>Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {searchRes.aktivasi.map((r, i) => (
+                            <tr key={i}>
+                              <td>
+                                <span className="wrd-badge" style={{ background: COLOR_AKTIV + '18', color: COLOR_AKTIV, fontWeight: 700 }}>
+                                  {fmtBulan(r.bulan)}
+                                </span>
+                              </td>
+                              <td><code style={{ fontSize: 11, color: COLOR_AKTIV, fontWeight: 700 }}>{r.id_outlet}</code></td>
+                              <td style={{ maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.nama_pemilik || '-'}</td>
+                              <td>
+                                <span className="wrd-badge" style={{
+                                  background: (TIPE_COLORS[r.tipe_outlet] || '#9CA3AF') + '20',
+                                  color: TIPE_COLORS[r.tipe_outlet] || '#9CA3AF', fontSize: 10
+                                }}>{r.tipe_outlet || '-'}</span>
+                              </td>
+                              <td><code style={{ fontSize: 11 }}>{r.upline || '-'}</code></td>
+                              <td style={{ fontSize: 12 }}>{r.nama_kota || '-'}</td>
+                              <td style={{ fontSize: 12 }}>{r.nama_propinsi || '-'}</td>
+                              <td style={{ fontSize: 12 }}>{r.tanggal_aktifasi ? String(r.tanggal_aktifasi).substring(0, 10) : '-'}</td>
+                              <td style={{ textAlign: 'right', fontWeight: 600 }}>{fmt(r.trx)}</td>
+                              <td style={{ textAlign: 'right' }}>{fmtRp(r.rev)}</td>
+                              <td>
+                                <span className="wrd-badge" style={{
+                                  background: r.is_active ? COLOR_AKTIV + '20' : '#9CA3AF20',
+                                  color: r.is_active ? COLOR_AKTIV : '#9CA3AF', fontSize: 10
+                                }}>{r.is_active ? 'Aktif' : 'Tidak'}</span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </ChartCard>
+                )}
+
+                {/* ── Tabel REGISTRASI ── */}
+                {searchRes.registrasi.length > 0 && (
+                  <ChartCard title={`Registrasi — ${searchRes.registrasi.length} outlet`}>
+                    <div className="wr-table-wrap">
+                      <table className="wr-table">
+                        <thead>
+                          <tr>
+                            <th>Bulan</th><th>ID Outlet</th><th>Nama</th><th>Tipe</th>
+                            <th>Upline</th><th>Kota</th><th>Provinsi</th>
+                            <th>Tgl Reg</th><th>Tgl Aktif</th><th>Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {searchRes.registrasi.map((r, i) => (
+                            <tr key={i}>
+                              <td>
+                                <span className="wrd-badge" style={{ background: COLOR_REG + '18', color: COLOR_REG, fontWeight: 700 }}>
+                                  {fmtBulan(r.bulan)}
+                                </span>
+                              </td>
+                              <td><code style={{ fontSize: 11, color: COLOR_REG, fontWeight: 700 }}>{r.id_outlet}</code></td>
+                              <td style={{ maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.nama_pemilik || '-'}</td>
+                              <td>
+                                <span className="wrd-badge" style={{
+                                  background: (TIPE_COLORS[r.tipe_outlet] || '#9CA3AF') + '20',
+                                  color: TIPE_COLORS[r.tipe_outlet] || '#9CA3AF', fontSize: 10
+                                }}>{r.tipe_outlet || '-'}</span>
+                              </td>
+                              <td><code style={{ fontSize: 11 }}>{r.upline || '-'}</code></td>
+                              <td style={{ fontSize: 12 }}>{r.nama_kota || '-'}</td>
+                              <td style={{ fontSize: 12 }}>{r.nama_propinsi || '-'}</td>
+                              <td style={{ fontSize: 12 }}>{r.tanggal_registrasi ? String(r.tanggal_registrasi).substring(0, 10) : '-'}</td>
+                              <td style={{ fontSize: 12 }}>{r.tanggal_aktifasi  ? String(r.tanggal_aktifasi).substring(0, 10)  : '-'}</td>
+                              <td>
+                                <span className="wrd-badge" style={{
+                                  background: r.tanggal_aktifasi ? COLOR_AKTIV + '20' : COLOR_KONVERSI + '20',
+                                  color: r.tanggal_aktifasi ? COLOR_AKTIV : COLOR_KONVERSI, fontSize: 10
+                                }}>{r.tanggal_aktifasi ? 'Sudah Aktif' : 'Belum Aktif'}</span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </ChartCard>
+                )}
+              </>
+            )}
+
+            {!searchRes && !searchLoading && !searchErr && (
+              <div style={{ textAlign: 'center', padding: 56, color: 'var(--text-4)' }}>
+                <i className="ti ti-search" style={{ fontSize: 38, display: 'block', marginBottom: 14, opacity: 0.35 }} />
+                <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>Cari ID Outlet</div>
+                <div style={{ fontSize: 12 }}>Ketik sebagian atau seluruh ID outlet di kolom di atas</div>
+                <div style={{ fontSize: 12, marginTop: 4 }}>Hasil mencakup data dari semua bulan</div>
               </div>
             )}
           </div>

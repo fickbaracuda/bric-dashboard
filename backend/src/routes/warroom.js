@@ -995,6 +995,41 @@ async function mgmAnalyticsHandler(req, res) {
   }
 }
 
+// ─── MGM PA SEARCH ──────────────────────────────────────────────
+router.get('/mgm/search', async (req, res) => {
+  const { q = '', bulan } = req.query;
+  if (!q || q.trim().length < 2) return res.status(400).json({ error: 'Minimal 2 karakter' });
+
+  try {
+    const pattern = `%${q.trim().toUpperCase()}%`;
+    const bulanCond = bulan ? `AND bulan = '${bulan.replace(/[^0-9-]/g, '')}'` : '';
+
+    const [aktRes, regRes] = await Promise.all([
+      pool.query(`
+        SELECT bulan, upline, id_outlet, nama_pemilik, tipe_outlet,
+               nama_kota, nama_propinsi, tanggal_aktifasi, trx, rev, is_active
+        FROM mgm_aktivasi
+        WHERE UPPER(id_outlet) LIKE $1 ${bulanCond}
+        ORDER BY bulan DESC, trx DESC
+        LIMIT 200
+      `, [pattern]),
+      pool.query(`
+        SELECT bulan, upline, id_outlet, nama_pemilik, tipe_outlet,
+               nama_kota, nama_propinsi, tanggal_registrasi, tanggal_aktifasi, is_active
+        FROM mgm_registrasi
+        WHERE UPPER(id_outlet) LIKE $1 ${bulanCond}
+        ORDER BY bulan DESC, tanggal_registrasi DESC
+        LIMIT 200
+      `, [pattern])
+    ]);
+
+    res.json({ q, bulan: bulan || null, aktivasi: aktRes.rows, registrasi: regRes.rows });
+  } catch (e) {
+    console.error('mgm search error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 module.exports = router;
 module.exports.syncHandler          = syncHandler;
 module.exports.speedcashSyncHandler = speedcashSyncHandler;
