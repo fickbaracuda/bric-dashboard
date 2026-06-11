@@ -493,7 +493,7 @@ router.get('/speedcash/analytics', async (req, res) => {
 ══════════════════════════════════════════════ */
 
 async function paProdukSyncHandler(req, res) {
-  const { token, tanggal, periode_start, periode_end, rows } = req.body;
+  const { token, tanggal, periode_start, periode_end, rows, mat_totals } = req.body;
   if (token !== SECRET_TOKEN) return res.status(401).json({ error: 'Unauthorized' });
   if (!tanggal || !rows || !Array.isArray(rows)) return res.status(400).json({ error: 'tanggal + rows required' });
 
@@ -525,8 +525,20 @@ async function paProdukSyncHandler(req, res) {
       ]);
       count++;
     }
+
+    // Simpan MAT resmi dari baris TOTAL sheet (row 24)
+    if (mat_totals && (mat_totals.mat_jun || mat_totals.mat_mei || mat_totals.mat_apr)) {
+      await client.query(`
+        INSERT INTO pa_produk_totals (tanggal, mat_apr, mat_mei, mat_jun, synced_at)
+        VALUES ($1, $2, $3, $4, NOW())
+        ON CONFLICT (tanggal) DO UPDATE SET
+          mat_apr=EXCLUDED.mat_apr, mat_mei=EXCLUDED.mat_mei,
+          mat_jun=EXCLUDED.mat_jun, synced_at=NOW()
+      `, [tanggal, mat_totals.mat_apr || 0, mat_totals.mat_mei || 0, mat_totals.mat_jun || 0]);
+    }
+
     await client.query('COMMIT');
-    res.json({ success: true, rows: count, tanggal });
+    res.json({ success: true, rows: count, tanggal, mat_totals: mat_totals || null });
   } catch (e) {
     await client.query('ROLLBACK');
     console.error('pa-produk sync error:', e.message);
@@ -546,7 +558,7 @@ router.get('/pa-produk/analytics', async (req, res) => {
     const tanggal = latestRes.rows[0]?.t;
     if (!tanggal) return res.json({ meta: null, total: {}, data: [] });
 
-    const [metaRes, totalRes, dataRes] = await Promise.all([
+    const [metaRes, totalRes, dataRes, totalsRes] = await Promise.all([
       pool.query(
         'SELECT tanggal, periode_start, periode_end FROM pa_produk_snapshot WHERE tanggal=$1 LIMIT 1',
         [tanggal]
@@ -579,12 +591,23 @@ router.get('/pa-produk/analytics', async (req, res) => {
         WHERE tanggal=$1
         ORDER BY rev_jun DESC
       `, [tanggal]),
+      pool.query(
+        'SELECT mat_apr, mat_mei, mat_jun FROM pa_produk_totals WHERE tanggal=$1',
+        [tanggal]
+      ).catch(() => ({ rows: [] })), // graceful if table doesn't exist yet
     ]);
 
     const meta  = metaRes.rows[0] || { tanggal, periode_start: tanggal, periode_end: tanggal };
     const total = totalRes.rows[0] || {};
-    // cast bigint strings to numbers
     for (const k of Object.keys(total)) total[k] = Number(total[k]) || 0;
+
+    // Override MAT dengan nilai resmi dari baris TOTAL sheet (row 24)
+    const officialTotals = totalsRes.rows[0];
+    if (officialTotals) {
+      if (officialTotals.mat_apr > 0) total.mat_apr = Number(officialTotals.mat_apr);
+      if (officialTotals.mat_mei > 0) total.mat_mei = Number(officialTotals.mat_mei);
+      if (officialTotals.mat_jun > 0) total.mat_jun = Number(officialTotals.mat_jun);
+    }
 
     res.json({ meta, total, data: dataRes.rows });
   } catch (e) {
