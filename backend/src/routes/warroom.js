@@ -653,7 +653,107 @@ router.get('/pa-produk/trendline', async (req, res) => {
   }
 });
 
+/* ─── PA ARPU Outlet Sync ─── */
+async function paArpuSyncHandler(req, res) {
+  const { token, tanggal, rows } = req.body;
+  if (token !== SECRET_TOKEN) return res.status(401).json({ error: 'Unauthorized' });
+  if (!tanggal || !rows || !Array.isArray(rows)) return res.status(400).json({ error: 'tanggal + rows required' });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    let count = 0;
+    for (const r of rows) {
+      const id_outlet = String(r.id_outlet || '').trim();
+      if (!id_outlet) continue;
+      await client.query(`
+        INSERT INTO pa_arpu_snapshot
+          (tanggal, id_outlet, layer_arpu, jml_group_layanan, jml_bill, jml_trx, jml_rev, synced_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())
+        ON CONFLICT (tanggal, id_outlet) DO UPDATE SET
+          layer_arpu=EXCLUDED.layer_arpu,
+          jml_group_layanan=EXCLUDED.jml_group_layanan,
+          jml_bill=EXCLUDED.jml_bill,
+          jml_trx=EXCLUDED.jml_trx,
+          jml_rev=EXCLUDED.jml_rev,
+          synced_at=NOW()
+      `, [
+        tanggal, id_outlet,
+        String(r.layer_arpu || '').trim(),
+        r.jml_group_layanan || 0,
+        r.jml_bill || 0,
+        r.jml_trx  || 0,
+        r.jml_rev  || 0,
+      ]);
+      count++;
+    }
+    await client.query('COMMIT');
+    res.json({ success: true, rows: count, tanggal });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    console.error('pa-arpu sync error:', e.message);
+    res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+}
+
+router.post('/pa-arpu/sync', paArpuSyncHandler);
+
+router.get('/pa-arpu/analytics', async (req, res) => {
+  try {
+    const latestRes = await pool.query('SELECT MAX(tanggal) AS t FROM pa_arpu_snapshot');
+    const tanggal = latestRes.rows[0]?.t;
+    if (!tanggal) return res.json({ tanggal: null, layers: [], total: {} });
+
+    const [layerRes, totalRes] = await Promise.all([
+      pool.query(`
+        SELECT
+          layer_arpu,
+          COUNT(*)        AS jumlah_agen,
+          SUM(jml_trx)    AS total_trx,
+          SUM(jml_rev)    AS total_rev
+        FROM pa_arpu_snapshot
+        WHERE tanggal = $1 AND layer_arpu IS NOT NULL AND layer_arpu <> ''
+        GROUP BY layer_arpu
+        ORDER BY CASE layer_arpu
+          WHEN 'Low ARPU'  THEN 1
+          WHEN 'Mid ARPU'  THEN 2
+          WHEN 'High ARPU' THEN 3
+          WHEN 'Top ARPU'  THEN 4
+          ELSE 5 END
+      `, [tanggal]),
+      pool.query(`
+        SELECT COUNT(*) AS total_agen, SUM(jml_rev) AS total_rev
+        FROM pa_arpu_snapshot WHERE tanggal=$1
+      `, [tanggal]),
+    ]);
+
+    const totalAgen = Number(totalRes.rows[0]?.total_agen) || 0;
+    const totalRev  = Number(totalRes.rows[0]?.total_rev)  || 0;
+
+    const layers = layerRes.rows.map(r => {
+      const agen = Number(r.jumlah_agen) || 0;
+      const rev  = Number(r.total_rev)   || 0;
+      return {
+        layer:       r.layer_arpu,
+        jumlah_agen: agen,
+        total_trx:   Number(r.total_trx) || 0,
+        total_rev:   rev,
+        pct_distribusi:   totalAgen > 0 ? +((agen / totalAgen) * 100).toFixed(1) : 0,
+        pct_kontribusi_rev: totalRev > 0 ? Math.round((rev / totalRev) * 100) : 0,
+      };
+    });
+
+    res.json({ tanggal: String(tanggal).substring(0,10), layers, total: { jumlah_agen: totalAgen, total_rev: totalRev } });
+  } catch (e) {
+    console.error('pa-arpu analytics error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 module.exports = router;
 module.exports.syncHandler          = syncHandler;
 module.exports.speedcashSyncHandler = speedcashSyncHandler;
 module.exports.paProdukSyncHandler  = paProdukSyncHandler;
+module.exports.paArpuSyncHandler    = paArpuSyncHandler;

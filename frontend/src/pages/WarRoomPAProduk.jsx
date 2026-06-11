@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import Layout from '../components/Layout';
 import Chart from 'chart.js/auto';
-import { getPAProdukAnalytics, getPAProdukTrendline } from '../services/api';
+import { getPAProdukAnalytics, getPAProdukTrendline, getPAArpuAnalytics } from '../services/api';
 
 const THEME = '#639922';
 const RED   = '#E24B4A';
@@ -394,41 +394,25 @@ function ProdukModal({ row, onClose }) {
 }
 
 /* ─── ARPU Layer Table ─── */
-const ARPU_LAYERS = [
-  { key:'low',  label:'Low ARPU',  color:'#9CA3AF' },
-  { key:'mid',  label:'Mid ARPU',  color:'#60A5FA' },
-  { key:'high', label:'High ARPU', color:'#34D399' },
-  { key:'top',  label:'Top ARPU',  color:THEME     },
-];
+const LAYER_COLOR = {
+  'Low ARPU':  '#9CA3AF',
+  'Mid ARPU':  '#60A5FA',
+  'High ARPU': '#34D399',
+  'Top ARPU':  THEME,
+};
 
-function pctile(arr, p) {
-  if (!arr.length) return 0;
-  const idx = (p / 100) * (arr.length - 1);
-  const lo = Math.floor(idx), hi = Math.ceil(idx);
-  return arr[lo] + (arr[hi] - arr[lo]) * (idx - lo);
-}
+function ArpuLayerTable() {
+  const [state, setState] = useState({ loading: true, layers: [], error: null });
 
-function ArpuLayerTable({ data }) {
-  const active = data.filter(r => Number(r.mat_jun) > 0);
-  if (!active.length) return <div className="wrpa-empty">Data tidak tersedia</div>;
+  useEffect(() => {
+    getPAArpuAnalytics()
+      .then(d => setState({ loading: false, layers: d.layers || [], error: null }))
+      .catch(e => setState({ loading: false, layers: [], error: e.message }));
+  }, []);
 
-  const sorted = [...active].map(r => calcArpu(r.rev_jun, r.mat_jun)).sort((a,b)=>a-b);
-  const p25 = pctile(sorted, 25);
-  const p50 = pctile(sorted, 50);
-  const p75 = pctile(sorted, 75);
-
-  const getLayer = arpu => arpu < p25 ? 'low' : arpu < p50 ? 'mid' : arpu < p75 ? 'high' : 'top';
-
-  const agg = {};
-  ARPU_LAYERS.forEach(l => { agg[l.key] = { mat:0, rev:0 }; });
-  active.forEach(r => {
-    const k = getLayer(calcArpu(r.rev_jun, r.mat_jun));
-    agg[k].mat += Number(r.mat_jun);
-    agg[k].rev += Number(r.rev_jun);
-  });
-
-  const totalMat = active.reduce((s,r) => s + Number(r.mat_jun), 0);
-  const totalRev = active.reduce((s,r) => s + Number(r.rev_jun), 0);
+  if (state.loading) return <div className="wrpa-empty">Memuat...</div>;
+  if (state.error)   return <div className="wrpa-empty" style={{color:'#E24B4A'}}>Gagal memuat data ARPU</div>;
+  if (!state.layers.length) return <div className="wrpa-empty">Belum ada data ARPU — jalankan sync dari Apps Script</div>;
 
   return (
     <table className="wrpa-arpu-table">
@@ -441,24 +425,22 @@ function ArpuLayerTable({ data }) {
         </tr>
       </thead>
       <tbody>
-        {ARPU_LAYERS.map(layer => {
-          const { mat, rev } = agg[layer.key];
-          const pDist = totalMat > 0 ? ((mat/totalMat)*100).toFixed(1) : '0.0';
-          const pRev  = totalRev > 0 ? Math.round((rev/totalRev)*100) : 0;
+        {state.layers.map(layer => {
+          const color = LAYER_COLOR[layer.layer] || '#9CA3AF';
           return (
-            <tr key={layer.key}>
+            <tr key={layer.layer}>
               <td>
-                <span className="wrpa-arpu-dot" style={{background:layer.color}} />
-                {layer.label}
+                <span className="wrpa-arpu-dot" style={{background:color}} />
+                {layer.layer}
               </td>
-              <td style={{textAlign:'right', fontVariantNumeric:'tabular-nums'}}>{fmtN(mat)}</td>
-              <td style={{textAlign:'right', fontVariantNumeric:'tabular-nums'}}>{pDist}%</td>
+              <td style={{textAlign:'right', fontVariantNumeric:'tabular-nums'}}>{fmtN(layer.jumlah_agen)}</td>
+              <td style={{textAlign:'right', fontVariantNumeric:'tabular-nums'}}>{layer.pct_distribusi}%</td>
               <td>
                 <div className="wrpa-arpu-bar-row">
                   <div className="wrpa-arpu-bar-bg">
-                    <div className="wrpa-arpu-bar-fill" style={{width:`${pRev}%`,background:layer.color}} />
+                    <div className="wrpa-arpu-bar-fill" style={{width:`${layer.pct_kontribusi_rev}%`, background:color}} />
                   </div>
-                  <span className="wrpa-arpu-bar-pct">{pRev}%</span>
+                  <span className="wrpa-arpu-bar-pct">{layer.pct_kontribusi_rev}%</span>
                 </div>
               </td>
             </tr>
@@ -493,7 +475,7 @@ function ExecutiveSummaryTab({ data, total, meta, onProdukClick }) {
           <HBarChart id={`pa-rev-${tid}`} labels={top10.map(r=>r.produk)} values={top10.map(r=>Number(r.rev_jun))} formatFn={fmtRp} />
         </ChartCard>
         <ChartCard title="Distribusi ARPU per Layer — Juni" height="260px">
-          <ArpuLayerTable data={data} />
+          <ArpuLayerTable />
         </ChartCard>
       </div>
       <ChartCard title="Ringkasan Semua Produk — klik baris untuk detail">
