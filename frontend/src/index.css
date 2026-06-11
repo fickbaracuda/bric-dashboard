@@ -3436,11 +3436,22 @@ body {
 .wri-filter-btn:hover { border-color: #E24B4A; color: #E24B4A; }
 .wri-filter-btn--active { background: #E24B4A; color: #fff; border-color: #E24B4A; font-weight: 600; }
 
+/* Segmen selector */
+.wri-seg-selector { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-bottom: 12px; }
+.wri-seg-header { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+.wri-seg-title { font-size: 12px; font-weight: 600; color: var(--text-2); white-space: nowrap; }
+.wri-seg-count { background: #E24B4A22; color: #E24B4A; border-radius: 10px; padding: 1px 7px; font-size: 11px; font-weight: 700; margin-left: 4px; }
+.wri-seg-search { flex: 1; min-width: 160px; max-width: 260px; padding: 5px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; background: var(--bg-page); color: var(--text-1); font-family: inherit; outline: none; }
+.wri-seg-search:focus { border-color: #E24B4A88; }
+.wri-seg-clear { font-size: 11px; color: var(--text-4); cursor: pointer; background: none; border: none; padding: 0; font-family: inherit; text-decoration: underline; white-space: nowrap; }
+.wri-seg-clear:hover { color: #E24B4A; }
+
 /* Segmen chips */
-.wri-chip-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
-.wri-chip { padding: 3px 10px; border: 1px solid var(--border); border-radius: 14px; background: var(--bg-card); cursor: pointer; font-size: 11px; color: var(--text-3); font-family: inherit; transition: all .15s; }
-.wri-chip:hover { border-color: #E24B4A44; }
+.wri-chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.wri-chip { padding: 3px 10px; border: 1px solid var(--border); border-radius: 14px; background: var(--bg-page); cursor: pointer; font-size: 11px; color: var(--text-3); font-family: inherit; transition: all .15s; white-space: nowrap; }
+.wri-chip:hover { border-color: #E24B4A66; color: var(--text-1); }
 .wri-chip--on { font-weight: 600; }
+.wri-chip--expand { border-style: dashed; color: var(--text-3); font-style: italic; }
 
 /* State messages */
 .wri-state { padding: 32px; text-align: center; color: var(--text-3); font-size: 14px; }

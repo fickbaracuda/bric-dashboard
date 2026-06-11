@@ -494,6 +494,8 @@ function TrendlineTab() {
   const [loading, setLoading]    = useState(true);
   const [error, setError]        = useState(null);
   const [visibleMcc, setVisible] = useState(new Set());
+  const [search, setSearch]      = useState('');
+  const [expanded, setExpanded]  = useState(false);
 
   useEffect(() => {
     setLoading(true);
@@ -519,6 +521,14 @@ function TrendlineTab() {
 
   const chartId = `seg-tl-${days}-${metric}-${[...visibleMcc].sort().join('')}`;
 
+  // Filter + limit chip display
+  const filtered = trendData.segments.filter(s =>
+    !search || s.kategori.toLowerCase().includes(search.toLowerCase())
+  );
+  const MAX_VISIBLE = 10;
+  const showExpand  = !search && filtered.length > MAX_VISIBLE;
+  const displaySegs = search ? filtered : (expanded ? filtered : filtered.slice(0, MAX_VISIBLE));
+
   return (
     <div>
       <div className="wri-controls">
@@ -536,17 +546,41 @@ function TrendlineTab() {
         </div>
       </div>
 
-      <div className="wri-chip-row">
-        {trendData.segments.map((s, i) => (
-          <button
-            key={s.mcc}
-            className={`wri-chip${visibleMcc.has(s.mcc) ? ' wri-chip--on' : ''}`}
-            style={visibleMcc.has(s.mcc) ? { borderColor: LINE_COLORS[i%LINE_COLORS.length], background: LINE_COLORS[i%LINE_COLORS.length]+'22', color: LINE_COLORS[i%LINE_COLORS.length] } : {}}
-            onClick={() => toggleMcc(s.mcc)}
-          >
-            {s.kategori}
-          </button>
-        ))}
+      {/* Segmen selector */}
+      <div className="wri-seg-selector">
+        <div className="wri-seg-header">
+          <span className="wri-seg-title">
+            Segmen <span className="wri-seg-count">{visibleMcc.size} aktif</span>
+          </span>
+          <input
+            className="wri-seg-search"
+            placeholder="Cari segmen..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
+          <button className="wri-seg-clear" onClick={() => setVisible(new Set())}>Hapus semua</button>
+        </div>
+        <div className="wri-chip-row">
+          {displaySegs.map(s => {
+            const i = trendData.segments.indexOf(s);
+            const on = visibleMcc.has(s.mcc);
+            return (
+              <button
+                key={s.mcc}
+                className={`wri-chip${on ? ' wri-chip--on' : ''}`}
+                style={on ? { borderColor: LINE_COLORS[i%LINE_COLORS.length], background: LINE_COLORS[i%LINE_COLORS.length]+'22', color: LINE_COLORS[i%LINE_COLORS.length] } : {}}
+                onClick={() => toggleMcc(s.mcc)}
+              >
+                {s.kategori}
+              </button>
+            );
+          })}
+          {showExpand && (
+            <button className="wri-chip wri-chip--expand" onClick={() => setExpanded(e => !e)}>
+              {expanded ? '‹ Sembunyikan' : `+${filtered.length - MAX_VISIBLE} lainnya`}
+            </button>
+          )}
+        </div>
       </div>
 
       <ChartCard title="" height="340px">
