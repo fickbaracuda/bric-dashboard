@@ -660,11 +660,21 @@ export default function WarRoomMgmPa() {
 
             {searchRes && !searchLoading && (
               <>
-                <div style={{ fontSize: 12, color: 'var(--text-4)', margin: '8px 4px 12px' }}>
-                  Hasil untuk{' '}
-                  <strong style={{ color: 'var(--text-2)' }}>"{searchRes.q}"</strong>
-                  {searchRes.bulan && <> · {fmtBulan(searchRes.bulan)}</>}
-                  {' '}— {searchRes.aktivasi.length} aktivasi, {searchRes.registrasi.length} registrasi
+                <div style={{ fontSize: 12, color: 'var(--text-4)', margin: '8px 4px 12px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <span>
+                    Hasil untuk{' '}
+                    <strong style={{ color: 'var(--text-2)' }}>"{searchRes.q}"</strong>
+                    {searchRes.bulan && <> · {fmtBulan(searchRes.bulan)}</>}
+                    {' '}—{' '}
+                    <strong style={{ color: COLOR_AKTIV }}>{searchRes.total_aktivasi ?? searchRes.aktivasi.length}</strong> aktivasi,{' '}
+                    <strong style={{ color: COLOR_REG }}>{searchRes.total_registrasi ?? searchRes.registrasi.length}</strong> registrasi
+                  </span>
+                  {(searchRes.total_aktivasi > searchRes.aktivasi.length || searchRes.total_registrasi > searchRes.registrasi.length) && (
+                    <span style={{ background: '#FEF3C7', color: '#92400E', fontSize: 11, padding: '2px 8px', borderRadius: 6, fontWeight: 600 }}>
+                      <i className="ti ti-alert-triangle" style={{ marginRight: 4 }} />
+                      Ditampilkan {searchRes.aktivasi.length} aktivasi & {searchRes.registrasi.length} registrasi dari total di atas
+                    </span>
+                  )}
                 </div>
 
                 {searchRes.aktivasi.length === 0 && searchRes.registrasi.length === 0 && (
@@ -676,7 +686,7 @@ export default function WarRoomMgmPa() {
 
                 {/* ── Tabel AKTIVASI ── */}
                 {searchRes.aktivasi.length > 0 && (
-                  <ChartCard title={`Aktivasi — ${searchRes.aktivasi.length} outlet`}>
+                  <ChartCard title={`Aktivasi — ${searchRes.total_aktivasi ?? searchRes.aktivasi.length} outlet`}>
                     <div className="wr-table-wrap">
                       <table className="wr-table">
                         <thead>
@@ -727,7 +737,7 @@ export default function WarRoomMgmPa() {
 
                 {/* ── Tabel REGISTRASI ── */}
                 {searchRes.registrasi.length > 0 && (
-                  <ChartCard title={`Registrasi — ${searchRes.registrasi.length} outlet`}>
+                  <ChartCard title={`Registrasi — ${searchRes.total_registrasi ?? searchRes.registrasi.length} outlet`}>
                     <div className="wr-table-wrap">
                       <table className="wr-table">
                         <thead>
