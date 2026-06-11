@@ -976,10 +976,10 @@ export default function WarRoomPAProduk() {
 
   useEffect(() => { fetchData(); }, []);
 
-  if (loading) return <Layout><div className="wrpa-loading"><i className="ti ti-loader-2 wrpa-spin"/><span>Memuat data PA Produk…</span></div></Layout>;
-  if (error)   return <Layout><div className="wrpa-error"><i className="ti ti-alert-circle"/><span>Gagal memuat: {error}</span></div></Layout>;
+  if (loading) return <Layout gsheetUrl="https://docs.google.com/spreadsheets/d/1GbDo9ASOQYiCCVqOT89RxAWuvZfQjeNbq3U9qP4jvcw" gsheetLabel="PA Produk & ARPU"><div className="wrpa-loading"><i className="ti ti-loader-2 wrpa-spin"/><span>Memuat data PA Produk…</span></div></Layout>;
+  if (error)   return <Layout gsheetUrl="https://docs.google.com/spreadsheets/d/1GbDo9ASOQYiCCVqOT89RxAWuvZfQjeNbq3U9qP4jvcw" gsheetLabel="PA Produk & ARPU"><div className="wrpa-error"><i className="ti ti-alert-circle"/><span>Gagal memuat: {error}</span></div></Layout>;
   if (!resp?.meta) return (
-    <Layout>
+    <Layout gsheetUrl="https://docs.google.com/spreadsheets/d/1GbDo9ASOQYiCCVqOT89RxAWuvZfQjeNbq3U9qP4jvcw" gsheetLabel="PA Produk & ARPU">
       <div className="wrpa-empty">
         <i className="ti ti-database-off" style={{fontSize:36,color:'#9CA3AF'}}/>
         <p style={{fontWeight:600}}>Belum ada data PA Produk</p>
@@ -991,7 +991,7 @@ export default function WarRoomPAProduk() {
   const { meta, total, data } = resp;
 
   return (
-    <Layout>
+    <Layout gsheetUrl="https://docs.google.com/spreadsheets/d/1GbDo9ASOQYiCCVqOT89RxAWuvZfQjeNbq3U9qP4jvcw" gsheetLabel="PA Produk & ARPU">
       <div className="wrpa-page">
         <div className="wrpa-header">
           <div className="wrpa-header-left">

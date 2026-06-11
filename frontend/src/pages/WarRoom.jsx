@@ -918,7 +918,7 @@ export default function WarRoom() {
   const tid  = data?.tanggal ? String(data.tanggal).slice(0, 10) : 'x';
 
   return (
-    <Layout>
+    <Layout gsheetUrl="https://docs.google.com/spreadsheets/d/1mhyr9UHlRTMzEoF-3oObYe8uPf7x3R9AmiFln3gr0SQ" gsheetLabel="InstaQris Segmen">
       <div className="wr-page">
 
         <div className="wr-header">

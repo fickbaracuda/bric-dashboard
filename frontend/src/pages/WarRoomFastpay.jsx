@@ -807,7 +807,7 @@ export default function WarRoomFastpay() {
 
   if (loading) {
     return (
-      <Layout>
+      <Layout gsheetUrl="https://docs.google.com/spreadsheets/d/1GbDo9ASOQYiCCVqOT89RxAWuvZfQjeNbq3U9qP4jvcw" gsheetLabel="Fastpay Global">
         <div className="wrfp-loading">
           <i className="ti ti-loader-2 wrfp-spin" />
           <span>Memuat data Fastpay Global…</span>
@@ -818,7 +818,7 @@ export default function WarRoomFastpay() {
 
   if (error) {
     return (
-      <Layout>
+      <Layout gsheetUrl="https://docs.google.com/spreadsheets/d/1GbDo9ASOQYiCCVqOT89RxAWuvZfQjeNbq3U9qP4jvcw" gsheetLabel="Fastpay Global">
         <div className="wrfp-error">
           <i className="ti ti-alert-circle" />
           <span>Gagal memuat data: {error}</span>
@@ -829,7 +829,7 @@ export default function WarRoomFastpay() {
 
   if (!data || data.error) {
     return (
-      <Layout>
+      <Layout gsheetUrl="https://docs.google.com/spreadsheets/d/1GbDo9ASOQYiCCVqOT89RxAWuvZfQjeNbq3U9qP4jvcw" gsheetLabel="Fastpay Global">
         <div className="wrfp-empty">
           <i className="ti ti-database-off" />
           <p>{data?.error || 'Belum ada data Fastpay Global.'}</p>
@@ -847,7 +847,7 @@ export default function WarRoomFastpay() {
   const hari = isoDate ? parseInt(isoDate.split('-')[2]) : null;
 
   return (
-    <Layout>
+    <Layout gsheetUrl="https://docs.google.com/spreadsheets/d/1GbDo9ASOQYiCCVqOT89RxAWuvZfQjeNbq3U9qP4jvcw" gsheetLabel="Fastpay Global">
       <div className="wrfp-page">
         {/* Header */}
         <div className="wrfp-header">

@@ -1147,7 +1147,7 @@ export default function WarRoomSpeedcash() {
 
   if (loading && !data) {
     return (
-      <Layout>
+      <Layout gsheetUrl="https://docs.google.com/spreadsheets/d/1MIpXkyU_COR_ptTvweKQKFYT0pxWIo_5zfCC90Gqlck" gsheetLabel="Speedcash">
         <div className="wr-page">
           <Header />
           <div className="wr-summary-grid">
@@ -1162,7 +1162,7 @@ export default function WarRoomSpeedcash() {
 
   if (error) {
     return (
-      <Layout>
+      <Layout gsheetUrl="https://docs.google.com/spreadsheets/d/1MIpXkyU_COR_ptTvweKQKFYT0pxWIo_5zfCC90Gqlck" gsheetLabel="Speedcash">
         <div className="wr-page">
           <Header />
           <div className="wr-error">
@@ -1175,7 +1175,7 @@ export default function WarRoomSpeedcash() {
   }
 
   return (
-    <Layout>
+    <Layout gsheetUrl="https://docs.google.com/spreadsheets/d/1MIpXkyU_COR_ptTvweKQKFYT0pxWIo_5zfCC90Gqlck" gsheetLabel="Speedcash">
       <div className="wr-page">
         <Header />
 

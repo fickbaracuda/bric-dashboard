@@ -791,7 +791,7 @@ export default function WarRoomEkspedisi() {
 
   if (loading) {
     return (
-      <Layout>
+      <Layout gsheetUrl="https://docs.google.com/spreadsheets/d/1GbDo9ASOQYiCCVqOT89RxAWuvZfQjeNbq3U9qP4jvcw" gsheetLabel="Ekspedisi">
         <div className="wre-loading">
           <i className="ti ti-loader-2 wre-spin" style={{ color: THEME }} />
           <span>Memuat data ekspedisi…</span>
@@ -802,7 +802,7 @@ export default function WarRoomEkspedisi() {
 
   if (error) {
     return (
-      <Layout>
+      <Layout gsheetUrl="https://docs.google.com/spreadsheets/d/1GbDo9ASOQYiCCVqOT89RxAWuvZfQjeNbq3U9qP4jvcw" gsheetLabel="Ekspedisi">
         <div className="wre-error">
           <i className="ti ti-alert-triangle" style={{ color: '#DC2626', fontSize: 32 }} />
           <p>{error}</p>
@@ -814,7 +814,7 @@ export default function WarRoomEkspedisi() {
 
   if (!analytics?.tanggal) {
     return (
-      <Layout>
+      <Layout gsheetUrl="https://docs.google.com/spreadsheets/d/1GbDo9ASOQYiCCVqOT89RxAWuvZfQjeNbq3U9qP4jvcw" gsheetLabel="Ekspedisi">
         <div className="wre-empty-state">
           <i className="ti ti-database-off" style={{ fontSize: 40, color: '#9CA3AF' }} />
           <p>Belum ada data ekspedisi. Jalankan Apps Script untuk sync pertama.</p>
@@ -824,7 +824,7 @@ export default function WarRoomEkspedisi() {
   }
 
   return (
-    <Layout>
+    <Layout gsheetUrl="https://docs.google.com/spreadsheets/d/1GbDo9ASOQYiCCVqOT89RxAWuvZfQjeNbq3U9qP4jvcw" gsheetLabel="Ekspedisi">
     <div className="wre-page">
       {/* Header */}
       <div className="wre-header">

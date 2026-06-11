@@ -605,9 +605,9 @@ export default function WarRoomFarming() {
 
   useEffect(() => { fetchData(); }, []);
 
-  if (loading) return <Layout><div className="wrfp-loading"><i className="ti ti-loader-2 wrfp-spin" /><span>Memuat data Farming…</span></div></Layout>;
-  if (error)   return <Layout><div className="wrfp-error"><i className="ti ti-alert-circle" /><span>Gagal memuat: {error}</span></div></Layout>;
-  if (!data || data.error) return <Layout><div className="wrfp-empty"><i className="ti ti-database-off" /><p>{data?.error||'Belum ada data Farming.'}</p><span>Jalankan sync dari Google Sheets terlebih dahulu.</span></div></Layout>;
+  if (loading) return <Layout gsheetUrl="https://docs.google.com/spreadsheets/d/1GbDo9ASOQYiCCVqOT89RxAWuvZfQjeNbq3U9qP4jvcw" gsheetLabel="Farming"><div className="wrfp-loading"><i className="ti ti-loader-2 wrfp-spin" /><span>Memuat data Farming…</span></div></Layout>;
+  if (error)   return <Layout gsheetUrl="https://docs.google.com/spreadsheets/d/1GbDo9ASOQYiCCVqOT89RxAWuvZfQjeNbq3U9qP4jvcw" gsheetLabel="Farming"><div className="wrfp-error"><i className="ti ti-alert-circle" /><span>Gagal memuat: {error}</span></div></Layout>;
+  if (!data || data.error) return <Layout gsheetUrl="https://docs.google.com/spreadsheets/d/1GbDo9ASOQYiCCVqOT89RxAWuvZfQjeNbq3U9qP4jvcw" gsheetLabel="Farming"><div className="wrfp-empty"><i className="ti ti-database-off" /><p>{data?.error||'Belum ada data Farming.'}</p><span>Jalankan sync dari Google Sheets terlebih dahulu.</span></div></Layout>;
 
   const isoDate     = data.meta.sync_date ? String(data.meta.sync_date).substring(0, 10) : null;
   const tanggal     = isoDate ? new Date(isoDate + 'T12:00:00').toLocaleDateString('id-ID', { day:'2-digit', month:'short', year:'numeric' }) : '-';
@@ -615,7 +615,7 @@ export default function WarRoomFarming() {
   const periodeLabel = hari ? `1–${hari}` : '1–9';
 
   return (
-    <Layout>
+    <Layout gsheetUrl="https://docs.google.com/spreadsheets/d/1GbDo9ASOQYiCCVqOT89RxAWuvZfQjeNbq3U9qP4jvcw" gsheetLabel="Farming">
       <div className="wrfp-page wrfm-page">
         {/* Header */}
         <div className="wrfp-header">
