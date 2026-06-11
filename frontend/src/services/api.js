@@ -177,6 +177,10 @@ export const getSegmenData = async (params = {}) => {
   const res = await axios.get(`${API_URL}/api/warroom/segmen`, { params, headers: authHeaders() });
   return res.data;
 };
+export const getSegmenTrendline = async (days = 30) => {
+  const res = await axios.get(`${API_URL}/api/warroom/segmen/trendline`, { params: { days }, headers: authHeaders() });
+  return res.data;
+};
 export const getSegmenHistory = async (mcc, days = 30) => {
   const res = await axios.get(`${API_URL}/api/warroom/segmen/history`, { params: { mcc, days }, headers: authHeaders() });
   return res.data;

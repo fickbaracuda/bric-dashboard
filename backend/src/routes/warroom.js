@@ -126,6 +126,45 @@ router.get('/segmen/tanggal-list', async (req, res) => {
   }
 });
 
+/* ── GET /api/warroom/segmen/trendline?days=30 ── */
+router.get('/segmen/trendline', async (req, res) => {
+  try {
+    const days = Math.min(Math.max(parseInt(req.query.days) || 30, 3), 90);
+    const latestRes = await pool.query('SELECT MAX(tanggal) AS t FROM segmen_snapshot');
+    const latest = latestRes.rows[0]?.t;
+    if (!latest) return res.json({ dates: [], byMcc: {}, segments: [], days });
+
+    const { rows } = await pool.query(`
+      SELECT tanggal, mcc, kategori, jun_rev, jun_merchant, jun_trx
+      FROM segmen_snapshot
+      WHERE tanggal >= $1::date - ($2 * interval '1 day')
+      ORDER BY tanggal ASC, jun_rev DESC NULLS LAST
+    `, [latest, days]);
+
+    const byMcc   = {};
+    const segInfo = {};
+    for (const r of rows) {
+      if (!byMcc[r.mcc]) { byMcc[r.mcc] = []; segInfo[r.mcc] = r.kategori; }
+      byMcc[r.mcc].push({
+        tanggal:      String(r.tanggal).substring(0, 10),
+        jun_rev:      Number(r.jun_rev)      || 0,
+        jun_merchant: Number(r.jun_merchant) || 0,
+        jun_trx:      Number(r.jun_trx)      || 0,
+      });
+    }
+
+    const dates = [...new Set(rows.map(r => String(r.tanggal).substring(0, 10)))].sort();
+    const segments = Object.entries(byMcc)
+      .map(([mcc]) => ({ mcc, kategori: segInfo[mcc], latestRev: byMcc[mcc][byMcc[mcc].length - 1]?.jun_rev || 0 }))
+      .sort((a, b) => b.latestRev - a.latestRev);
+
+    res.json({ dates, byMcc, segments, days });
+  } catch (e) {
+    console.error('segmen trendline error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 /* ─── SPEEDCASH ─────────────────────────────────────────────────────── */
 
 async function speedcashSyncHandler(req, res) {
