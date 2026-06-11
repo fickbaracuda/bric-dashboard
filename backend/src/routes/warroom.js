@@ -943,15 +943,21 @@ async function mgmAnalyticsHandler(req, res) {
 
       pool.query(`
         SELECT months.bulan,
-               COUNT(DISTINCT a.id_outlet)::int as aktivasi,
-               COUNT(DISTINCT r.id_outlet)::int as registrasi
+               COALESCE(a.aktivasi, 0)   AS aktivasi,
+               COALESCE(r.registrasi, 0) AS registrasi
         FROM (
           SELECT DISTINCT bulan FROM mgm_aktivasi
           UNION SELECT DISTINCT bulan FROM mgm_registrasi
         ) months
-        LEFT JOIN mgm_aktivasi a ON a.bulan = months.bulan
-        LEFT JOIN mgm_registrasi r ON r.bulan = months.bulan
-        GROUP BY months.bulan ORDER BY months.bulan ASC
+        LEFT JOIN (
+          SELECT bulan, COUNT(DISTINCT id_outlet)::int AS aktivasi
+          FROM mgm_aktivasi GROUP BY bulan
+        ) a ON a.bulan = months.bulan
+        LEFT JOIN (
+          SELECT bulan, COUNT(DISTINCT id_outlet)::int AS registrasi
+          FROM mgm_registrasi GROUP BY bulan
+        ) r ON r.bulan = months.bulan
+        ORDER BY months.bulan ASC
       `),
 
       pool.query(`
