@@ -153,6 +153,7 @@ export default function WarRoomMgmPa() {
 
   // Search state
   const [searchQ, setSearchQ]         = useState('');
+  const [searchBulan, setSearchBulan] = useState('');
   const [searchRes, setSearchRes]     = useState(null);
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchErr, setSearchErr]     = useState(null);
@@ -189,7 +190,12 @@ export default function WarRoomMgmPa() {
   function onSearchChange(val) {
     setSearchQ(val);
     clearTimeout(searchTimer.current);
-    searchTimer.current = setTimeout(() => doSearch(val, null), 500);
+    searchTimer.current = setTimeout(() => doSearch(val, searchBulan || null), 500);
+  }
+
+  function onSearchBulanChange(val) {
+    setSearchBulan(val);
+    if (searchQ.trim().length >= 2) doSearch(searchQ, val || null);
   }
 
   const GSHEET = {
@@ -623,6 +629,20 @@ export default function WarRoomMgmPa() {
                   background: 'transparent', color: 'var(--text-1)'
                 }}
               />
+              {/* Filter bulan */}
+              {data.availableBulan?.length > 0 && (
+                <select
+                  value={searchBulan}
+                  onChange={e => onSearchBulanChange(e.target.value)}
+                  className="wr-select"
+                  style={{ minWidth: 110, fontSize: 13, flexShrink: 0 }}
+                >
+                  <option value="">Semua Bulan</option>
+                  {data.availableBulan.map(b => (
+                    <option key={b} value={b}>{fmtBulan(b)}</option>
+                  ))}
+                </select>
+              )}
               {searchQ && (
                 <button onClick={() => { setSearchQ(''); setSearchRes(null); setSearchErr(null); }}
                   style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--text-4)', fontSize: 20, lineHeight: 1, padding: 0 }}>
