@@ -265,7 +265,7 @@ body {
 
 /* ── Content ── */
 .main-content {
-  padding: 28px 28px 76px; /* 76 = 48 normal + 40 footer clearance */
+  padding: 28px 28px 118px; /* 118 = 48 normal + 40 footer + 30 gsheet-bar */
   flex: 1;
   width: 100%;
   min-width: 0;
@@ -945,7 +945,7 @@ body {
   /* Hamburger visible */
   .hamburger { display: flex; }
 
-  .main-content { padding: 20px 16px 68px; }
+  .main-content { padding: 20px 16px 110px; }
 
   .podium-layout { flex-direction: column; align-items: center; }
   .podium-rank-1 { transform: none; order: -1; }
@@ -2276,8 +2276,13 @@ body {
 
 /* ─── GSheet Link Bar ─── */
 .gsheet-bar {
+  position: fixed;
+  bottom: 40px; /* tepat di atas presence-footer */
+  left: var(--sidebar-w);
+  right: 0;
+  z-index: 88;
   display: flex; align-items: center; gap: 10px;
-  padding: 8px 24px;
+  padding: 6px 24px;
   background: #F0FDF4;
   border-top: 1px solid #BBF7D0;
   font-size: 12px;
@@ -2295,7 +2300,10 @@ body {
 }
 .gsheet-bar-link:hover { background: #DCFCE7; }
 .gsheet-bar-note { font-size: 11px; color: #4ADE80; margin-left: auto; }
-@media (max-width: 768px) { .gsheet-bar-note { display: none; } }
+@media (max-width: 768px) {
+  .gsheet-bar { left: 0; }
+  .gsheet-bar-note { display: none; }
+}
 
 /* ═══════════════════════════════════════════
    PRESENCE FOOTER — siapa yang sedang aktif
@@ -2387,7 +2395,7 @@ body {
 /* ── Floating Action Button ── */
 .aic-fab {
   position: fixed;
-  bottom: 52px; /* di atas presence footer (40px) + gap */
+  bottom: 90px; /* di atas gsheet-bar (34px) + presence-footer (40px) + gap */
   right: 20px;
   z-index: 300;
   display: flex; align-items: center; gap: 8px;
@@ -2416,7 +2424,7 @@ body {
 /* ── Chat Panel ── */
 .aic-panel {
   position: fixed;
-  bottom: 104px; /* fab height + gap + presence footer */
+  bottom: 142px; /* fab height + gap + gsheet-bar + presence footer */
   right: 20px;
   width: 380px;
   max-height: 560px;
