@@ -171,7 +171,7 @@ function HBarChart({ id, labels, values, color, formatFn }) {
   return <canvas key={id} ref={ref} />;
 }
 
-function GroupedBar({ id, labels, datasets }) {
+function GroupedBar({ id, labels, datasets, yFmt }) {
   const ref = useRef(null);
   useEffect(() => {
     if (!ref.current || !labels?.length) return;
@@ -180,8 +180,17 @@ function GroupedBar({ id, labels, datasets }) {
       data:{ labels, datasets },
       options:{
         responsive:true, maintainAspectRatio:false,
-        plugins:{ legend:{ position:'bottom', labels:{ font:{ size:11 }, padding:10 } } },
-        scales:{ x:{ ticks:{ font:{ size:10 }, maxRotation:40 } }, y:{ grid:{ color:'#f0f0f0' }, ticks:{ font:{ size:11 } } } },
+        plugins:{
+          legend:{ position:'bottom', labels:{ font:{ size:11 }, padding:10 } },
+          tooltip:{ callbacks:{ label: ctx => {
+            const v = ctx.parsed.y;
+            return ` ${ctx.dataset.label}: ${yFmt ? yFmt(v) : v.toLocaleString('id')}`;
+          }}},
+        },
+        scales:{
+          x:{ ticks:{ font:{ size:10 }, maxRotation:40 } },
+          y:{ grid:{ color:'#f0f0f0' }, ticks:{ font:{ size:11 }, callback: v => yFmt ? yFmt(v) : v.toLocaleString('id') } },
+        },
       },
     });
     return () => chart.destroy();
@@ -407,11 +416,11 @@ function ExecutiveSummaryTab({ data, total, meta, onProdukClick }) {
         <ChartCard title="Top 10 Produk — Revenue Juni" height="260px">
           <HBarChart id={`pa-rev-${tid}`} labels={top10.map(r=>r.produk)} values={top10.map(r=>Number(r.rev_jun))} formatFn={fmtRp} />
         </ChartCard>
-        <ChartCard title="Top 10 Produk — TRX Apr / Mei / Jun" height="260px">
-          <GroupedBar id={`pa-trx3-${tid}`} labels={top10.map(r=>r.produk)} datasets={[
-            { label:'April', data:top10.map(r=>Number(r.trx_apr)), backgroundColor:'#94A3B8', borderRadius:2 },
-            { label:'Mei',   data:top10.map(r=>Number(r.trx_mei)), backgroundColor:'#CBD5E1', borderRadius:2 },
-            { label:'Juni',  data:top10.map(r=>Number(r.trx_jun)), backgroundColor:THEME,     borderRadius:2 },
+        <ChartCard title="Top 10 Produk — ARPU Apr / Mei / Jun" height="260px">
+          <GroupedBar id={`pa-arpu3-${tid}`} labels={top10.map(r=>r.produk)} yFmt={fmtRp} datasets={[
+            { label:'April', data:top10.map(r=>calcArpu(r.rev_apr,r.mat_apr)), backgroundColor:'#94A3B8', borderRadius:2 },
+            { label:'Mei',   data:top10.map(r=>calcArpu(r.rev_mei,r.mat_mei)), backgroundColor:'#CBD5E1', borderRadius:2 },
+            { label:'Juni',  data:top10.map(r=>calcArpu(r.rev_jun,r.mat_jun)), backgroundColor:THEME,     borderRadius:2 },
           ]} />
         </ChartCard>
       </div>
