@@ -791,8 +791,208 @@ router.get('/pa-arpu/analytics', async (req, res) => {
   }
 });
 
+// ─── MGM PA SYNC ────────────────────────────────────────────────
+const MGM_SYNC_TOKEN = 'bric2026mgmpasecret';
+
+async function mgmSyncHandler(req, res) {
+  const token = req.headers['x-sync-token'] || req.body?.token;
+  if (token !== MGM_SYNC_TOKEN) return res.status(401).json({ error: 'Unauthorized' });
+
+  const { bulan, aktivasi = [], registrasi = [] } = req.body;
+  if (!bulan || !/^\d{4}-\d{2}$/.test(bulan)) {
+    return res.status(400).json({ error: 'bulan harus format YYYY-MM' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    let aktUpsert = 0, regUpsert = 0;
+
+    for (const r of aktivasi) {
+      if (!r.id_outlet) continue;
+      await client.query(`
+        INSERT INTO mgm_aktivasi
+          (bulan, upline, id_outlet, nama_pemilik, tipe_outlet, balance, is_active,
+           nama_kota, nama_propinsi, tanggal_aktifasi, trx, rev, synced_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NOW())
+        ON CONFLICT (bulan, id_outlet) DO UPDATE SET
+          upline=EXCLUDED.upline, nama_pemilik=EXCLUDED.nama_pemilik,
+          tipe_outlet=EXCLUDED.tipe_outlet, balance=EXCLUDED.balance,
+          is_active=EXCLUDED.is_active, nama_kota=EXCLUDED.nama_kota,
+          nama_propinsi=EXCLUDED.nama_propinsi, tanggal_aktifasi=EXCLUDED.tanggal_aktifasi,
+          trx=EXCLUDED.trx, rev=EXCLUDED.rev, synced_at=NOW()
+      `, [
+        bulan, r.upline || null, r.id_outlet, r.nama_pemilik || null,
+        r.tipe_outlet || null, r.balance || 0, r.is_active || 0,
+        r.nama_kota || null, r.nama_propinsi || null,
+        r.tanggal_aktifasi || null, r.trx || 0, r.rev || 0
+      ]);
+      aktUpsert++;
+    }
+
+    for (const r of registrasi) {
+      if (!r.id_outlet) continue;
+      await client.query(`
+        INSERT INTO mgm_registrasi
+          (bulan, upline, id_outlet, nama_pemilik, tipe_outlet, balance, is_active,
+           nama_kota, nama_propinsi, tanggal_registrasi, tanggal_aktifasi, synced_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW())
+        ON CONFLICT (bulan, id_outlet) DO UPDATE SET
+          upline=EXCLUDED.upline, nama_pemilik=EXCLUDED.nama_pemilik,
+          tipe_outlet=EXCLUDED.tipe_outlet, balance=EXCLUDED.balance,
+          is_active=EXCLUDED.is_active, nama_kota=EXCLUDED.nama_kota,
+          nama_propinsi=EXCLUDED.nama_propinsi,
+          tanggal_registrasi=EXCLUDED.tanggal_registrasi,
+          tanggal_aktifasi=EXCLUDED.tanggal_aktifasi, synced_at=NOW()
+      `, [
+        bulan, r.upline || null, r.id_outlet, r.nama_pemilik || null,
+        r.tipe_outlet || null, r.balance || 0, r.is_active || 0,
+        r.nama_kota || null, r.nama_propinsi || null,
+        r.tanggal_registrasi || null, r.tanggal_aktifasi || null
+      ]);
+      regUpsert++;
+    }
+
+    await client.query('COMMIT');
+    res.json({ ok: true, bulan, aktivasi: aktUpsert, registrasi: regUpsert });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    console.error('mgmSyncHandler error:', e);
+    res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+}
+
+// ─── MGM PA ANALYTICS ───────────────────────────────────────────
+async function mgmAnalyticsHandler(req, res) {
+  try {
+    const bulanRes = await pool.query(`
+      SELECT DISTINCT bulan FROM mgm_aktivasi
+      UNION
+      SELECT DISTINCT bulan FROM mgm_registrasi
+      ORDER BY bulan DESC
+    `);
+    const availableBulan = bulanRes.rows.map(r => r.bulan);
+
+    const bulan = req.query.bulan || availableBulan[0];
+    if (!bulan) return res.json({ availableBulan: [], bulan: null, summary: null });
+
+    const [
+      summaryRes, tipeAktivRes, tipeRegRes,
+      topUplineAktivRes, topUplineRegRes, konversiRes,
+      provinsiRes, trendRes, recentAktivRes, recentRegRes
+    ] = await Promise.all([
+      pool.query(`
+        SELECT
+          (SELECT COUNT(*) FROM mgm_aktivasi WHERE bulan=$1)::int AS total_aktivasi,
+          (SELECT COALESCE(SUM(trx),0) FROM mgm_aktivasi WHERE bulan=$1)::bigint AS total_trx,
+          (SELECT COALESCE(SUM(rev),0) FROM mgm_aktivasi WHERE bulan=$1) AS total_rev,
+          (SELECT COUNT(*) FROM mgm_aktivasi WHERE bulan=$1 AND is_active=1)::int AS aktiv_aktif,
+          (SELECT COUNT(*) FROM mgm_registrasi WHERE bulan=$1)::int AS total_registrasi,
+          (SELECT COUNT(*) FROM mgm_registrasi WHERE bulan=$1 AND tanggal_aktifasi IS NOT NULL)::int AS reg_sudah_aktif,
+          (SELECT COUNT(*) FROM mgm_registrasi WHERE bulan=$1 AND tanggal_aktifasi IS NULL)::int AS reg_belum_aktif
+      `, [bulan]),
+
+      pool.query(`
+        SELECT tipe_outlet, COUNT(*)::int as jumlah,
+               COALESCE(SUM(trx),0)::bigint as total_trx,
+               COALESCE(SUM(rev),0) as total_rev
+        FROM mgm_aktivasi WHERE bulan=$1 AND tipe_outlet IS NOT NULL
+        GROUP BY tipe_outlet ORDER BY jumlah DESC
+      `, [bulan]),
+
+      pool.query(`
+        SELECT tipe_outlet, COUNT(*)::int as jumlah
+        FROM mgm_registrasi WHERE bulan=$1 AND tipe_outlet IS NOT NULL
+        GROUP BY tipe_outlet ORDER BY jumlah DESC
+      `, [bulan]),
+
+      pool.query(`
+        SELECT upline, COUNT(*)::int as jumlah_rekrut,
+               COALESCE(SUM(trx),0)::bigint as total_trx,
+               COALESCE(SUM(rev),0) as total_rev
+        FROM mgm_aktivasi WHERE bulan=$1 AND upline IS NOT NULL
+        GROUP BY upline ORDER BY jumlah_rekrut DESC LIMIT 15
+      `, [bulan]),
+
+      pool.query(`
+        SELECT upline, COUNT(*)::int as jumlah_rekrut,
+               COUNT(*) FILTER (WHERE tanggal_aktifasi IS NOT NULL)::int as sudah_aktif
+        FROM mgm_registrasi WHERE bulan=$1 AND upline IS NOT NULL
+        GROUP BY upline ORDER BY jumlah_rekrut DESC LIMIT 15
+      `, [bulan]),
+
+      pool.query(`
+        SELECT upline,
+               COUNT(*)::int as total_reg,
+               COUNT(*) FILTER (WHERE tanggal_aktifasi IS NOT NULL)::int as sudah_aktif,
+               ROUND(
+                 COUNT(*) FILTER (WHERE tanggal_aktifasi IS NOT NULL) * 100.0 / NULLIF(COUNT(*),0)
+               ,1) as pct_konversi
+        FROM mgm_registrasi WHERE bulan=$1 AND upline IS NOT NULL
+        GROUP BY upline HAVING COUNT(*) >= 3
+        ORDER BY pct_konversi DESC LIMIT 15
+      `, [bulan]),
+
+      pool.query(`
+        SELECT nama_propinsi, COUNT(*)::int as jumlah
+        FROM mgm_aktivasi WHERE bulan=$1 AND nama_propinsi IS NOT NULL
+        GROUP BY nama_propinsi ORDER BY jumlah DESC LIMIT 10
+      `, [bulan]),
+
+      pool.query(`
+        SELECT months.bulan,
+               COUNT(DISTINCT a.id_outlet)::int as aktivasi,
+               COUNT(DISTINCT r.id_outlet)::int as registrasi
+        FROM (
+          SELECT DISTINCT bulan FROM mgm_aktivasi
+          UNION SELECT DISTINCT bulan FROM mgm_registrasi
+        ) months
+        LEFT JOIN mgm_aktivasi a ON a.bulan = months.bulan
+        LEFT JOIN mgm_registrasi r ON r.bulan = months.bulan
+        GROUP BY months.bulan ORDER BY months.bulan ASC
+      `),
+
+      pool.query(`
+        SELECT id_outlet, nama_pemilik, upline, tipe_outlet, nama_kota, nama_propinsi,
+               tanggal_aktifasi, trx, rev
+        FROM mgm_aktivasi WHERE bulan=$1
+        ORDER BY tanggal_aktifasi DESC NULLS LAST, trx DESC LIMIT 50
+      `, [bulan]),
+
+      pool.query(`
+        SELECT id_outlet, nama_pemilik, upline, tipe_outlet, nama_kota, nama_propinsi,
+               tanggal_registrasi, tanggal_aktifasi, is_active
+        FROM mgm_registrasi WHERE bulan=$1
+        ORDER BY tanggal_registrasi DESC NULLS LAST LIMIT 50
+      `, [bulan])
+    ]);
+
+    res.json({
+      availableBulan,
+      bulan,
+      summary:           summaryRes.rows[0],
+      tipe_aktivasi:     tipeAktivRes.rows,
+      tipe_registrasi:   tipeRegRes.rows,
+      top_upline_aktiv:  topUplineAktivRes.rows,
+      top_upline_reg:    topUplineRegRes.rows,
+      konversi:          konversiRes.rows,
+      provinsi:          provinsiRes.rows,
+      trend:             trendRes.rows,
+      recent_aktivasi:   recentAktivRes.rows,
+      recent_registrasi: recentRegRes.rows
+    });
+  } catch (e) {
+    console.error('mgmAnalyticsHandler error:', e);
+    res.status(500).json({ error: e.message });
+  }
+}
+
 module.exports = router;
 module.exports.syncHandler          = syncHandler;
 module.exports.speedcashSyncHandler = speedcashSyncHandler;
 module.exports.paProdukSyncHandler  = paProdukSyncHandler;
 module.exports.paArpuSyncHandler    = paArpuSyncHandler;
+module.exports.mgmSyncHandler       = mgmSyncHandler;
+module.exports.mgmAnalyticsHandler  = mgmAnalyticsHandler;

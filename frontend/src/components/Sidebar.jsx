@@ -464,6 +464,17 @@ export default function Sidebar({ onClose }) {
                 <span>Farming</span>
                 <span className="sidebar-warroom-badge" style={{ background: '#10B981' }}>Nizar</span>
               </NavLink>
+              <NavLink
+                to="/war-room/mgm-pa"
+                onClick={onClose}
+                className={({ isActive }) =>
+                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                }
+              >
+                <i className="ti ti-users-group" style={{ color: '#10B981' }} aria-hidden="true" />
+                <span>MGM PA</span>
+                <span className="sidebar-warroom-badge" style={{ background: '#10B981' }}>MGM</span>
+              </NavLink>
 
             </div>
           </Accordion>

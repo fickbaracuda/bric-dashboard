@@ -248,6 +248,13 @@ export const getPAArpuAnalytics = async () => {
   return res.data;
 };
 
+/* WAR-ROOM — MGM PA */
+export const getMgmAnalytics = async (bulan) => {
+  const params = bulan ? { bulan } : {};
+  const res = await axios.get(`${API_URL}/api/warroom/mgm/analytics`, { params, headers: authHeaders() });
+  return res.data;
+};
+
 export const getDompetDigitalData = async (bulan) => {
   const res = await axios.get(`${API_URL}/api/dompetdigital`, {
     params: { bulan },
