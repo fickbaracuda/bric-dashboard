@@ -80,7 +80,7 @@ function TopUplineChart({ data, color }) {
     });
     return () => chart.destroy();
   }, [data, color]);
-  return <canvas ref={ref} style={{ height: 280 }} />;
+  return <div style={{ height: 280 }}><canvas ref={ref} /></div>;
 }
 
 // ─── Donut distribusi tipe ───────────────────────────────────────
@@ -109,7 +109,7 @@ function TipeDonut({ data, title }) {
   return (
     <div>
       <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6, color: 'var(--text-3)' }}>{title}</div>
-      <canvas ref={ref} style={{ height: 180 }} />
+      <div style={{ height: 180 }}><canvas ref={ref} /></div>
     </div>
   );
 }
@@ -139,7 +139,7 @@ function TrendChart({ data }) {
     });
     return () => chart.destroy();
   }, [data]);
-  return <canvas ref={ref} style={{ height: 220 }} />;
+  return <div style={{ height: 220 }}><canvas ref={ref} /></div>;
 }
 
 // ─── Main Page ───────────────────────────────────────────────────
