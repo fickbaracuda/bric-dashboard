@@ -189,7 +189,7 @@ export default function WarRoomMgmPa() {
   function onSearchChange(val) {
     setSearchQ(val);
     clearTimeout(searchTimer.current);
-    searchTimer.current = setTimeout(() => doSearch(val, bulan), 500);
+    searchTimer.current = setTimeout(() => doSearch(val, null), 500);
   }
 
   const GSHEET = {
