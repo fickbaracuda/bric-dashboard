@@ -3260,3 +3260,75 @@ body {
   .wrfp-tab { padding: 8px 10px; font-size: 11px; }
   .wrfp-page { padding: 0 12px 40px; }
 }
+
+/* ═══════════════════════════════════════════
+   WAR-ROOM PA PRODUK (wrpa-*)
+═══════════════════════════════════════════ */
+.wrpa-page { padding: 24px; }
+.wrpa-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 20px; flex-wrap: wrap; gap: 12px; }
+.wrpa-header-left { display: flex; align-items: center; gap: 12px; }
+.wrpa-header-title { font-size: 18px; font-weight: 700; color: var(--text-1); }
+.wrpa-header-meta { font-size: 12px; color: var(--text-3); margin-top: 2px; }
+.wrpa-header-badges { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.wrpa-period-badge { display: inline-flex; align-items: center; gap: 4px; background: #F0FDF4; border: 1px solid #86EFAC; color: #15803D; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 500; }
+.wrpa-date-badge { display: inline-flex; align-items: center; gap: 4px; background: var(--bg-card); border: 1px solid var(--border); color: var(--text-2); padding: 4px 10px; border-radius: 6px; font-size: 12px; }
+.wrpa-refresh-btn { background: none; border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; cursor: pointer; color: var(--text-3); display: flex; align-items: center; }
+.wrpa-refresh-btn:hover { border-color: #639922; color: #639922; }
+
+.wrpa-tabs { display: flex; gap: 4px; border-bottom: 2px solid var(--border); margin-bottom: 20px; flex-wrap: wrap; }
+.wrpa-tab { padding: 8px 14px; border: none; background: none; cursor: pointer; font-size: 13px; color: var(--text-3); display: flex; align-items: center; gap: 6px; border-bottom: 2px solid transparent; margin-bottom: -2px; border-radius: 4px 4px 0 0; transition: color .15s, border-color .15s; font-family: inherit; }
+.wrpa-tab:hover { color: #639922; }
+.wrpa-tab--active { color: #639922; border-bottom-color: #639922; font-weight: 600; }
+
+.wrpa-kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
+.wrpa-kpi-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
+.wrpa-kpi-label { font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px; }
+.wrpa-kpi-value { font-size: 22px; font-weight: 700; color: var(--text-1); display: flex; align-items: baseline; gap: 6px; }
+.wrpa-kpi-sub { font-size: 11px; color: var(--text-3); margin-top: 4px; display: flex; align-items: center; gap: 4px; }
+.wrpa-kpi-badge { font-size: 11px; padding: 2px 7px; border-radius: 10px; color: #fff; font-weight: 600; }
+
+.wrpa-chart-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+.wrpa-chart-title { font-size: 13px; font-weight: 600; color: var(--text-2); margin-bottom: 12px; display: flex; align-items: center; gap: 6px; }
+.wrpa-chart-box { position: relative; }
+.wrpa-charts-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+
+.wrpa-table-wrap { overflow-x: auto; }
+.wrpa-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.wrpa-table th { padding: 8px 10px; text-align: left; font-size: 11px; font-weight: 600; color: var(--text-3); text-transform: uppercase; letter-spacing: .04em; border-bottom: 1px solid var(--border); white-space: nowrap; background: var(--bg-card); }
+.wrpa-table td { padding: 7px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; color: var(--text-1); }
+.wrpa-table tr:hover td { background: #F9FFF6; }
+.wrpa-row--positive td { background: #F0FDF4 !important; }
+.wrpa-row--negative td { background: #FFF1F0 !important; }
+
+.wrpa-badge { display: inline-flex; align-items: center; gap: 3px; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; color: #fff; white-space: nowrap; }
+.wrpa-badge--bintang { background: #639922; }
+.wrpa-badge--kritis  { background: #E24B4A; }
+.wrpa-badge--stabil  { background: #9CA3AF; }
+
+.wrpa-action-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.wrpa-action-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+.wrpa-action-card-header { font-size: 13px; font-weight: 700; margin-bottom: 12px; display: flex; align-items: center; gap: 6px; }
+.wrpa-action-item { padding: 8px 10px; margin-bottom: 6px; }
+
+.wrpa-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 16px; }
+.wrpa-modal { background: var(--bg-card); border-radius: 12px; width: 100%; max-width: 680px; max-height: 85vh; overflow-y: auto; box-shadow: 0 20px 60px rgba(0,0,0,.3); }
+.wrpa-modal-header { padding: 20px 24px 0; display: flex; align-items: center; justify-content: space-between; }
+.wrpa-modal-title { font-size: 16px; font-weight: 700; color: var(--text-1); }
+.wrpa-modal-close { background: none; border: none; font-size: 20px; cursor: pointer; color: var(--text-3); padding: 4px 8px; border-radius: 4px; }
+.wrpa-modal-close:hover { color: var(--text-1); background: var(--border); }
+.wrpa-modal-body { padding: 16px 24px 24px; }
+.wrpa-modal-insight { background: #F0FDF4; border: 1px solid #86EFAC; border-radius: 8px; padding: 12px 14px; font-size: 12px; color: #166534; line-height: 1.6; margin-bottom: 16px; }
+
+.wrpa-loading, .wrpa-error, .wrpa-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 300px; gap: 12px; color: var(--text-3); font-size: 14px; }
+.wrpa-error { color: #E24B4A; }
+@keyframes wrpa-spin { to { transform: rotate(360deg); } }
+.wrpa-spin { animation: wrpa-spin .8s linear infinite; display: inline-block; }
+
+@media (max-width: 1200px) { .wrpa-kpi-grid { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 900px) {
+  .wrpa-kpi-grid { grid-template-columns: repeat(2, 1fr); }
+  .wrpa-charts-2col { grid-template-columns: 1fr; }
+  .wrpa-action-grid { grid-template-columns: 1fr; }
+  .wrpa-tab { padding: 8px 10px; font-size: 11px; }
+  .wrpa-page { padding: 16px; }
+}

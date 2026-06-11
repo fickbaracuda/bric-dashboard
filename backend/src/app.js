@@ -77,6 +77,7 @@ app.get('/api/warroom/fastpay/outlets',   requireAuth, fastpayRoutes.outletsHand
 app.post('/api/warroom/farming/sync',     farmingRoutes.syncHandler);             // token auth, no JWT
 app.get('/api/warroom/farming/analytics', requireAuth, farmingRoutes.analyticsHandler);
 app.get('/api/warroom/farming/outlets',   requireAuth, farmingRoutes.outletsHandler);
+app.post('/api/warroom/pa-produk/sync',     warroomRoutes.paProdukSyncHandler); // token auth, no JWT
 app.use('/api/warroom',        requireAuth, warroomRoutes);
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));

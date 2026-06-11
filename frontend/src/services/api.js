@@ -230,6 +230,12 @@ export const getFarmingOutlets = async (params = {}) => {
   return res.data;
 };
 
+/* WAR-ROOM — PA Produk */
+export const getPAProdukAnalytics = async (params = {}) => {
+  const res = await axios.get(`${API_URL}/api/warroom/pa-produk/analytics`, { params, headers: authHeaders() });
+  return res.data;
+};
+
 export const getDompetDigitalData = async (bulan) => {
   const res = await axios.get(`${API_URL}/api/dompetdigital`, {
     params: { bulan },

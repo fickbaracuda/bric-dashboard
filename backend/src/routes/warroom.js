@@ -488,6 +488,112 @@ router.get('/speedcash/analytics', async (req, res) => {
   }
 });
 
+/* ══════════════════════════════════════════════
+   PA PRODUK — Sync + Analytics
+══════════════════════════════════════════════ */
+
+async function paProdukSyncHandler(req, res) {
+  const { token, tanggal, periode_start, periode_end, rows } = req.body;
+  if (token !== SECRET_TOKEN) return res.status(401).json({ error: 'Unauthorized' });
+  if (!tanggal || !rows || !Array.isArray(rows)) return res.status(400).json({ error: 'tanggal + rows required' });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    let count = 0;
+    for (const r of rows) {
+      const produk = String(r.produk || '').trim();
+      if (!produk || /^total$/i.test(produk)) continue;
+      await client.query(`
+        INSERT INTO pa_produk_snapshot
+          (tanggal, periode_start, periode_end, produk,
+           mat_apr, trx_apr, rev_apr,
+           mat_mei, trx_mei, rev_mei,
+           mat_jun, trx_jun, rev_jun, synced_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW())
+        ON CONFLICT (tanggal, produk) DO UPDATE SET
+          periode_start=EXCLUDED.periode_start, periode_end=EXCLUDED.periode_end,
+          mat_apr=EXCLUDED.mat_apr, trx_apr=EXCLUDED.trx_apr, rev_apr=EXCLUDED.rev_apr,
+          mat_mei=EXCLUDED.mat_mei, trx_mei=EXCLUDED.trx_mei, rev_mei=EXCLUDED.rev_mei,
+          mat_jun=EXCLUDED.mat_jun, trx_jun=EXCLUDED.trx_jun, rev_jun=EXCLUDED.rev_jun,
+          synced_at=NOW()
+      `, [
+        tanggal, periode_start || tanggal, periode_end || tanggal, produk,
+        r.mat_apr || 0, r.trx_apr || 0, r.rev_apr || 0,
+        r.mat_mei || 0, r.trx_mei || 0, r.rev_mei || 0,
+        r.mat_jun || 0, r.trx_jun || 0, r.rev_jun || 0,
+      ]);
+      count++;
+    }
+    await client.query('COMMIT');
+    res.json({ success: true, rows: count, tanggal });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    console.error('pa-produk sync error:', e.message);
+    res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+}
+
+router.post('/pa-produk/sync', paProdukSyncHandler);
+
+router.get('/pa-produk/analytics', async (req, res) => {
+  try {
+    const latestRes = await pool.query(
+      'SELECT MAX(tanggal) AS t FROM pa_produk_snapshot'
+    );
+    const tanggal = latestRes.rows[0]?.t;
+    if (!tanggal) return res.json({ meta: null, total: {}, data: [] });
+
+    const [metaRes, totalRes, dataRes] = await Promise.all([
+      pool.query(
+        'SELECT tanggal, periode_start, periode_end FROM pa_produk_snapshot WHERE tanggal=$1 LIMIT 1',
+        [tanggal]
+      ),
+      pool.query(`
+        SELECT
+          SUM(mat_apr) AS mat_apr, SUM(trx_apr) AS trx_apr, SUM(rev_apr) AS rev_apr,
+          SUM(mat_mei) AS mat_mei, SUM(trx_mei) AS trx_mei, SUM(rev_mei) AS rev_mei,
+          SUM(mat_jun) AS mat_jun, SUM(trx_jun) AS trx_jun, SUM(rev_jun) AS rev_jun
+        FROM pa_produk_snapshot WHERE tanggal=$1
+      `, [tanggal]),
+      pool.query(`
+        SELECT
+          produk,
+          mat_apr, trx_apr, rev_apr,
+          mat_mei, trx_mei, rev_mei,
+          mat_jun, trx_jun, rev_jun,
+          (trx_jun - trx_mei) AS dev_trx_mei_jun,
+          (rev_jun - rev_mei) AS dev_rev_mei_jun,
+          CASE WHEN trx_mei > 0
+            THEN ROUND(((trx_jun - trx_mei)::numeric / trx_mei * 100), 1)
+            ELSE NULL END AS pct_trx_growth,
+          CASE WHEN rev_mei > 0
+            THEN ROUND(((rev_jun - rev_mei)::numeric / rev_mei * 100), 1)
+            ELSE NULL END AS pct_rev_growth,
+          CASE WHEN trx_jun > 0 THEN ROUND(rev_jun::numeric / trx_jun) ELSE 0 END AS arpt_jun,
+          CASE WHEN trx_mei > 0 THEN ROUND(rev_mei::numeric / trx_mei) ELSE 0 END AS arpt_mei,
+          CASE WHEN trx_apr > 0 THEN ROUND(rev_apr::numeric / trx_apr) ELSE 0 END AS arpt_apr
+        FROM pa_produk_snapshot
+        WHERE tanggal=$1
+        ORDER BY rev_jun DESC
+      `, [tanggal]),
+    ]);
+
+    const meta  = metaRes.rows[0] || { tanggal, periode_start: tanggal, periode_end: tanggal };
+    const total = totalRes.rows[0] || {};
+    // cast bigint strings to numbers
+    for (const k of Object.keys(total)) total[k] = Number(total[k]) || 0;
+
+    res.json({ meta, total, data: dataRes.rows });
+  } catch (e) {
+    console.error('pa-produk analytics error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 module.exports = router;
 module.exports.syncHandler          = syncHandler;
 module.exports.speedcashSyncHandler = speedcashSyncHandler;
+module.exports.paProdukSyncHandler  = paProdukSyncHandler;
