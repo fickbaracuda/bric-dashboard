@@ -580,6 +580,18 @@ export default function Sidebar({ onClose }) {
           </Accordion>
         </div>
 
+        {/* Server Monitor (admin only) */}
+        {user?.role === 'admin' && (
+          <>
+          <div className="sidebar-menu-sep" />
+          <NavLink to="/server-monitor" onClick={onClose}
+            className={({ isActive }) => 'sidebar-link' + (isActive ? ' sidebar-link--active' : '')}>
+            <i className="ti ti-server-2" aria-hidden="true" style={{ color: '#6366F1' }} />
+            <span>Server Monitor</span>
+          </NavLink>
+          </>
+        )}
+
         {/* Kelola User (admin only) */}
         {user?.role === 'admin' && (
           <>

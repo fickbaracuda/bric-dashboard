@@ -260,6 +260,12 @@ export const searchMgmOutlet = async (q, bulan) => {
   return res.data;
 };
 
+/* System Monitor */
+export const getSystemStats = async () => {
+  const res = await axios.get(`${API_URL}/api/system/stats`, { headers: authHeaders() });
+  return res.data;
+};
+
 export const getDompetDigitalData = async (bulan) => {
   const res = await axios.get(`${API_URL}/api/dompetdigital`, {
     params: { bulan },

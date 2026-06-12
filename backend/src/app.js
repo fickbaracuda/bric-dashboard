@@ -18,6 +18,7 @@ const warroomRoutes       = require('./routes/warroom');
 const ekspedisiRoutes     = require('./routes/warroom-ekspedisi');
 const fastpayRoutes       = require('./routes/warroom-fastpay');
 const farmingRoutes       = require('./routes/warroom-farming');
+const systemRoutes        = require('./routes/system');
 const requireAuth         = require('./middleware/auth');
 
 const app  = express();
@@ -82,6 +83,8 @@ app.post('/api/warroom/pa-arpu/sync',      warroomRoutes.paArpuSyncHandler);   /
 app.post('/api/warroom/mgm/sync',          warroomRoutes.mgmSyncHandler);       // token auth, no JWT
 app.get('/api/warroom/mgm/analytics',      requireAuth, warroomRoutes.mgmAnalyticsHandler);
 app.use('/api/warroom',        requireAuth, warroomRoutes);
+
+app.use('/api/system', requireAuth, systemRoutes);
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
