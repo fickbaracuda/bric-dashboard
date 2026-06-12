@@ -15,6 +15,7 @@ import WarRoomFastpay from './pages/WarRoomFastpay';
 import WarRoomFarming from './pages/WarRoomFarming';
 import WarRoomPAProduk from './pages/WarRoomPAProduk';
 import WarRoomMgmPa from './pages/WarRoomMgmPa';
+import WarRoomDmFastpay from './pages/WarRoomDmFastpay';
 import ServerMonitor from './pages/ServerMonitor';
 import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './components/Layout';
@@ -54,6 +55,7 @@ export default function App() {
         <Route path="/war-room/farming"       element={<ProtectedRoute><WarRoomFarming /></ProtectedRoute>} />
         <Route path="/war-room/pa-produk"    element={<ProtectedRoute><WarRoomPAProduk /></ProtectedRoute>} />
         <Route path="/war-room/mgm-pa"        element={<ProtectedRoute><WarRoomMgmPa /></ProtectedRoute>} />
+        <Route path="/war-room/dm-fastpay"    element={<ProtectedRoute><WarRoomDmFastpay /></ProtectedRoute>} />
         <Route path="/server-monitor"          element={<ProtectedRoute><ServerMonitor /></ProtectedRoute>} />
         <Route path="/dashboard"  element={<ProtectedRoute><ComingSoon title="Dashboard Pencapaian" /></ProtectedRoute>} />
         <Route path="/tren"       element={<ProtectedRoute><ComingSoon title="Tren Harian" /></ProtectedRoute>} />

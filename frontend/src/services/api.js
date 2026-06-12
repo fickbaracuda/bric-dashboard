@@ -260,6 +260,13 @@ export const searchMgmOutlet = async (q, bulan) => {
   return res.data;
 };
 
+/* WAR-ROOM — DM Fastpay */
+export const getDmFastpayAnalytics = async (tanggal) => {
+  const params = tanggal ? { tanggal } : {};
+  const res = await axios.get(`${API_URL}/api/warroom/dm-fastpay/analytics`, { params, headers: authHeaders() });
+  return res.data;
+};
+
 /* System Monitor */
 export const getSystemStats = async () => {
   const res = await axios.get(`${API_URL}/api/system/stats`, { headers: authHeaders() });

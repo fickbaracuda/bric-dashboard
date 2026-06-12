@@ -18,6 +18,7 @@ const warroomRoutes       = require('./routes/warroom');
 const ekspedisiRoutes     = require('./routes/warroom-ekspedisi');
 const fastpayRoutes       = require('./routes/warroom-fastpay');
 const farmingRoutes       = require('./routes/warroom-farming');
+const dmFastpayRoutes     = require('./routes/warroom-dm-fastpay');
 const systemRoutes        = require('./routes/system');
 const requireAuth         = require('./middleware/auth');
 
@@ -82,6 +83,8 @@ app.post('/api/warroom/pa-produk/sync',     warroomRoutes.paProdukSyncHandler); 
 app.post('/api/warroom/pa-arpu/sync',      warroomRoutes.paArpuSyncHandler);   // token auth, no JWT
 app.post('/api/warroom/mgm/sync',          warroomRoutes.mgmSyncHandler);       // token auth, no JWT
 app.get('/api/warroom/mgm/analytics',      requireAuth, warroomRoutes.mgmAnalyticsHandler);
+app.post('/api/warroom/dm-fastpay/sync',     dmFastpayRoutes.syncHandler);      // token auth, no JWT
+app.get('/api/warroom/dm-fastpay/analytics', requireAuth, dmFastpayRoutes.analyticsHandler);
 app.use('/api/warroom',        requireAuth, warroomRoutes);
 
 app.use('/api/system', requireAuth, systemRoutes);
