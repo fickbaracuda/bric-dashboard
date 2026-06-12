@@ -72,32 +72,35 @@ export default function WarRoomDmFastpay() {
 
   return (
     <Layout>
-      <div className="wr-page">
-        <div className="wr-header" style={{ borderColor: COLOR }}>
-          <div className="wr-header-left">
-            <div className="wr-badge" style={{ background: COLOR }}>DM</div>
+      <div className="wrfp-page">
+        <div className="wrfp-header">
+          <div className="wrfp-header-left">
+            <i className="ti ti-speakerphone" style={{ color: COLOR, fontSize: 22 }} />
             <div>
-              <div className="wr-title">WAR ROOM — DM Fastpay</div>
-              <div className="wr-subtitle">Perbandingan DIRECT: April · Mei · Juni</div>
+              <div className="wrfp-header-title">WAR-ROOM DM FASTPAY</div>
+              <div className="wrfp-header-meta">Perbandingan DIRECT: April · Mei · Juni</div>
             </div>
           </div>
-          {list.length > 1 && (
-            <select
-              className="wr-date-select"
-              value={selectedTgl || (list[0] ? (typeof list[0] === 'string' ? list[0] : new Date(list[0]).toISOString().slice(0,10)) : '')}
-              onChange={e => setSelectedTgl(e.target.value || null)}
-            >
-              {list.map(t => {
-                const s = typeof t === 'string' ? t : new Date(t).toISOString().slice(0, 10);
-                return <option key={s} value={s}>{s}</option>;
-              })}
-            </select>
-          )}
+          <div className="wrfp-header-badges">
+            <span className="wrfp-badge" style={{ background: COLOR }}>DM</span>
+            {list.length > 1 && (
+              <select
+                className="wrfp-select"
+                value={selectedTgl || (list[0] ? (typeof list[0] === 'string' ? list[0] : new Date(list[0]).toISOString().slice(0,10)) : '')}
+                onChange={e => setSelectedTgl(e.target.value || null)}
+              >
+                {list.map(t => {
+                  const s = typeof t === 'string' ? t : new Date(t).toISOString().slice(0, 10);
+                  return <option key={s} value={s}>{s}</option>;
+                })}
+              </select>
+            )}
+          </div>
         </div>
 
         {loading && (
           <div className="wrfp-loading">
-            <i className="ti ti-loader-2" /> Memuat data...
+            <i className="ti ti-loader-2 wrfp-spin" /> Memuat data...
           </div>
         )}
 
@@ -108,15 +111,15 @@ export default function WarRoomDmFastpay() {
         )}
 
         {!loading && !error && !d && (
-          <div className="empty-state" style={{ marginTop: 60 }}>
-            <i className="ti ti-speakerphone" style={{ fontSize: 48, color: COLOR, display: 'block', marginBottom: 12 }} />
-            <div className="empty-title">Belum ada data</div>
-            <div className="empty-sub">Sync dari Apps Script belum berjalan</div>
+          <div className="wrfp-empty">
+            <i className="ti ti-speakerphone" style={{ color: COLOR }} />
+            <div>Belum ada data</div>
+            <div style={{ fontSize: 12, color: 'var(--text-3)' }}>Sync dari Apps Script belum berjalan</div>
           </div>
         )}
 
         {!loading && !error && d && (
-          <div style={{ overflowX: 'auto', marginTop: 16 }}>
+          <div style={{ overflowX: 'auto' }}>
             <table className="wrdm-table">
               <thead>
                 <tr>
@@ -163,3 +166,4 @@ export default function WarRoomDmFastpay() {
     </Layout>
   );
 }
+
