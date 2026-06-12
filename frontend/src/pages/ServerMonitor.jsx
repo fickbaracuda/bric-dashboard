@@ -209,7 +209,10 @@ export default function ServerMonitor() {
               <div className="wrd-chart-card">
                 <div className="wrd-chart-head"><span className="wrd-chart-title">Node.js Process</span></div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: '4px 0' }}>
-                  <Gauge value={nodePct} label="Heap Used" sub={`${fmtBytes(sv.node_heap_used)} / ${fmtBytes(sv.node_heap_total)}`} color={COLOR} />
+                  <Gauge value={sv.node_heap_used} max={sv.mem_total}
+                    label="Heap vs RAM Server"
+                    sub={`${fmtBytes(sv.node_heap_used)} heap / ${fmtBytes(sv.node_heap_total)} dialokasikan V8 · normal jika < heap_total`}
+                    color={COLOR} />
                   <Gauge value={pct(sv.node_rss, sv.mem_total)} label="RSS (total memory proses)" sub={fmtBytes(sv.node_rss)} color="#8B5CF6" />
                 </div>
                 <div style={{ marginTop: 20, display: 'flex', flexDirection: 'column', gap: 8 }}>
