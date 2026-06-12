@@ -7,6 +7,8 @@ function n(v) {
   const num = Number(v);
   return isNaN(num) ? 0 : num;
 }
+// integer columns — round to avoid "invalid input syntax for type integer" from sheet formulas
+function ni(v) { return Math.round(n(v)); }
 
 /* ── POST /api/warroom/dm-fastpay/sync ── token auth, no JWT */
 async function syncHandler(req, res) {
@@ -69,23 +71,23 @@ async function syncHandler(req, res) {
     `, [
       tanggal,
       n(data.rev_target),    n(data.rev_actual),    n(data.rev_progress),
-      n(data.nmat_target),   n(data.nmat_actual),   n(data.nmat_progress),
-      n(data.app_google_budget), n(data.app_google_impression), n(data.app_google_cpm),
-      n(data.app_google_install), n(data.app_google_cpi),
-      n(data.app_tiktok_budget), n(data.app_tiktok_impression), n(data.app_tiktok_cpm),
-      n(data.app_tiktok_install), n(data.app_tiktok_cpi),
-      n(data.ret_google_budget), n(data.ret_google_impression), n(data.ret_google_cpm),
-      n(data.ret_google_action), n(data.ret_google_cpa),
-      n(data.ret_tiktok_budget), n(data.ret_tiktok_impression), n(data.ret_tiktok_cpm),
-      n(data.ret_tiktok_action), n(data.ret_tiktok_cpa),
+      ni(data.nmat_target),  ni(data.nmat_actual),  n(data.nmat_progress),
+      n(data.app_google_budget), ni(data.app_google_impression), n(data.app_google_cpm),
+      ni(data.app_google_install), n(data.app_google_cpi),
+      n(data.app_tiktok_budget), ni(data.app_tiktok_impression), n(data.app_tiktok_cpm),
+      ni(data.app_tiktok_install), n(data.app_tiktok_cpi),
+      n(data.ret_google_budget), ni(data.ret_google_impression), n(data.ret_google_cpm),
+      ni(data.ret_google_action), n(data.ret_google_cpa),
+      n(data.ret_tiktok_budget), ni(data.ret_tiktok_impression), n(data.ret_tiktok_cpm),
+      ni(data.ret_tiktok_action), n(data.ret_tiktok_cpa),
       n(data.brand_target),  n(data.brand_actual),  n(data.brand_progress),
-      n(data.reg_direct),    n(data.reg_direct_cpa),
-      n(data.akt_direct),    n(data.akt_direct_cpa), n(data.konversi),
-      n(data.nmat_jawa_target), n(data.nmat_jawa_actual), n(data.nmat_jawa_progress),
+      ni(data.reg_direct),   n(data.reg_direct_cpa),
+      ni(data.akt_direct),   n(data.akt_direct_cpa), n(data.konversi),
+      ni(data.nmat_jawa_target), ni(data.nmat_jawa_actual), n(data.nmat_jawa_progress),
       n(data.roi),           n(data.rev_trx_direct),
-      n(data.meta_budget),   n(data.meta_impression), n(data.meta_cpm),
-      n(data.meta_klik),     n(data.meta_hasil),     n(data.meta_biaya_hasil),
-      n(data.konten_official), n(data.konten_kol),   n(data.konten_paid_ads),
+      n(data.meta_budget),   ni(data.meta_impression), n(data.meta_cpm),
+      ni(data.meta_klik),    ni(data.meta_hasil),    n(data.meta_biaya_hasil),
+      ni(data.konten_official), ni(data.konten_kol), ni(data.konten_paid_ads),
     ]);
 
     res.json({ ok: true, tanggal });
