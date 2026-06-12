@@ -3070,6 +3070,19 @@ body {
 .wrfp-spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* WAR ROOM DM Fastpay — comparison table */
+.wrdm-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 720px; }
+.wrdm-th-label, .wrdm-th { padding: 10px 14px; text-align: right; font-weight: 600;
+  background: var(--bg-card); border-bottom: 2px solid var(--border); color: var(--text-2); white-space: nowrap; }
+.wrdm-th-label { text-align: left; min-width: 140px; }
+.wrdm-dev-th, .wrdm-pct-th { background: rgba(0,0,0,0.03); }
+.wrdm-row:hover td { background: var(--bg-page) !important; }
+.wrdm-row:nth-child(even) td { background: rgba(0,0,0,0.015); }
+.wrdm-td-label { padding: 9px 14px; text-align: left; font-weight: 500; color: var(--text-1);
+  border-bottom: 1px solid var(--border); white-space: nowrap; }
+.wrdm-td { padding: 9px 14px; text-align: right; color: var(--text-2);
+  border-bottom: 1px solid var(--border); white-space: nowrap; }
+
 /* Header */
 .wrfp-header {
   display: flex; align-items: center; justify-content: space-between;

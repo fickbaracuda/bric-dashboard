@@ -7,10 +7,7 @@ function n(v) {
   const num = Number(v);
   return isNaN(num) ? 0 : num;
 }
-// integer columns — round to avoid "invalid input syntax for type integer" from sheet formulas
-function ni(v) { return Math.round(n(v)); }
 
-/* ── POST /api/warroom/dm-fastpay/sync ── token auth, no JWT */
 async function syncHandler(req, res) {
   const token = req.headers['x-sync-token'] || req.body?.token;
   if (token !== SYNC_TOKEN) return res.status(401).json({ error: 'Unauthorized' });
@@ -22,72 +19,47 @@ async function syncHandler(req, res) {
     await pool.query(`
       INSERT INTO dm_fastpay_snapshot (
         tanggal,
-        rev_target, rev_actual, rev_progress,
-        nmat_target, nmat_actual, nmat_progress,
-        app_google_budget, app_google_impression, app_google_cpm, app_google_install, app_google_cpi,
-        app_tiktok_budget, app_tiktok_impression, app_tiktok_cpm, app_tiktok_install, app_tiktok_cpi,
-        ret_google_budget, ret_google_impression, ret_google_cpm, ret_google_action, ret_google_cpa,
-        ret_tiktok_budget, ret_tiktok_impression, ret_tiktok_cpm, ret_tiktok_action, ret_tiktok_cpa,
-        brand_target, brand_actual, brand_progress,
-        reg_direct, reg_direct_cpa, akt_direct, akt_direct_cpa, konversi,
-        nmat_jawa_target, nmat_jawa_actual, nmat_jawa_progress,
-        roi, rev_trx_direct,
-        meta_budget, meta_impression, meta_cpm, meta_klik, meta_hasil, meta_biaya_hasil,
-        konten_official, konten_kol, konten_paid_ads,
+        reg_apr, reg_mei, reg_jun,
+        akt_apr, akt_mei, akt_jun,
+        nmat_apr, nmat_mei, nmat_jun,
+        rev_akt_apr, rev_akt_mei, rev_akt_jun,
+        trx_apr, trx_mei, trx_jun,
+        rev_trx_apr, rev_trx_mei, rev_trx_jun,
+        budget_ads_apr, budget_ads_mei, budget_ads_jun,
+        nmat_jawa_apr, nmat_jawa_mei, nmat_jawa_jun,
+        retargeting_apr, retargeting_mei, retargeting_jun,
+        brand_exp_apr, brand_exp_mei, brand_exp_jun,
         synced_at
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
-        $18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,
-        $31,$32,$33,$34,$35,$36,$37,$38,$39,$40,
-        $41,$42,$43,$44,$45,$46,$47,$48,$49,NOW()
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
+        $11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+        $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,
+        NOW()
       )
       ON CONFLICT (tanggal) DO UPDATE SET
-        rev_target=EXCLUDED.rev_target, rev_actual=EXCLUDED.rev_actual, rev_progress=EXCLUDED.rev_progress,
-        nmat_target=EXCLUDED.nmat_target, nmat_actual=EXCLUDED.nmat_actual, nmat_progress=EXCLUDED.nmat_progress,
-        app_google_budget=EXCLUDED.app_google_budget, app_google_impression=EXCLUDED.app_google_impression,
-        app_google_cpm=EXCLUDED.app_google_cpm, app_google_install=EXCLUDED.app_google_install,
-        app_google_cpi=EXCLUDED.app_google_cpi,
-        app_tiktok_budget=EXCLUDED.app_tiktok_budget, app_tiktok_impression=EXCLUDED.app_tiktok_impression,
-        app_tiktok_cpm=EXCLUDED.app_tiktok_cpm, app_tiktok_install=EXCLUDED.app_tiktok_install,
-        app_tiktok_cpi=EXCLUDED.app_tiktok_cpi,
-        ret_google_budget=EXCLUDED.ret_google_budget, ret_google_impression=EXCLUDED.ret_google_impression,
-        ret_google_cpm=EXCLUDED.ret_google_cpm, ret_google_action=EXCLUDED.ret_google_action,
-        ret_google_cpa=EXCLUDED.ret_google_cpa,
-        ret_tiktok_budget=EXCLUDED.ret_tiktok_budget, ret_tiktok_impression=EXCLUDED.ret_tiktok_impression,
-        ret_tiktok_cpm=EXCLUDED.ret_tiktok_cpm, ret_tiktok_action=EXCLUDED.ret_tiktok_action,
-        ret_tiktok_cpa=EXCLUDED.ret_tiktok_cpa,
-        brand_target=EXCLUDED.brand_target, brand_actual=EXCLUDED.brand_actual, brand_progress=EXCLUDED.brand_progress,
-        reg_direct=EXCLUDED.reg_direct, reg_direct_cpa=EXCLUDED.reg_direct_cpa,
-        akt_direct=EXCLUDED.akt_direct, akt_direct_cpa=EXCLUDED.akt_direct_cpa, konversi=EXCLUDED.konversi,
-        nmat_jawa_target=EXCLUDED.nmat_jawa_target, nmat_jawa_actual=EXCLUDED.nmat_jawa_actual,
-        nmat_jawa_progress=EXCLUDED.nmat_jawa_progress,
-        roi=EXCLUDED.roi, rev_trx_direct=EXCLUDED.rev_trx_direct,
-        meta_budget=EXCLUDED.meta_budget, meta_impression=EXCLUDED.meta_impression,
-        meta_cpm=EXCLUDED.meta_cpm, meta_klik=EXCLUDED.meta_klik,
-        meta_hasil=EXCLUDED.meta_hasil, meta_biaya_hasil=EXCLUDED.meta_biaya_hasil,
-        konten_official=EXCLUDED.konten_official, konten_kol=EXCLUDED.konten_kol,
-        konten_paid_ads=EXCLUDED.konten_paid_ads,
+        reg_apr=EXCLUDED.reg_apr, reg_mei=EXCLUDED.reg_mei, reg_jun=EXCLUDED.reg_jun,
+        akt_apr=EXCLUDED.akt_apr, akt_mei=EXCLUDED.akt_mei, akt_jun=EXCLUDED.akt_jun,
+        nmat_apr=EXCLUDED.nmat_apr, nmat_mei=EXCLUDED.nmat_mei, nmat_jun=EXCLUDED.nmat_jun,
+        rev_akt_apr=EXCLUDED.rev_akt_apr, rev_akt_mei=EXCLUDED.rev_akt_mei, rev_akt_jun=EXCLUDED.rev_akt_jun,
+        trx_apr=EXCLUDED.trx_apr, trx_mei=EXCLUDED.trx_mei, trx_jun=EXCLUDED.trx_jun,
+        rev_trx_apr=EXCLUDED.rev_trx_apr, rev_trx_mei=EXCLUDED.rev_trx_mei, rev_trx_jun=EXCLUDED.rev_trx_jun,
+        budget_ads_apr=EXCLUDED.budget_ads_apr, budget_ads_mei=EXCLUDED.budget_ads_mei, budget_ads_jun=EXCLUDED.budget_ads_jun,
+        nmat_jawa_apr=EXCLUDED.nmat_jawa_apr, nmat_jawa_mei=EXCLUDED.nmat_jawa_mei, nmat_jawa_jun=EXCLUDED.nmat_jawa_jun,
+        retargeting_apr=EXCLUDED.retargeting_apr, retargeting_mei=EXCLUDED.retargeting_mei, retargeting_jun=EXCLUDED.retargeting_jun,
+        brand_exp_apr=EXCLUDED.brand_exp_apr, brand_exp_mei=EXCLUDED.brand_exp_mei, brand_exp_jun=EXCLUDED.brand_exp_jun,
         synced_at=NOW()
     `, [
       tanggal,
-      n(data.rev_target),    n(data.rev_actual),    n(data.rev_progress),
-      ni(data.nmat_target),  ni(data.nmat_actual),  n(data.nmat_progress),
-      n(data.app_google_budget), ni(data.app_google_impression), n(data.app_google_cpm),
-      ni(data.app_google_install), n(data.app_google_cpi),
-      n(data.app_tiktok_budget), ni(data.app_tiktok_impression), n(data.app_tiktok_cpm),
-      ni(data.app_tiktok_install), n(data.app_tiktok_cpi),
-      n(data.ret_google_budget), ni(data.ret_google_impression), n(data.ret_google_cpm),
-      ni(data.ret_google_action), n(data.ret_google_cpa),
-      n(data.ret_tiktok_budget), ni(data.ret_tiktok_impression), n(data.ret_tiktok_cpm),
-      ni(data.ret_tiktok_action), n(data.ret_tiktok_cpa),
-      n(data.brand_target),  n(data.brand_actual),  n(data.brand_progress),
-      ni(data.reg_direct),   n(data.reg_direct_cpa),
-      ni(data.akt_direct),   n(data.akt_direct_cpa), n(data.konversi),
-      ni(data.nmat_jawa_target), ni(data.nmat_jawa_actual), n(data.nmat_jawa_progress),
-      n(data.roi),           n(data.rev_trx_direct),
-      n(data.meta_budget),   ni(data.meta_impression), n(data.meta_cpm),
-      ni(data.meta_klik),    ni(data.meta_hasil),    n(data.meta_biaya_hasil),
-      ni(data.konten_official), ni(data.konten_kol), ni(data.konten_paid_ads),
+      n(data.reg_apr),  n(data.reg_mei),  n(data.reg_jun),
+      n(data.akt_apr),  n(data.akt_mei),  n(data.akt_jun),
+      n(data.nmat_apr), n(data.nmat_mei), n(data.nmat_jun),
+      n(data.rev_akt_apr), n(data.rev_akt_mei), n(data.rev_akt_jun),
+      n(data.trx_apr),  n(data.trx_mei),  n(data.trx_jun),
+      n(data.rev_trx_apr), n(data.rev_trx_mei), n(data.rev_trx_jun),
+      n(data.budget_ads_apr), n(data.budget_ads_mei), n(data.budget_ads_jun),
+      n(data.nmat_jawa_apr), n(data.nmat_jawa_mei), n(data.nmat_jawa_jun),
+      n(data.retargeting_apr), n(data.retargeting_mei), n(data.retargeting_jun),
+      n(data.brand_exp_apr), n(data.brand_exp_mei), n(data.brand_exp_jun),
     ]);
 
     res.json({ ok: true, tanggal });
@@ -97,7 +69,6 @@ async function syncHandler(req, res) {
   }
 }
 
-/* ── GET /api/warroom/dm-fastpay/analytics ── */
 async function analyticsHandler(req, res) {
   try {
     const { tanggal } = req.query;
