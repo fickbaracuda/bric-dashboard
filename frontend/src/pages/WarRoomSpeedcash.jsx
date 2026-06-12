@@ -24,6 +24,17 @@ function fmtPct(num, den) {
 function fmtSign(n) { const v = Number(n) || 0; return v >= 0 ? `+${fmtNum(v)}` : fmtNum(v); }
 function fmtSignRp(n) { const v = Number(n) || 0; return v >= 0 ? `+${fmtRp(v)}` : fmtRp(v); }
 
+function NoHpLink({ no_hp }) {
+  if (!no_hp) return <span style={{ color: 'var(--text-4)' }}>–</span>;
+  const clean = String(no_hp).replace(/\D/g, '');
+  return (
+    <a href={`https://wa.me/${clean}`} target="_blank" rel="noreferrer"
+      style={{ color: '#25D366', fontSize: 12, textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 3, whiteSpace: 'nowrap' }}>
+      <i className="ti ti-brand-whatsapp" style={{ fontSize: 13 }} />{no_hp}
+    </a>
+  );
+}
+
 /* ═══════════════════════════════════════
    BUSINESS LOGIC
 ═══════════════════════════════════════ */
@@ -400,7 +411,7 @@ function ExecutiveSummaryTab({ data, tanggal }) {
           <table className="wr-table">
             <thead>
               <tr>
-                <th>#</th><th>ID Outlet</th><th>Tgl Reg</th>
+                <th>#</th><th>ID Outlet</th><th>Nama</th><th>No HP</th><th>Tgl Reg</th>
                 <th style={{ textAlign: 'right' }}>TRX Mei</th>
                 <th style={{ textAlign: 'right' }}>TRX Jun</th>
                 <th style={{ textAlign: 'right' }}>Margin Jun</th>
@@ -413,6 +424,8 @@ function ExecutiveSummaryTab({ data, tanggal }) {
                 <tr key={r.id_outlet}>
                   <td style={{ color: 'var(--text-4)' }}>{i + 1}</td>
                   <td><b>{r.id_outlet}</b></td>
+                  <td style={{ fontSize: 12, maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.nama || '–'}</td>
+                  <td><NoHpLink no_hp={r.no_hp} /></td>
                   <td style={{ color: 'var(--text-3)' }}>{fmtDate(r.tgl_reg)}</td>
                   <td style={{ textAlign: 'right' }}>{fmtNum(r.trx_mei)}</td>
                   <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmtNum(r.trx_jun)}</td>
@@ -454,7 +467,10 @@ function GrowthChurnTab({ data, tanggal }) {
   const filteredRows = useMemo(() => {
     let rows = data.growth_table || [];
     if (statusFilter !== 'all') rows = rows.filter(r => r.growth_status === statusFilter);
-    if (search) rows = rows.filter(r => r.id_outlet?.toLowerCase().includes(search.toLowerCase()));
+    if (search) {
+      const q = search.toLowerCase();
+      rows = rows.filter(r => r.id_outlet?.toLowerCase().includes(q) || r.nama?.toLowerCase().includes(q));
+    }
     return rows;
   }, [data.growth_table, statusFilter, search]);
 
@@ -504,7 +520,7 @@ function GrowthChurnTab({ data, tanggal }) {
           </button>
         }>
         <div className="wrd-filter-row">
-          <input className="wrd-search" placeholder="Cari ID Outlet…" value={search} onChange={e => setSearch(e.target.value)} />
+          <input className="wrd-search" placeholder="Cari ID Outlet / Nama…" value={search} onChange={e => setSearch(e.target.value)} />
           <div className="wr-filter-tabs">
             {['all', 'growing', 'declining', 'new_active', 'churned', 'stable'].map(f => (
               <button key={f} className={`wr-filter-tab${statusFilter === f ? ' active' : ''}`}
@@ -519,7 +535,7 @@ function GrowthChurnTab({ data, tanggal }) {
           <table className="wr-table">
             <thead>
               <tr>
-                <th>#</th><th>ID Outlet</th><th>Tgl Reg</th>
+                <th>#</th><th>ID Outlet</th><th>Nama</th><th>No HP</th><th>Tgl Reg</th>
                 <th style={{ textAlign: 'right' }}>TRX Mei</th>
                 <th style={{ textAlign: 'right' }}>TRX Juni</th>
                 <th style={{ textAlign: 'right' }}>DEV TRX</th>
@@ -534,6 +550,8 @@ function GrowthChurnTab({ data, tanggal }) {
                 <tr key={r.id_outlet + i} className="wr-tr-clickable">
                   <td style={{ color: 'var(--text-4)' }}>{i + 1}</td>
                   <td><b>{r.id_outlet}</b></td>
+                  <td style={{ fontSize: 12, maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.nama || '–'}</td>
+                  <td><NoHpLink no_hp={r.no_hp} /></td>
                   <td style={{ color: 'var(--text-3)' }}>{fmtDate(r.tgl_reg)}</td>
                   <td style={{ textAlign: 'right' }}>{fmtNum(r.trx_mei)}</td>
                   <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmtNum(r.trx_jun)}</td>
@@ -714,7 +732,10 @@ function MarginAnalysisTab({ data, tanggal }) {
     let rows = [...(data.top20_margin_jun || []), ...(data.top20_dev_margin || []), ...(data.bot20_dev_margin || [])];
     const seen = new Set();
     rows = rows.filter(r => { if (seen.has(r.id_outlet)) return false; seen.add(r.id_outlet); return true; });
-    if (search) rows = rows.filter(r => r.id_outlet?.toLowerCase().includes(search.toLowerCase()));
+    if (search) {
+      const q = search.toLowerCase();
+      rows = rows.filter(r => r.id_outlet?.toLowerCase().includes(q) || r.nama?.toLowerCase().includes(q));
+    }
     return rows;
   }, [data, search]);
 
@@ -758,14 +779,14 @@ function MarginAnalysisTab({ data, tanggal }) {
           </button>
         }>
         <div className="wrd-filter-row">
-          <input className="wrd-search" placeholder="Cari ID Outlet…" value={search} onChange={e => setSearch(e.target.value)} />
+          <input className="wrd-search" placeholder="Cari ID Outlet / Nama…" value={search} onChange={e => setSearch(e.target.value)} />
           <span className="wr-count">{filteredRows.length} outlet</span>
         </div>
         <div className="wr-table-wrap">
           <table className="wr-table">
             <thead>
               <tr>
-                <th>#</th><th>ID Outlet</th>
+                <th>#</th><th>ID Outlet</th><th>Nama</th><th>No HP</th>
                 <th style={{ textAlign: 'right' }}>TRX Juni</th>
                 <th style={{ textAlign: 'right' }}>Margin Juni</th>
                 <th style={{ textAlign: 'right' }}>Avg Margin/TRX</th>
@@ -778,6 +799,8 @@ function MarginAnalysisTab({ data, tanggal }) {
                 <tr key={r.id_outlet + i} className="wr-tr-clickable">
                   <td style={{ color: 'var(--text-4)' }}>{i + 1}</td>
                   <td><b>{r.id_outlet}</b></td>
+                  <td style={{ fontSize: 12, maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.nama || '–'}</td>
+                  <td><NoHpLink no_hp={r.no_hp} /></td>
                   <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmtNum(r.trx_jun)}</td>
                   <td style={{ textAlign: 'right', fontWeight: 700, color: '#059669' }}>{fmtRp(r.margin_jun)}</td>
                   <td style={{ textAlign: 'right' }}>{fmtRp(r.avg_margin_per_trx)}</td>
@@ -1029,6 +1052,8 @@ function ActionCenterTab({ data, tanggal }) {
               <tr>
                 <th>Prioritas</th>
                 <th>ID Outlet</th>
+                <th>Nama</th>
+                <th>No HP</th>
                 <th>Segmen</th>
                 <th>Problem / Opportunity</th>
                 <th>Suggested Action</th>
@@ -1049,6 +1074,8 @@ function ActionCenterTab({ data, tanggal }) {
                     </span>
                   </td>
                   <td><b>{r.id_outlet}</b>{r.is_outlet_baru && <span className="pill-baru" style={{ marginLeft: 4 }}>BARU</span>}</td>
+                  <td style={{ fontSize: 12, maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.nama || '–'}</td>
+                  <td><NoHpLink no_hp={r.no_hp} /></td>
                   <td><SegmentBadge segment={r.segment} /></td>
                   <td style={{ fontSize: 11, color: 'var(--text-2)', maxWidth: 180 }}>{getProblemText(r)}</td>
                   <td style={{ fontSize: 11, color: 'var(--text-2)', maxWidth: 220 }}>{getActionText(r)}</td>

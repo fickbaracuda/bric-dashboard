@@ -177,8 +177,8 @@ async function speedcashSyncHandler(req, res) {
     await pool.query(`
       INSERT INTO speedcash_snapshot
         (tanggal, id_outlet, tgl_reg, trx_mei, margin_mei,
-         trx_jun, margin_jun, dev_trx, dev_margin, synced_at)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+         trx_jun, margin_jun, dev_trx, dev_margin, synced_at, no_hp, nama)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
       ON CONFLICT (tanggal, id_outlet) DO UPDATE SET
         tgl_reg    = EXCLUDED.tgl_reg,
         trx_mei    = EXCLUDED.trx_mei,
@@ -187,12 +187,14 @@ async function speedcashSyncHandler(req, res) {
         margin_jun = EXCLUDED.margin_jun,
         dev_trx    = EXCLUDED.dev_trx,
         dev_margin = EXCLUDED.dev_margin,
-        synced_at  = EXCLUDED.synced_at
+        synced_at  = EXCLUDED.synced_at,
+        no_hp      = EXCLUDED.no_hp,
+        nama       = EXCLUDED.nama
     `, [tanggal, r.id_outlet, r.tgl_reg || null,
         r.trx_mei, r.margin_mei,
         r.trx_jun, r.margin_jun,
         r.dev_trx, r.dev_margin,
-        synced_at]);
+        synced_at, r.no_hp || null, r.nama || null]);
     count++;
   }
   res.json({ success: true, rows: count, tanggal });
@@ -401,28 +403,28 @@ router.get('/speedcash/analytics', async (req, res) => {
       // 2. Growth counts
       pool.query(`SELECT ${growSQL}, COUNT(*) AS cnt FROM speedcash_snapshot WHERE tanggal=$1 GROUP BY 1`, [tanggal]),
       // 3. Top 10 TRX Jun
-      pool.query(`SELECT id_outlet,trx_mei,trx_jun,margin_mei,margin_jun,dev_trx,dev_margin FROM speedcash_snapshot WHERE tanggal=$1 ORDER BY trx_jun DESC NULLS LAST LIMIT 10`, [tanggal]),
+      pool.query(`SELECT id_outlet,tgl_reg,trx_mei,trx_jun,margin_mei,margin_jun,dev_trx,dev_margin,no_hp,nama FROM speedcash_snapshot WHERE tanggal=$1 ORDER BY trx_jun DESC NULLS LAST LIMIT 10`, [tanggal]),
       // 4. Top 10 Margin Jun
-      pool.query(`SELECT id_outlet,trx_mei,trx_jun,margin_mei,margin_jun,dev_trx,dev_margin FROM speedcash_snapshot WHERE tanggal=$1 ORDER BY margin_jun DESC NULLS LAST LIMIT 10`, [tanggal]),
+      pool.query(`SELECT id_outlet,tgl_reg,trx_mei,trx_jun,margin_mei,margin_jun,dev_trx,dev_margin,no_hp,nama FROM speedcash_snapshot WHERE tanggal=$1 ORDER BY margin_jun DESC NULLS LAST LIMIT 10`, [tanggal]),
       // 5. Top 20 DEV TRX positive
-      pool.query(`SELECT id_outlet,trx_mei,trx_jun,dev_trx,dev_margin FROM speedcash_snapshot WHERE tanggal=$1 AND dev_trx > 0 ORDER BY dev_trx DESC LIMIT 20`, [tanggal]),
+      pool.query(`SELECT id_outlet,trx_mei,trx_jun,dev_trx,dev_margin,no_hp,nama FROM speedcash_snapshot WHERE tanggal=$1 AND dev_trx > 0 ORDER BY dev_trx DESC LIMIT 20`, [tanggal]),
       // 6. Top 20 DEV TRX negative
-      pool.query(`SELECT id_outlet,trx_mei,trx_jun,dev_trx,dev_margin FROM speedcash_snapshot WHERE tanggal=$1 AND dev_trx < 0 ORDER BY dev_trx ASC LIMIT 20`, [tanggal]),
+      pool.query(`SELECT id_outlet,trx_mei,trx_jun,dev_trx,dev_margin,no_hp,nama FROM speedcash_snapshot WHERE tanggal=$1 AND dev_trx < 0 ORDER BY dev_trx ASC LIMIT 20`, [tanggal]),
       // 7. Top 20 DEV Margin positive
-      pool.query(`SELECT id_outlet,trx_mei,trx_jun,dev_trx,dev_margin,margin_mei,margin_jun FROM speedcash_snapshot WHERE tanggal=$1 AND dev_margin > 0 ORDER BY dev_margin DESC LIMIT 20`, [tanggal]),
+      pool.query(`SELECT id_outlet,trx_mei,trx_jun,dev_trx,dev_margin,margin_mei,margin_jun,no_hp,nama FROM speedcash_snapshot WHERE tanggal=$1 AND dev_margin > 0 ORDER BY dev_margin DESC LIMIT 20`, [tanggal]),
       // 8. Top 20 DEV Margin negative
-      pool.query(`SELECT id_outlet,trx_mei,trx_jun,dev_trx,dev_margin,margin_mei,margin_jun FROM speedcash_snapshot WHERE tanggal=$1 AND dev_margin < 0 ORDER BY dev_margin ASC LIMIT 20`, [tanggal]),
+      pool.query(`SELECT id_outlet,trx_mei,trx_jun,dev_trx,dev_margin,margin_mei,margin_jun,no_hp,nama FROM speedcash_snapshot WHERE tanggal=$1 AND dev_margin < 0 ORDER BY dev_margin ASC LIMIT 20`, [tanggal]),
       // 9. Growth table (union of categories)
       pool.query(`
-        (SELECT id_outlet,tgl_reg,trx_mei,trx_jun,margin_mei,margin_jun,dev_trx,dev_margin,'growing'    AS growth_status FROM speedcash_snapshot WHERE tanggal=$1 AND trx_jun > trx_mei ORDER BY dev_trx DESC LIMIT 150)
+        (SELECT id_outlet,tgl_reg,trx_mei,trx_jun,margin_mei,margin_jun,dev_trx,dev_margin,no_hp,nama,'growing'    AS growth_status FROM speedcash_snapshot WHERE tanggal=$1 AND trx_jun > trx_mei ORDER BY dev_trx DESC LIMIT 150)
         UNION ALL
-        (SELECT id_outlet,tgl_reg,trx_mei,trx_jun,margin_mei,margin_jun,dev_trx,dev_margin,'declining'  AS growth_status FROM speedcash_snapshot WHERE tanggal=$1 AND trx_jun < trx_mei AND trx_jun > 0 ORDER BY dev_trx ASC LIMIT 150)
+        (SELECT id_outlet,tgl_reg,trx_mei,trx_jun,margin_mei,margin_jun,dev_trx,dev_margin,no_hp,nama,'declining'  AS growth_status FROM speedcash_snapshot WHERE tanggal=$1 AND trx_jun < trx_mei AND trx_jun > 0 ORDER BY dev_trx ASC LIMIT 150)
         UNION ALL
-        (SELECT id_outlet,tgl_reg,trx_mei,trx_jun,margin_mei,margin_jun,dev_trx,dev_margin,'churned'    AS growth_status FROM speedcash_snapshot WHERE tanggal=$1 AND trx_mei > 0 AND trx_jun = 0 ORDER BY trx_mei DESC LIMIT 300)
+        (SELECT id_outlet,tgl_reg,trx_mei,trx_jun,margin_mei,margin_jun,dev_trx,dev_margin,no_hp,nama,'churned'    AS growth_status FROM speedcash_snapshot WHERE tanggal=$1 AND trx_mei > 0 AND trx_jun = 0 ORDER BY trx_mei DESC LIMIT 300)
         UNION ALL
-        (SELECT id_outlet,tgl_reg,trx_mei,trx_jun,margin_mei,margin_jun,dev_trx,dev_margin,'new_active' AS growth_status FROM speedcash_snapshot WHERE tanggal=$1 AND trx_mei = 0 AND trx_jun > 0 ORDER BY trx_jun DESC LIMIT 300)
+        (SELECT id_outlet,tgl_reg,trx_mei,trx_jun,margin_mei,margin_jun,dev_trx,dev_margin,no_hp,nama,'new_active' AS growth_status FROM speedcash_snapshot WHERE tanggal=$1 AND trx_mei = 0 AND trx_jun > 0 ORDER BY trx_jun DESC LIMIT 300)
         UNION ALL
-        (SELECT id_outlet,tgl_reg,trx_mei,trx_jun,margin_mei,margin_jun,dev_trx,dev_margin,'stable'     AS growth_status FROM speedcash_snapshot WHERE tanggal=$1 AND trx_jun = trx_mei AND trx_jun > 0 LIMIT 50)
+        (SELECT id_outlet,tgl_reg,trx_mei,trx_jun,margin_mei,margin_jun,dev_trx,dev_margin,no_hp,nama,'stable'     AS growth_status FROM speedcash_snapshot WHERE tanggal=$1 AND trx_jun = trx_mei AND trx_jun > 0 LIMIT 50)
       `, [tanggal]),
       // 10. Segment counts
       pool.query(`SELECT ${segSQL}, COUNT(*) AS cnt FROM speedcash_snapshot WHERE tanggal=$1 GROUP BY 1`, [tanggal]),
@@ -431,11 +433,11 @@ router.get('/speedcash/analytics', async (req, res) => {
         CASE WHEN trx_jun > 0 THEN margin_jun/trx_jun ELSE 0 END AS avg_margin_per_trx
         FROM speedcash_snapshot WHERE tanggal=$1 AND trx_jun > 0 ORDER BY trx_jun DESC LIMIT 4000`, [tanggal]),
       // 12. Top 20 Margin Jun (margin analysis)
-      pool.query(`SELECT id_outlet,trx_jun,margin_jun,dev_margin,CASE WHEN trx_jun>0 THEN margin_jun/trx_jun ELSE 0 END AS avg_margin_per_trx,${marginStatusSQL} FROM speedcash_snapshot WHERE tanggal=$1 ORDER BY margin_jun DESC NULLS LAST LIMIT 20`, [tanggal]),
+      pool.query(`SELECT id_outlet,trx_jun,margin_jun,dev_margin,no_hp,nama,CASE WHEN trx_jun>0 THEN margin_jun/trx_jun ELSE 0 END AS avg_margin_per_trx,${marginStatusSQL} FROM speedcash_snapshot WHERE tanggal=$1 ORDER BY margin_jun DESC NULLS LAST LIMIT 20`, [tanggal]),
       // 13. Top 20 DEV Margin (positive)
-      pool.query(`SELECT id_outlet,trx_jun,margin_jun,dev_margin,CASE WHEN trx_jun>0 THEN margin_jun/trx_jun ELSE 0 END AS avg_margin_per_trx,${marginStatusSQL} FROM speedcash_snapshot WHERE tanggal=$1 AND dev_margin > 0 ORDER BY dev_margin DESC LIMIT 20`, [tanggal]),
+      pool.query(`SELECT id_outlet,trx_jun,margin_jun,dev_margin,no_hp,nama,CASE WHEN trx_jun>0 THEN margin_jun/trx_jun ELSE 0 END AS avg_margin_per_trx,${marginStatusSQL} FROM speedcash_snapshot WHERE tanggal=$1 AND dev_margin > 0 ORDER BY dev_margin DESC LIMIT 20`, [tanggal]),
       // 14. Bottom 20 DEV Margin (negative)
-      pool.query(`SELECT id_outlet,trx_jun,margin_jun,dev_margin,CASE WHEN trx_jun>0 THEN margin_jun/trx_jun ELSE 0 END AS avg_margin_per_trx,${marginStatusSQL} FROM speedcash_snapshot WHERE tanggal=$1 AND dev_margin < 0 ORDER BY dev_margin ASC LIMIT 20`, [tanggal]),
+      pool.query(`SELECT id_outlet,trx_jun,margin_jun,dev_margin,no_hp,nama,CASE WHEN trx_jun>0 THEN margin_jun/trx_jun ELSE 0 END AS avg_margin_per_trx,${marginStatusSQL} FROM speedcash_snapshot WHERE tanggal=$1 AND dev_margin < 0 ORDER BY dev_margin ASC LIMIT 20`, [tanggal]),
       // 15. Cohort by year
       pool.query(`
         SELECT EXTRACT(YEAR FROM tgl_reg)::int AS tahun_reg,
@@ -456,20 +458,20 @@ router.get('/speedcash/analytics', async (req, res) => {
         FROM speedcash_snapshot WHERE tanggal=$1 AND tgl_reg IS NOT NULL
         GROUP BY tahun_reg,bulan_reg,label ORDER BY tahun_reg,bulan_reg`, [tanggal]),
       // 17. Action: Critical Drop
-      pool.query(`SELECT id_outlet,tgl_reg,trx_mei,trx_jun,dev_trx,margin_mei,margin_jun,dev_margin,${segSQL},
+      pool.query(`SELECT id_outlet,tgl_reg,trx_mei,trx_jun,dev_trx,margin_mei,margin_jun,dev_margin,no_hp,nama,${segSQL},
         (tgl_reg IS NOT NULL AND tgl_reg >= $1::date - INTERVAL '1 month') AS is_outlet_baru
         FROM speedcash_snapshot WHERE tanggal=$1 AND dev_trx < 0 ORDER BY dev_trx ASC LIMIT 50`, [tanggal]),
       // 18. Action: High Opportunity
-      pool.query(`SELECT id_outlet,tgl_reg,trx_mei,trx_jun,dev_trx,margin_mei,margin_jun,dev_margin,${segSQL},
+      pool.query(`SELECT id_outlet,tgl_reg,trx_mei,trx_jun,dev_trx,margin_mei,margin_jun,dev_margin,no_hp,nama,${segSQL},
         (tgl_reg IS NOT NULL AND tgl_reg >= $1::date - INTERVAL '1 month') AS is_outlet_baru
         FROM speedcash_snapshot WHERE tanggal=$1 AND dev_trx > 0 AND dev_margin > 0 ORDER BY dev_margin DESC LIMIT 50`, [tanggal]),
       // 19. Action: High TRX Low Margin
-      pool.query(`SELECT id_outlet,tgl_reg,trx_mei,trx_jun,dev_trx,margin_mei,margin_jun,dev_margin,${segSQL},
+      pool.query(`SELECT id_outlet,tgl_reg,trx_mei,trx_jun,dev_trx,margin_mei,margin_jun,dev_margin,no_hp,nama,${segSQL},
         CASE WHEN trx_jun>0 THEN margin_jun/trx_jun ELSE 0 END AS avg_margin_per_trx
         FROM speedcash_snapshot WHERE tanggal=$1 AND trx_jun >= ${p.trxP75} AND margin_jun < ${p.marginP25}
         ORDER BY trx_jun DESC LIMIT 50`, [tanggal]),
       // 20. Action: Rising Stars
-      pool.query(`SELECT id_outlet,tgl_reg,trx_mei,trx_jun,dev_trx,margin_mei,margin_jun,dev_margin,${segSQL},
+      pool.query(`SELECT id_outlet,tgl_reg,trx_mei,trx_jun,dev_trx,margin_mei,margin_jun,dev_margin,no_hp,nama,${segSQL},
         (tgl_reg IS NOT NULL AND tgl_reg >= $1::date - INTERVAL '1 month') AS is_outlet_baru
         FROM speedcash_snapshot WHERE tanggal=$1 AND (trx_mei = 0 OR trx_mei < ${p.trxP25}) AND trx_jun > ${p.trxP50} AND dev_margin > 0
         ORDER BY dev_margin DESC LIMIT 50`, [tanggal]),
