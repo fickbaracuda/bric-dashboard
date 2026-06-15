@@ -453,6 +453,134 @@ function ArpuLayerTable() {
   );
 }
 
+/* ─── Sortable + filterable product table ─── */
+function ProductTable({ data, onProdukClick }) {
+  const [sortCol, setSortCol] = useState('rev_jun');
+  const [sortDir, setSortDir] = useState('desc');
+  const [filterStatus, setFilterStatus] = useState('all');
+  const [search, setSearch] = useState('');
+
+  const handleSort = col => {
+    if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortCol(col); setSortDir('desc'); }
+  };
+
+  const counts = useMemo(() => {
+    const c = { Bintang: 0, Stabil: 0, Kritis: 0 };
+    data.forEach(r => { const b = produkBadge(r); c[b.label] = (c[b.label] || 0) + 1; });
+    return c;
+  }, [data]);
+
+  const processed = useMemo(() => {
+    let rows = data.map(r => ({ ...r, _badge: produkBadge(r) }));
+    if (filterStatus !== 'all') rows = rows.filter(r => r._badge.label === filterStatus);
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      rows = rows.filter(r => r.produk.toLowerCase().includes(q));
+    }
+    rows.sort((a, b) => {
+      let av, bv;
+      if (sortCol === 'produk') {
+        return sortDir === 'asc' ? a.produk.localeCompare(b.produk) : b.produk.localeCompare(a.produk);
+      }
+      const NUM = { mat_jun:'mat_jun', trx_jun:'trx_jun', rev_jun:'rev_jun', arpt_jun:'arpt_jun',
+                    pct_trx_growth:'pct_trx_growth', pct_rev_growth:'pct_rev_growth' };
+      av = Number(a[NUM[sortCol]]) || 0;
+      bv = Number(b[NUM[sortCol]]) || 0;
+      return sortDir === 'asc' ? av - bv : bv - av;
+    });
+    return rows;
+  }, [data, sortCol, sortDir, filterStatus, search]);
+
+  const Th = ({ col, children }) => {
+    const active = sortCol === col;
+    return (
+      <th onClick={() => handleSort(col)}
+        style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+        {children}
+        <span style={{ marginLeft: 3, fontSize: 9, opacity: active ? 1 : 0.25 }}>
+          {active ? (sortDir === 'asc' ? '▲' : '▼') : '⇅'}
+        </span>
+      </th>
+    );
+  };
+
+  return (
+    <ChartCard title="Ringkasan Semua Produk — klik baris untuk detail">
+      <div style={{ display:'flex', gap:8, marginBottom:12, flexWrap:'wrap', alignItems:'center' }}>
+        <div style={{ display:'flex', gap:4, flexWrap:'wrap' }}>
+          {[
+            ['all',    `Semua (${data.length})`],
+            ['Bintang',`Bintang (${counts.Bintang})`],
+            ['Stabil', `Stabil (${counts.Stabil})`],
+            ['Kritis', `Kritis (${counts.Kritis})`],
+          ].map(([val, label]) => (
+            <button key={val} onClick={() => setFilterStatus(val)}
+              className={`wrpa-filter-btn${filterStatus===val?' wrpa-filter-btn--active':''}`}
+              style={{ fontSize:11 }}>
+              {label}
+            </button>
+          ))}
+        </div>
+        <input value={search} onChange={e => setSearch(e.target.value)}
+          placeholder="Cari produk…"
+          style={{
+            padding:'4px 10px', border:'1px solid var(--border)', borderRadius:6,
+            fontSize:12, background:'var(--bg-card)', color:'var(--text-1)',
+            outline:'none', minWidth:140,
+          }} />
+        <span style={{ fontSize:11, color:'#9CA3AF', marginLeft:'auto' }}>
+          {processed.length} produk
+          {(filterStatus !== 'all' || search) && (
+            <button onClick={() => { setFilterStatus('all'); setSearch(''); }}
+              style={{ marginLeft:6, fontSize:10, color:'#6B7280', background:'none',
+                border:'1px solid var(--border)', borderRadius:4, padding:'1px 6px', cursor:'pointer' }}>
+              Reset
+            </button>
+          )}
+        </span>
+      </div>
+      <div className="wrpa-table-wrap">
+        <table className="wrpa-table">
+          <thead><tr>
+            <Th col="produk">Produk</Th>
+            <Th col="mat_jun">MAT Jun</Th>
+            <Th col="trx_jun">TRX Jun</Th>
+            <Th col="rev_jun">Revenue Jun</Th>
+            <Th col="arpt_jun">ARPT Jun</Th>
+            <Th col="pct_trx_growth">Growth TRX</Th>
+            <Th col="pct_rev_growth">Growth Rev</Th>
+            <th>Status</th>
+          </tr></thead>
+          <tbody>
+            {processed.length === 0 ? (
+              <tr><td colSpan={8} style={{ textAlign:'center', color:'#9CA3AF', padding:20 }}>
+                Tidak ada produk yang cocok
+              </td></tr>
+            ) : processed.map((row, i) => (
+              <tr key={i} className={rowCls(row.pct_rev_growth)}
+                style={{ cursor:'pointer' }} onClick={() => onProdukClick(row)}>
+                <td style={{ fontWeight:600 }}>{row.produk}</td>
+                <td>{fmtN(row.mat_jun)}</td>
+                <td>{fmtN(row.trx_jun)}</td>
+                <td>{fmtRp(row.rev_jun)}</td>
+                <td>{fmtRp(row.arpt_jun)}</td>
+                <td style={{ color:gcColor(row.pct_trx_growth), fontWeight:600 }}>
+                  {row.pct_trx_growth != null ? fmtPct(row.pct_trx_growth) : '-'}
+                </td>
+                <td style={{ color:gcColor(row.pct_rev_growth), fontWeight:600 }}>
+                  {row.pct_rev_growth != null ? fmtPct(row.pct_rev_growth) : '-'}
+                </td>
+                <td><span className={`wrpa-badge ${row._badge.cls}`}>{row._badge.label}</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </ChartCard>
+  );
+}
+
 /* ─── Tab 0: Executive Summary ─── */
 function ExecutiveSummaryTab({ data, total, meta, stats, onProdukClick }) {
   const tid    = meta.tanggal;
@@ -480,31 +608,7 @@ function ExecutiveSummaryTab({ data, total, meta, stats, onProdukClick }) {
           <ArpuLayerTable />
         </ChartCard>
       </div>
-      <ChartCard title="Ringkasan Semua Produk — klik baris untuk detail">
-        <div className="wrpa-table-wrap">
-          <table className="wrpa-table">
-            <thead><tr>
-              <th>Produk</th><th>MAT Jun</th><th>TRX Jun</th><th>Revenue Jun</th>
-              <th>ARPT Jun</th><th>Growth TRX</th><th>Growth Rev</th><th>Status</th>
-            </tr></thead>
-            <tbody>{data.map((row,i)=>{
-              const badge=produkBadge(row);
-              return (
-                <tr key={i} className={rowCls(row.pct_rev_growth)} style={{cursor:'pointer'}} onClick={()=>onProdukClick(row)}>
-                  <td style={{fontWeight:600}}>{row.produk}</td>
-                  <td>{fmtN(row.mat_jun)}</td>
-                  <td>{fmtN(row.trx_jun)}</td>
-                  <td>{fmtRp(row.rev_jun)}</td>
-                  <td>{fmtRp(row.arpt_jun)}</td>
-                  <td style={{color:gcColor(row.pct_trx_growth),fontWeight:600}}>{row.pct_trx_growth!=null?fmtPct(row.pct_trx_growth):'-'}</td>
-                  <td style={{color:gcColor(row.pct_rev_growth),fontWeight:600}}>{row.pct_rev_growth!=null?fmtPct(row.pct_rev_growth):'-'}</td>
-                  <td><span className={`wrpa-badge ${badge.cls}`}>{badge.label}</span></td>
-                </tr>
-              );
-            })}</tbody>
-          </table>
-        </div>
-      </ChartCard>
+      <ProductTable data={data} onProdukClick={onProdukClick} />
       <InsightBox data={data} total={total} stats={stats} />
     </div>
   );
