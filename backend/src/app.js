@@ -88,7 +88,8 @@ app.post('/api/warroom/dm-fastpay/sync',     dmFastpayRoutes.syncHandler);      
 app.get('/api/warroom/dm-fastpay/analytics', requireAuth, dmFastpayRoutes.analyticsHandler);
 app.post('/api/warroom/instaqris-trx/sync',     iqTrxRoutes.syncHandler);        // token auth, no JWT
 app.get('/api/warroom/instaqris-trx/analytics', requireAuth, iqTrxRoutes.analyticsHandler);
-app.get('/api/warroom/instaqris-trx/export',    requireAuth, iqTrxRoutes.exportHandler);
+app.get('/api/warroom/instaqris-trx/export',     requireAuth, iqTrxRoutes.exportHandler);
+app.get('/api/warroom/instaqris-trx/merchants',  requireAuth, iqTrxRoutes.merchantsHandler);
 app.use('/api/warroom',        requireAuth, warroomRoutes);
 
 app.use('/api/system', requireAuth, systemRoutes);

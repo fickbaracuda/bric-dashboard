@@ -3306,6 +3306,69 @@ body {
 }
 
 /* ═══════════════════════════════════════════
+   INSTAQRIS TRX — filter/table helpers (writ-*)
+═══════════════════════════════════════════ */
+.writ-filter-bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+.writ-filter-input {
+  padding: 7px 10px; border: 1px solid var(--border); border-radius: 7px;
+  background: var(--bg-card); color: var(--text-1); font-size: 12px; min-width: 200px;
+  outline: none; transition: border .15s;
+}
+.writ-filter-input:focus { border-color: #7F77DD; }
+.writ-filter-select {
+  padding: 7px 10px; border: 1px solid var(--border); border-radius: 7px;
+  background: var(--bg-card); color: var(--text-1); font-size: 12px; cursor: pointer;
+}
+.writ-filter-badge { font-size: 11px; color: var(--text-3); padding: 0 4px; margin-left: auto; }
+.writ-filter-clear { padding: 6px 12px; border: 1px solid var(--border); border-radius: 7px; background: transparent; color: var(--text-3); font-size: 11px; cursor: pointer; }
+.writ-filter-clear:hover { border-color: #DC2626; color: #DC2626; }
+
+.writ-table-wrap { overflow-x: auto; }
+.writ-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.writ-th {
+  padding: 9px 10px; text-align: left; font-weight: 600; color: var(--text-2); font-size: 11px;
+  background: var(--bg-card); border-bottom: 2px solid var(--border);
+  white-space: nowrap; cursor: pointer; user-select: none;
+}
+.writ-th:hover { color: var(--text-1); }
+.writ-th--active { color: #7F77DD; }
+.writ-td { padding: 8px 10px; color: var(--text-2); border-bottom: 1px solid var(--border); white-space: nowrap; }
+.writ-td-name { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.writ-tr:hover .writ-td { background: var(--bg-page); }
+
+.writ-score-high { color: #059669; font-weight: 700; }
+.writ-score-mid  { color: #D97706; font-weight: 700; }
+.writ-score-low  { color: #DC2626; font-weight: 700; }
+
+.writ-pagination { display: flex; align-items: center; gap: 6px; padding: 12px 0 0; font-size: 12px; color: var(--text-3); }
+.writ-pag-btn { padding: 4px 10px; border: 1px solid var(--border); border-radius: 5px; background: var(--bg-card); color: var(--text-2); cursor: pointer; font-size: 11px; }
+.writ-pag-btn:hover:not(:disabled) { border-color: #7F77DD; color: #7F77DD; }
+.writ-pag-btn:disabled { opacity: 0.4; cursor: default; }
+.writ-pag-info { margin: 0 4px; }
+
+.writ-action-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.writ-action-panel { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 14px; }
+.writ-action-title { font-size: 13px; font-weight: 700; color: var(--text-1); margin-bottom: 10px; display: flex; align-items: center; gap: 6px; }
+.writ-action-count { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px; color: #fff; margin-left: auto; }
+.writ-action-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.writ-action-table th { padding: 7px 8px; text-align: left; font-size: 10px; font-weight: 600; color: var(--text-3); border-bottom: 1px solid var(--border); white-space: nowrap; }
+.writ-action-table td { padding: 7px 8px; color: var(--text-2); border-bottom: 1px solid var(--border); white-space: nowrap; }
+.writ-action-search { padding: 5px 8px; border: 1px solid var(--border); border-radius: 5px; background: var(--bg-page); color: var(--text-1); font-size: 11px; width: 100%; margin-bottom: 8px; }
+
+.writ-seg-card { padding: 14px; border-radius: 10px; border: 1px solid var(--border); cursor: pointer; transition: transform .12s, box-shadow .12s; }
+.writ-seg-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px #0001; }
+.writ-seg-card--active { outline: 2px solid var(--color, #7F77DD); }
+.writ-seg-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 16px; }
+
+.writ-copy-btn { padding: 4px 10px; border: 1px solid var(--border); border-radius: 5px; background: transparent; color: var(--text-3); font-size: 11px; cursor: pointer; }
+.writ-copy-btn:hover { color: #7F77DD; border-color: #7F77DD; }
+
+@media (max-width: 1000px) {
+  .writ-action-grid { grid-template-columns: 1fr; }
+  .writ-seg-grid    { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* ═══════════════════════════════════════════
    WAR-ROOM PA PRODUK (wrpa-*)
 ═══════════════════════════════════════════ */
 .wrpa-page { padding: 24px; }

@@ -281,4 +281,57 @@ async function exportHandler(req, res) {
   }
 }
 
-module.exports = { syncHandler, analyticsHandler, exportHandler };
+/* ── MERCHANTS (full list with computed fields for client-side filter/sort) ── */
+async function merchantsHandler(req, res) {
+  try {
+    const result = await pool.query(`
+      SELECT
+        merchant_id,
+        merchant_name,
+        category,
+        city,
+        province,
+        bulan,
+        TO_CHAR(qris_terbit, 'YYYY-MM-DD') AS qris_terbit,
+        total_transaction,
+        TO_CHAR(first_transaction_date, 'YYYY-MM-DD') AS first_transaction_date,
+        TO_CHAR(last_transaction_date,  'YYYY-MM-DD') AS last_transaction_date,
+        COALESCE(CURRENT_DATE - last_transaction_date::date, 9999)::int AS days_since_last_trx,
+        COALESCE(CURRENT_DATE - COALESCE(qris_terbit, first_transaction_date)::date, 0)::int AS days_since_register,
+        ROUND(COALESCE(avg_daily_transactions,
+          CASE WHEN qris_terbit IS NOT NULL AND total_transaction > 0
+            THEN total_transaction::numeric / GREATEST(CURRENT_DATE - qris_terbit::date, 1)
+            ELSE 0 END)::numeric, 4) AS computed_daily_rate,
+        (${SEG_SQL}) AS segment,
+        (${TERRITORY_SQL}) AS territory_cluster,
+        ROUND(LEAST(total_transaction::numeric * 5, 100), 1) AS repeat_scan_score,
+        CASE WHEN total_transaction > 0 THEN 80 ELSE 0 END AS buyer_conversion_score,
+        CASE WHEN total_transaction > 0 THEN 100 ELSE 0 END AS merchant_activation_score,
+        ROUND(LEAST(COALESCE(avg_daily_transactions,
+          CASE WHEN qris_terbit IS NOT NULL AND total_transaction > 0
+            THEN total_transaction::numeric / GREATEST(CURRENT_DATE - qris_terbit::date, 1)
+            ELSE 0 END) * 20, 100)::numeric, 1) AS transaction_density_score,
+        ROUND(GREATEST(0, 100 - COALESCE(
+          CURRENT_DATE - last_transaction_date::date, 60)::numeric * 2), 1) AS retention_score,
+        ROUND(LEAST(total_transaction::numeric * 3, 100), 1) AS ecosystem_dependency_score,
+        ROUND((
+          LEAST(total_transaction::numeric * 5, 100) * 0.25 +
+          CASE WHEN total_transaction > 0 THEN 100 ELSE 0 END * 0.15 +
+          LEAST(COALESCE(avg_daily_transactions,
+            CASE WHEN qris_terbit IS NOT NULL AND total_transaction > 0
+              THEN total_transaction::numeric / GREATEST(CURRENT_DATE - qris_terbit::date, 1)
+              ELSE 0 END) * 20, 100) * 0.25 +
+          GREATEST(0, 100 - COALESCE(CURRENT_DATE - last_transaction_date::date, 60)::numeric * 2) * 0.20 +
+          LEAST(total_transaction::numeric * 3, 100) * 0.15
+        )::numeric, 1) AS final_priority_score
+      FROM instaqris_trx_merchant
+      ORDER BY total_transaction DESC, merchant_id
+    `);
+    res.json({ merchants: result.rows, total: result.rows.length });
+  } catch (err) {
+    console.error('instaqris-trx merchants:', err);
+    res.status(500).json({ error: err.message });
+  }
+}
+
+module.exports = { syncHandler, analyticsHandler, exportHandler, merchantsHandler };
