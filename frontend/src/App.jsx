@@ -18,6 +18,7 @@ import WarRoomMgmPa from './pages/WarRoomMgmPa';
 import WarRoomDmFastpay from './pages/WarRoomDmFastpay';
 import WarRoomInstaqrisTrx from './pages/WarRoomInstaqrisTrx';
 import WarRoomAsdp from './pages/WarRoomAsdp';
+import WarRoomBumdes from './pages/WarRoomBumdes';
 import ServerMonitor from './pages/ServerMonitor';
 import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './components/Layout';
@@ -59,7 +60,8 @@ export default function App() {
         <Route path="/war-room/mgm-pa"        element={<ProtectedRoute><WarRoomMgmPa /></ProtectedRoute>} />
         <Route path="/war-room/dm-fastpay"     element={<ProtectedRoute><WarRoomDmFastpay /></ProtectedRoute>} />
         <Route path="/war-room/instaqris-trx" element={<ProtectedRoute><WarRoomInstaqrisTrx /></ProtectedRoute>} />
-        <Route path="/war-room/asdp"          element={<ProtectedRoute><WarRoomAsdp /></ProtectedRoute>} />
+        <Route path="/war-room/asdp"           element={<ProtectedRoute><WarRoomAsdp /></ProtectedRoute>} />
+        <Route path="/war-room/bumdes"         element={<ProtectedRoute><WarRoomBumdes /></ProtectedRoute>} />
         <Route path="/server-monitor"          element={<ProtectedRoute><ServerMonitor /></ProtectedRoute>} />
         <Route path="/dashboard"  element={<ProtectedRoute><ComingSoon title="Dashboard Pencapaian" /></ProtectedRoute>} />
         <Route path="/tren"       element={<ProtectedRoute><ComingSoon title="Tren Harian" /></ProtectedRoute>} />

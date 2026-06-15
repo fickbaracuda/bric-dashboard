@@ -291,6 +291,16 @@ export const getAsdpOutlets = async () => {
   return res.data;
 };
 
+/* WAR-ROOM — Territory BUMDes */
+export const getBumdesAnalytics = async () => {
+  const res = await axios.get(`${API_URL}/api/warroom/bumdes/analytics`, { headers: authHeaders() });
+  return res.data;
+};
+export const getBumdesOutlets = async () => {
+  const res = await axios.get(`${API_URL}/api/warroom/bumdes/outlets`, { headers: authHeaders() });
+  return res.data;
+};
+
 /* System Monitor */
 export const getSystemStats = async () => {
   const res = await axios.get(`${API_URL}/api/system/stats`, { headers: authHeaders() });

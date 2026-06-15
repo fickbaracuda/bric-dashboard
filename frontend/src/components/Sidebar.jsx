@@ -165,10 +165,11 @@ export default function Sidebar({ onClose }) {
   const isWRPAProduk   = location.pathname === '/war-room/pa-produk';
   const isWRDMFPPath   = location.pathname === '/war-room/dm-fastpay';
   const isWRAsdpPath   = location.pathname === '/war-room/asdp';
+  const isWRBumdesPath = location.pathname === '/war-room/bumdes';
 
   const [winmeOpen, setWinmeOpen] = useState(isWinmePath || isWinmeTimPath || isWRIQPath || isWRIQTRXPath);
   const [timOpen,   setTimOpen]   = useState(isWinmeTimPath);
-  const [paOpen,    setPAOpen]    = useState(isPABasePath || isPATimPath || isWREkspPath || isWRFPPath || isWRFarmPath || isWRPAProduk || isWRDMFPPath || isWRAsdpPath);
+  const [paOpen,    setPAOpen]    = useState(isPABasePath || isPATimPath || isWREkspPath || isWRFPPath || isWRFarmPath || isWRPAProduk || isWRDMFPPath || isWRAsdpPath || isWRBumdesPath);
   const [paTimOpen, setPATimOpen] = useState(isPATimPath);
   const [ddOpen,    setDDOpen]    = useState(isDDPath || isSCTimPath || isWRSCPath);
   const [scTimOpen, setSCTimOpen] = useState(isSCTimPath);
@@ -176,7 +177,7 @@ export default function Sidebar({ onClose }) {
   useEffect(() => {
     if (isWinmePath || isWinmeTimPath || isWRIQPath || isWRIQTRXPath) setWinmeOpen(true);
     if (isWinmeTimPath) setTimOpen(true);
-    if (isPABasePath || isPATimPath || isWREkspPath || isWRFPPath || isWRFarmPath || isWRPAProduk || isWRDMFPPath || isWRAsdpPath) setPAOpen(true);
+    if (isPABasePath || isPATimPath || isWREkspPath || isWRFPPath || isWRFarmPath || isWRPAProduk || isWRDMFPPath || isWRAsdpPath || isWRBumdesPath) setPAOpen(true);
     if (isPATimPath) setPATimOpen(true);
     if (isDDPath || isSCTimPath || isWRSCPath) setDDOpen(true);
     if (isSCTimPath) setSCTimOpen(true);
@@ -517,6 +518,17 @@ export default function Sidebar({ onClose }) {
                 <i className="ti ti-ship" style={{ color: '#0EA5E9' }} aria-hidden="true" />
                 <span>Territory ASDP</span>
                 <span className="sidebar-warroom-badge" style={{ background: '#0EA5E9' }}>ASDP</span>
+              </NavLink>
+              <NavLink
+                to="/war-room/bumdes"
+                onClick={onClose}
+                className={({ isActive }) =>
+                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                }
+              >
+                <i className="ti ti-building-community" style={{ color: '#0D9488' }} aria-hidden="true" />
+                <span>Territory Bumdes</span>
+                <span className="sidebar-warroom-badge" style={{ background: '#0D9488' }}>BUMDes</span>
               </NavLink>
 
             </div>
