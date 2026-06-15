@@ -123,6 +123,51 @@ function WaLink({ notelp }) {
 /* ════════════════════════════════════════════
    TAB 0 — Executive Summary
 ════════════════════════════════════════════ */
+function buildInsight(s) {
+  const growing    = Number(s.growing)    || 0;
+  const declining  = Number(s.declining)  || 0;
+  const stable     = Number(s.stable)     || 0;
+  const churned    = Number(s.churned)    || 0;
+  const belumAktif = Number(s.belum_aktif)|| 0;
+  const anomali    = Number(s.anomali)    || 0;
+  const nmat       = Number(s.nmat)       || 0;
+  const trxMei     = Number(s.total_trx_mei) || 0;
+  const revMei     = Number(s.total_rev_mei) || 0;
+  const devTrxPct  = trxMei > 0 ? ((Number(s.dev_trx_total) / trxMei) * 100).toFixed(1) : null;
+  const devRevPct  = revMei > 0 ? ((Number(s.dev_rev_total) / revMei) * 100).toFixed(1) : null;
+  const matPct     = s.total_outlet > 0 ? ((Number(s.mat)||0) / Number(s.total_outlet) * 100).toFixed(1) : '0';
+
+  const arahTrx = devTrxPct !== null ? (Number(devTrxPct) >= 0 ? 'naik' : 'turun') : null;
+  const arahRev = devRevPct !== null ? (Number(devRevPct) >= 0 ? 'tumbuh' : 'turun') : null;
+
+  const paragraph = [
+    `Total ${fmtN(s.total_outlet)} outlet ASDP terdaftar, ${fmtN(s.mat)} aktif bertransaksi di Juni (activation rate ${matPct}%).`,
+    arahTrx && arahRev
+      ? `TRX ${arahTrx} ${Math.abs(devTrxPct)}% dan revenue ${arahRev} ${Math.abs(devRevPct)}% dibanding Mei (bulan penuh).`
+      : '',
+    `Dari total outlet: ${fmtN(growing)} growing, ${fmtN(declining)} declining, ${fmtN(nmat)} baru aktif, ${fmtN(churned)} churned, ${fmtN(stable)} stable${belumAktif > 0 ? `, ${fmtN(belumAktif)} belum pernah aktif` : ''}.`,
+    anomali > 0 ? `Terdapat ${fmtN(anomali)} outlet anomali (TRX naik namun revenue turun) yang perlu diinvestigasi.` : '',
+  ].filter(Boolean).join(' ');
+
+  const recs = [];
+  if (churned > 0)   recs.push({ icon: '🚨', title: 'Recovery Call Outlet Hilang',      priority: 'Prioritas Tinggi',  color: '#DC2626',
+    text: `${fmtN(churned)} outlet aktif di Mei tapi tidak ada transaksi di Juni. Hubungi segera sebelum akhir bulan agar bisa diaktifkan dan tidak kehilangan revenue.` });
+  if (declining > 0) recs.push({ icon: '📉', title: 'Retensi Outlet Declining',          priority: 'Prioritas Tinggi',  color: '#EF4444',
+    text: `${fmtN(declining)} outlet mengalami penurunan TRX vs Mei. Follow-up langsung, cek hambatan operasional, dan berikan program insentif tiket ASDP.` });
+  if (anomali > 0)   recs.push({ icon: '🔍', title: 'Investigasi Anomali Margin',        priority: 'Prioritas Sedang',  color: '#F59E0B',
+    text: `${fmtN(anomali)} outlet menunjukkan TRX naik tapi revenue turun. Cek apakah ada pergeseran ke jenis tiket bernilai lebih rendah atau potongan fee meningkat.` });
+  if (nmat > 0)      recs.push({ icon: '🌟', title: 'Onboarding Outlet Baru',            priority: 'Prioritas Sedang',  color: '#F59E0B',
+    text: `${fmtN(nmat)} outlet baru aktif bulan ini. Lakukan pendampingan terstruktur dan kunjungan rutin agar konsisten aktif di bulan-bulan berikutnya.` });
+  if (belumAktif > 0) recs.push({ icon: '⚠️', title: 'Aktivasi Outlet Belum Bertransaksi', priority: 'Prioritas Sedang', color: '#F59E0B',
+    text: `${fmtN(belumAktif)} outlet terdaftar tapi belum pernah bertransaksi. Kunjungi, edukasi cara jual tiket ASDP, dan fasilitasi transaksi pertama.` });
+  if (growing > 0)   recs.push({ icon: '📈', title: 'Pertahankan Momentum Growth',       priority: 'Prioritas Rendah',  color: '#10B981',
+    text: `${fmtN(growing)} outlet sedang tumbuh. Berikan apresiasi, komunikasi rutin, dan dorong peningkatan volume transaksi tiket ferry ASDP.` });
+  if (stable > 0)    recs.push({ icon: '📌', title: 'Dorong Outlet Stable ke Growing',   priority: 'Prioritas Rendah',  color: '#10B981',
+    text: `${fmtN(stable)} outlet stagnan (TRX tidak berubah). Dorong dengan program insentif atau edukasi rute/layanan ASDP baru agar masuk kategori growing.` });
+
+  return { paragraph, recs: recs.slice(0, 6) };
+}
+
 function ExecutiveTab({ summary: s, kotas, tipes, lastSync }) {
   const devTrx = fmtDev(s.dev_trx_total);
   const devRev = fmtDev(s.dev_rev_total);
@@ -134,6 +179,8 @@ function ExecutiveTab({ summary: s, kotas, tipes, lastSync }) {
   const tipeLabels = (tipes||[]).map(t => (t.tipe_outlet||'-').replace('(FastPay + FastKAI)','').trim());
   const tipeTrx    = (tipes||[]).map(t => Number(t.trx_juni)||0);
   const tipeCount  = (tipes||[]).map(t => Number(t.outlet_count)||0);
+
+  const { paragraph, recs } = buildInsight(s);
 
   return (
     <div>
@@ -155,24 +202,51 @@ function ExecutiveTab({ summary: s, kotas, tipes, lastSync }) {
           accent={Number(s.dev_rev_total) >= 0 ? '#059669' : '#DC2626'} />
       </div>
 
-      {/* Insight */}
-      <div className="wrfp-insight" style={{ borderLeft: `3px solid ${COLOR}` }}>
-        <div style={{ fontWeight: 700, marginBottom: 6, color: COLOR }}>
-          <i className="ti ti-bulb" /> Ringkasan Eksekutif — Territory ASDP Juni 2026
+      {/* Ringkasan Eksekutif + Rekomendasi — 2 kolom */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 14 }}>
+        {/* Kiri: Ringkasan */}
+        <div className="wrfp-chart-card" style={{ margin: 0 }}>
+          <div style={{ fontWeight: 700, marginBottom: 10, color: 'var(--text-1)', fontSize: 13, display: 'flex', alignItems: 'center', gap: 7 }}>
+            <i className="ti ti-report-analytics" style={{ color: COLOR }} /> Ringkasan Eksekutif
+          </div>
+          <p style={{ color: 'var(--text-2)', fontSize: 13, lineHeight: 1.8, margin: 0 }}>
+            {paragraph}
+          </p>
         </div>
-        <p style={{ color: 'var(--text-2)', fontSize: 13, lineHeight: 1.8, margin: 0 }}>
-          Total <strong>{fmtN(s.total_outlet)}</strong> outlet terdaftar.
-          Activation rate: <strong>{matPct}%</strong> ({fmtN(s.mat)} MAT).&nbsp;
-          New MAT bulan ini: <strong>{fmtN(s.nmat)}</strong> outlet ({nmatContrib}% dari MAT) —
-          menyumbang <strong>{fmtN(s.trx_new_mat)}</strong> transaksi.&nbsp;
-          Outlet volume sangat tinggi (≥300 TRX): <strong>{fmtN(s.mat_min300)}</strong>.&nbsp;
-          Dev TRX vs Mei: <strong><span className={devTrx.cls}>{devTrx.val}</span></strong> |
-          Dev Rev vs Mei: <strong><span className={devRev.cls}>{devRev.val}</span></strong>.
-        </p>
+
+        {/* Kanan: Rekomendasi */}
+        <div className="wrfp-chart-card" style={{ margin: 0 }}>
+          <div style={{ fontWeight: 700, marginBottom: 10, color: 'var(--text-1)', fontSize: 13, display: 'flex', alignItems: 'center', gap: 7 }}>
+            <i className="ti ti-bulb" style={{ color: '#F59E0B' }} /> Rekomendasi
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {recs.map(r => (
+              <div key={r.title} style={{
+                borderLeft: `3px solid ${r.color}`,
+                padding: '8px 12px',
+                background: r.color + '12',
+                borderRadius: '0 6px 6px 0',
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 3 }}>
+                  <div style={{ fontWeight: 700, color: 'var(--text-1)', fontSize: 13 }}>
+                    {r.icon} {r.title}
+                  </div>
+                  <span style={{
+                    fontSize: 11, padding: '2px 7px', borderRadius: 4, whiteSpace: 'nowrap', marginLeft: 8,
+                    background: r.color + '25', color: r.color, fontWeight: 600,
+                  }}>
+                    {r.priority}
+                  </span>
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--text-2)', lineHeight: 1.6 }}>{r.text}</div>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
 
       {/* Charts */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 14 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
         <HBarChart labels={kotaLabels} values={kotaTrx} title="TRX per Kota (Top 8)" />
         <DonutChart labels={tipeLabels} values={tipeTrx} colors={TIPE_COLORS} title="Distribusi TRX per Tipe Outlet" />
       </div>
