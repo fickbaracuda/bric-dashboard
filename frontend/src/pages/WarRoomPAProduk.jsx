@@ -48,25 +48,27 @@ function produkBadge(row) {
 }
 
 /* ─── Insights computation ─── */
-function computeInsights(data, total) {
+// stats = server-side counts across all outlets (not just top-100 sample)
+function computeInsights(data, total, stats) {
   if (!data?.length) return [];
   const valid = data.filter(r => Number(r.rev_jun)>0 || Number(r.rev_mei)>0);
-  if (!valid.length) return [];
   const list = [];
 
-  const growing   = valid.filter(r=>(Number(r.pct_rev_growth)||0)>0).length;
-  const declining = valid.filter(r=>(Number(r.pct_rev_growth)||0)<0).length;
-  const pctGrow   = ((growing/valid.length)*100).toFixed(0);
+  // Use server-side counts for accuracy (all 90K outlets), fall back to sample if missing
+  const growing   = stats?.growing   ?? valid.filter(r=>(Number(r.pct_rev_growth)||0)>0).length;
+  const declining = stats?.declining ?? valid.filter(r=>(Number(r.pct_rev_growth)||0)<0).length;
+  const activeJun = stats?.active_jun ?? valid.length;
+  const pctGrow   = activeJun > 0 ? ((growing/activeJun)*100).toFixed(0) : 0;
 
   // 1 — Portfolio health
   list.push({
     type: growing>=declining ? 'positive' : 'negative',
     icon: growing>=declining ? '📊' : '⚠️',
-    title: `Kesehatan Portofolio: ${pctGrow}% produk tumbuh (${growing}/${valid.length} aktif)`,
-    desc: `${growing} produk revenue naik, ${declining} produk turun dibanding Mei`,
+    title: `Kesehatan Portofolio: ${pctGrow}% outlet tumbuh (${fmtN(growing)}/${fmtN(activeJun)} aktif)`,
+    desc: `${fmtN(growing)} outlet revenue naik, ${fmtN(declining)} outlet turun dibanding Mei`,
     action: declining>growing
-      ? `Prioritaskan penanganan ${declining} produk yang menurun — risiko > peluang saat ini`
-      : `Pertahankan momentum — dokumentasikan best practice dari produk tumbuh`,
+      ? `Prioritaskan penanganan ${fmtN(declining)} outlet yang menurun — risiko > peluang saat ini`
+      : `Pertahankan momentum — dokumentasikan best practice dari outlet tumbuh`,
   });
 
   // 2 — Star performer
@@ -308,8 +310,8 @@ function ChartCard({ title, children, height }) {
 }
 
 /* ─── InsightBox ─── */
-function InsightBox({ data, total }) {
-  const insights = useMemo(() => computeInsights(data, total), [data, total]);
+function InsightBox({ data, total, stats }) {
+  const insights = useMemo(() => computeInsights(data, total, stats), [data, total, stats]);
   if (!insights.length) return null;
   return (
     <div className="wrpa-insight-box">
@@ -452,7 +454,7 @@ function ArpuLayerTable() {
 }
 
 /* ─── Tab 0: Executive Summary ─── */
-function ExecutiveSummaryTab({ data, total, meta, onProdukClick }) {
+function ExecutiveSummaryTab({ data, total, meta, stats, onProdukClick }) {
   const tid    = meta.tanggal;
   const top10  = data.slice(0,10);
   const devTrx = (total.trx_jun||0)-(total.trx_mei||0);
@@ -503,7 +505,7 @@ function ExecutiveSummaryTab({ data, total, meta, onProdukClick }) {
           </table>
         </div>
       </ChartCard>
-      <InsightBox data={data} total={total} />
+      <InsightBox data={data} total={total} stats={stats} />
     </div>
   );
 }
@@ -640,10 +642,11 @@ function TrendlineTab({ analytics }) {
 }
 
 /* ─── Tab 2: Trend & Growth ─── */
-function TrendGrowthTab({ data, meta }) {
+function TrendGrowthTab({ data, top15_growth_trx, bot15_decline_trx, meta }) {
   const tid  = meta.tanggal;
-  const top5 = [...data].sort((a,b)=>(Number(b.pct_trx_growth)||0)-(Number(a.pct_trx_growth)||0)).slice(0,5);
-  const bot5 = [...data].sort((a,b)=>(Number(a.pct_trx_growth)||0)-(Number(b.pct_trx_growth)||0)).slice(0,5);
+  // Use server-precomputed lists (all outlets, not just top-100 sample)
+  const top5 = (top15_growth_trx || []).slice(0, 5);
+  const bot5 = (bot15_decline_trx || []).slice(0, 5);
   return (
     <div>
       {/* Top 5 / Bottom 5 FIRST */}
@@ -988,7 +991,7 @@ export default function WarRoomPAProduk() {
     </Layout>
   );
 
-  const { meta, total, data } = resp;
+  const { meta, total, data, stats, top15_growth_trx, bot15_decline_trx } = resp;
 
   return (
     <Layout gsheetUrl="https://docs.google.com/spreadsheets/d/1GbDo9ASOQYiCCVqOT89RxAWuvZfQjeNbq3U9qP4jvcw" gsheetLabel="PA Produk & ARPU">
@@ -998,7 +1001,7 @@ export default function WarRoomPAProduk() {
             <i className="ti ti-chart-bar" style={{color:THEME,fontSize:22}}/>
             <div>
               <div className="wrpa-header-title">WAR-ROOM PA PRODUK</div>
-              <div className="wrpa-header-meta">{data.length} produk · Payment Agent</div>
+              <div className="wrpa-header-meta">{fmtN(stats?.total_outlets || data.length)} outlet · Payment Agent</div>
             </div>
           </div>
           <div className="wrpa-header-badges">
@@ -1018,9 +1021,9 @@ export default function WarRoomPAProduk() {
           ))}
         </div>
 
-        {tab===0&&<ExecutiveSummaryTab data={data} total={total} meta={meta} onProdukClick={setModalRow}/>}
+        {tab===0&&<ExecutiveSummaryTab data={data} total={total} meta={meta} stats={stats} onProdukClick={setModalRow}/>}
         {tab===1&&<TrendlineTab analytics={resp}/>}
-        {tab===2&&<TrendGrowthTab data={data} meta={meta}/>}
+        {tab===2&&<TrendGrowthTab data={data} top15_growth_trx={top15_growth_trx} bot15_decline_trx={bot15_decline_trx} meta={meta}/>}
         {tab===3&&<UnitEkonomiTab data={data} meta={meta}/>}
         {tab===4&&<ActionCenterTab data={data} total={total}/>}
       </div>

@@ -599,7 +599,19 @@ router.get('/pa-produk/analytics', async (req, res) => {
     const tanggal = latestRes.rows[0]?.t;
     if (!tanggal) return res.json({ meta: null, total: {}, data: [] });
 
-    const [metaRes, totalRes, dataRes, totalsRes] = await Promise.all([
+    // Reusable computed cols (inline for all queries)
+    const COMPUTED = `
+      (trx_jun - trx_mei) AS dev_trx_mei_jun,
+      (rev_jun - rev_mei) AS dev_rev_mei_jun,
+      CASE WHEN trx_mei > 0 THEN ROUND(((trx_jun - trx_mei)::numeric / trx_mei * 100), 1)
+           ELSE NULL END AS pct_trx_growth,
+      CASE WHEN rev_mei > 0 THEN ROUND(((rev_jun - rev_mei)::numeric / rev_mei * 100), 1)
+           ELSE NULL END AS pct_rev_growth,
+      CASE WHEN trx_jun > 0 THEN ROUND(rev_jun::numeric / trx_jun) ELSE 0 END AS arpt_jun,
+      CASE WHEN trx_mei > 0 THEN ROUND(rev_mei::numeric / trx_mei) ELSE 0 END AS arpt_mei,
+      CASE WHEN trx_apr > 0 THEN ROUND(rev_apr::numeric / trx_apr) ELSE 0 END AS arpt_apr`;
+
+    const [metaRes, totalRes, dataRes, totalsRes, statsRes, growthRes, declineRes] = await Promise.all([
       pool.query(
         'SELECT tanggal, periode_start, periode_end FROM pa_produk_snapshot WHERE tanggal=$1 LIMIT 1',
         [tanggal]
@@ -611,31 +623,53 @@ router.get('/pa-produk/analytics', async (req, res) => {
           SUM(mat_jun) AS mat_jun, SUM(trx_jun) AS trx_jun, SUM(rev_jun) AS rev_jun
         FROM pa_produk_snapshot WHERE tanggal=$1
       `, [tanggal]),
+      // Top 100 by revenue — sufficient for all charts & tables
       pool.query(`
-        SELECT
-          produk,
+        SELECT produk,
           mat_apr, trx_apr, rev_apr,
           mat_mei, trx_mei, rev_mei,
           mat_jun, trx_jun, rev_jun,
-          (trx_jun - trx_mei) AS dev_trx_mei_jun,
-          (rev_jun - rev_mei) AS dev_rev_mei_jun,
-          CASE WHEN trx_mei > 0
-            THEN ROUND(((trx_jun - trx_mei)::numeric / trx_mei * 100), 1)
-            ELSE NULL END AS pct_trx_growth,
-          CASE WHEN rev_mei > 0
-            THEN ROUND(((rev_jun - rev_mei)::numeric / rev_mei * 100), 1)
-            ELSE NULL END AS pct_rev_growth,
-          CASE WHEN trx_jun > 0 THEN ROUND(rev_jun::numeric / trx_jun) ELSE 0 END AS arpt_jun,
-          CASE WHEN trx_mei > 0 THEN ROUND(rev_mei::numeric / trx_mei) ELSE 0 END AS arpt_mei,
-          CASE WHEN trx_apr > 0 THEN ROUND(rev_apr::numeric / trx_apr) ELSE 0 END AS arpt_apr
+          ${COMPUTED}
         FROM pa_produk_snapshot
         WHERE tanggal=$1
         ORDER BY rev_jun DESC
+        LIMIT 100
       `, [tanggal]),
       pool.query(
         'SELECT mat_apr, mat_mei, mat_jun FROM pa_produk_totals WHERE tanggal=$1',
         [tanggal]
-      ).catch(() => ({ rows: [] })), // graceful if table doesn't exist yet
+      ).catch(() => ({ rows: [] })),
+      // Server-side aggregate stats across all 90K outlets
+      pool.query(`
+        SELECT
+          COUNT(*) AS total_outlets,
+          COUNT(CASE WHEN trx_jun > 0 OR rev_jun > 0 THEN 1 END) AS active_jun,
+          COUNT(CASE WHEN trx_mei > 0 AND rev_mei > 0 AND rev_jun > rev_mei THEN 1 END) AS growing,
+          COUNT(CASE WHEN trx_mei > 0 AND rev_mei > 0 AND rev_jun < rev_mei THEN 1 END) AS declining,
+          COUNT(CASE WHEN trx_mei = 0 AND trx_jun > 0 THEN 1 END) AS new_active,
+          COUNT(CASE WHEN trx_mei > 0 AND trx_jun = 0 THEN 1 END) AS churned,
+          COUNT(CASE WHEN rev_jun < rev_mei AND rev_mei < rev_apr THEN 1 END) AS kritis_2period
+        FROM pa_produk_snapshot WHERE tanggal=$1
+      `, [tanggal]),
+      // Top 15 by TRX growth (for Trend & Growth tab)
+      pool.query(`
+        SELECT produk, mat_mei, trx_mei, rev_mei, mat_jun, trx_jun, rev_jun,
+          ROUND(((trx_jun - trx_mei)::numeric / trx_mei * 100), 1) AS pct_trx_growth,
+          ROUND(((rev_jun - rev_mei)::numeric / rev_mei * 100), 1) AS pct_rev_growth
+        FROM pa_produk_snapshot
+        WHERE tanggal=$1 AND trx_mei > 0 AND trx_jun > 0
+        ORDER BY ((trx_jun - trx_mei)::numeric / trx_mei) DESC
+        LIMIT 15
+      `, [tanggal]),
+      // Bottom 15 by TRX growth (for Trend & Growth tab)
+      pool.query(`
+        SELECT produk, mat_mei, trx_mei, rev_mei, mat_jun, trx_jun, rev_jun,
+          ROUND(((trx_jun - trx_mei)::numeric / trx_mei * 100), 1) AS pct_trx_growth
+        FROM pa_produk_snapshot
+        WHERE tanggal=$1 AND trx_mei > 0
+        ORDER BY ((trx_jun - trx_mei)::numeric / trx_mei) ASC
+        LIMIT 15
+      `, [tanggal]),
     ]);
 
     const meta  = metaRes.rows[0] || { tanggal, periode_start: tanggal, periode_end: tanggal };
@@ -650,7 +684,15 @@ router.get('/pa-produk/analytics', async (req, res) => {
       if (officialTotals.mat_jun > 0) total.mat_jun = Number(officialTotals.mat_jun);
     }
 
-    res.json({ meta, total, data: dataRes.rows });
+    const stats = statsRes.rows[0] || {};
+    for (const k of Object.keys(stats)) stats[k] = Number(stats[k]) || 0;
+
+    res.json({
+      meta, total, data: dataRes.rows,
+      stats,
+      top15_growth_trx:  growthRes.rows,
+      bot15_decline_trx: declineRes.rows,
+    });
   } catch (e) {
     console.error('pa-produk analytics error:', e.message);
     res.status(500).json({ error: e.message });
@@ -660,12 +702,24 @@ router.get('/pa-produk/analytics', async (req, res) => {
 router.get('/pa-produk/trendline', async (req, res) => {
   try {
     const days = Math.min(Math.max(parseInt(req.query.days) || 30, 3), 90);
+    // Get latest tanggal first to seed the top-20 filter
+    const latestRow = await pool.query('SELECT MAX(tanggal) AS t FROM pa_produk_snapshot');
+    const latestTanggal = latestRow.rows[0]?.t;
+    if (!latestTanggal) return res.json({ dates: [], byProduk: {}, products: [], days });
+
+    // Only top 20 outlets by latest rev_jun — enough for chart with all interactions
     const result = await pool.query(
-      `SELECT tanggal, produk, mat_jun, trx_jun, rev_jun
-       FROM pa_produk_snapshot
-       WHERE tanggal >= CURRENT_DATE - ($1 * interval '1 day')
-       ORDER BY tanggal ASC, rev_jun DESC`,
-      [days]
+      `WITH top20 AS (
+         SELECT produk FROM pa_produk_snapshot
+         WHERE tanggal = $2
+         ORDER BY rev_jun DESC LIMIT 20
+       )
+       SELECT p.tanggal, p.produk, p.mat_jun, p.trx_jun, p.rev_jun
+       FROM pa_produk_snapshot p
+       JOIN top20 ON p.produk = top20.produk
+       WHERE p.tanggal >= CURRENT_DATE - ($1 * interval '1 day')
+       ORDER BY p.tanggal ASC, p.rev_jun DESC`,
+      [days, latestTanggal]
     );
 
     const byProduk = {};
