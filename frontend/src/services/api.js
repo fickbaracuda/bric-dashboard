@@ -301,6 +301,16 @@ export const getBumdesOutlets = async () => {
   return res.data;
 };
 
+/* WAR-ROOM — Territory LPD */
+export const getLpdAnalytics = async () => {
+  const res = await axios.get(`${API_URL}/api/warroom/lpd/analytics`, { headers: authHeaders() });
+  return res.data;
+};
+export const getLpdOutlets = async () => {
+  const res = await axios.get(`${API_URL}/api/warroom/lpd/outlets`, { headers: authHeaders() });
+  return res.data;
+};
+
 /* System Monitor */
 export const getSystemStats = async () => {
   const res = await axios.get(`${API_URL}/api/system/stats`, { headers: authHeaders() });
