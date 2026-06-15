@@ -153,6 +153,7 @@ export default function Sidebar({ onClose }) {
   const isWinmePath    = location.pathname === '/winme';
   const isWinmeTimPath = location.pathname === '/scoreboard-tim'    || isWinmeMember;
   const isWRIQPath     = location.pathname === '/war-room/instaqris';
+  const isWRIQTRXPath  = location.pathname === '/war-room/instaqris-trx';
   const isPABasePath   = location.pathname === '/payment-agent';
   const isPATimPath    = location.pathname === '/scoreboard-tim-pa' || isPAMember;
   const isDDPath       = location.pathname === '/dompet-digital';
@@ -164,7 +165,7 @@ export default function Sidebar({ onClose }) {
   const isWRPAProduk   = location.pathname === '/war-room/pa-produk';
   const isWRDMFPPath   = location.pathname === '/war-room/dm-fastpay';
 
-  const [winmeOpen, setWinmeOpen] = useState(isWinmePath || isWinmeTimPath || isWRIQPath);
+  const [winmeOpen, setWinmeOpen] = useState(isWinmePath || isWinmeTimPath || isWRIQPath || isWRIQTRXPath);
   const [timOpen,   setTimOpen]   = useState(isWinmeTimPath);
   const [paOpen,    setPAOpen]    = useState(isPABasePath || isPATimPath || isWREkspPath || isWRFPPath || isWRFarmPath || isWRPAProduk || isWRDMFPPath);
   const [paTimOpen, setPATimOpen] = useState(isPATimPath);
@@ -172,7 +173,7 @@ export default function Sidebar({ onClose }) {
   const [scTimOpen, setSCTimOpen] = useState(isSCTimPath);
 
   useEffect(() => {
-    if (isWinmePath || isWinmeTimPath || isWRIQPath) setWinmeOpen(true);
+    if (isWinmePath || isWinmeTimPath || isWRIQPath || isWRIQTRXPath) setWinmeOpen(true);
     if (isWinmeTimPath) setTimOpen(true);
     if (isPABasePath || isPATimPath || isWREkspPath || isWRFPPath || isWRFarmPath || isWRPAProduk || isWRDMFPPath) setPAOpen(true);
     if (isPATimPath) setPATimOpen(true);
@@ -317,14 +318,32 @@ export default function Sidebar({ onClose }) {
                 </Accordion>
               </div>
 
-              {/* ── WAR-ROOM InstaQris — sub-menu Winme ── */}
-              <NavLink to="/war-room/instaqris" onClick={onClose}
-                className={({ isActive }) =>
-                  'sidebar-link sidebar-link-sub sidebar-link-war' +
-                  (isActive ? ' sidebar-link--active' : '')
-                }>
+              {/* ── WAR ROOM — label + items (InstaQris section) ── */}
+              <div className="sidebar-warroom-label">
                 <i className="ti ti-sword" aria-hidden="true" />
-                <span>WAR-ROOM InstaQris</span>
+                War Room
+              </div>
+              <NavLink
+                to="/war-room/instaqris"
+                onClick={onClose}
+                className={({ isActive }) =>
+                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                }
+              >
+                <i className="ti ti-chart-pie" style={{ color: '#E24B4A' }} aria-hidden="true" />
+                <span>Instaqris - Segment</span>
+                <span className="sidebar-warroom-badge" style={{ background: '#E24B4A' }}>SEG</span>
+              </NavLink>
+              <NavLink
+                to="/war-room/instaqris-trx"
+                onClick={onClose}
+                className={({ isActive }) =>
+                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                }
+              >
+                <i className="ti ti-qrcode" style={{ color: '#7F77DD' }} aria-hidden="true" />
+                <span>Instaqris - TRX</span>
+                <span className="sidebar-warroom-badge" style={{ background: '#7F77DD' }}>TRX</span>
               </NavLink>
 
             </div>

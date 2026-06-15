@@ -267,6 +267,16 @@ export const getDmFastpayAnalytics = async (tanggal) => {
   return res.data;
 };
 
+/* WAR-ROOM — InstaQris TRX */
+export const getInstaqrisTrxAnalytics = async (params = {}) => {
+  const res = await axios.get(`${API_URL}/api/warroom/instaqris-trx/analytics`, { params, headers: authHeaders() });
+  return res.data;
+};
+export const getInstaqrisTrxExport = async (params = {}) => {
+  const res = await axios.get(`${API_URL}/api/warroom/instaqris-trx/export`, { params, headers: authHeaders() });
+  return res.data;
+};
+
 /* System Monitor */
 export const getSystemStats = async () => {
   const res = await axios.get(`${API_URL}/api/system/stats`, { headers: authHeaders() });
