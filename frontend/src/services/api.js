@@ -281,6 +281,16 @@ export const getInstaqrisTrxMerchants = async (params = {}) => {
   return res.data;
 };
 
+/* WAR-ROOM — Territory ASDP */
+export const getAsdpAnalytics = async () => {
+  const res = await axios.get(`${API_URL}/api/warroom/asdp/analytics`, { headers: authHeaders() });
+  return res.data;
+};
+export const getAsdpOutlets = async () => {
+  const res = await axios.get(`${API_URL}/api/warroom/asdp/outlets`, { headers: authHeaders() });
+  return res.data;
+};
+
 /* System Monitor */
 export const getSystemStats = async () => {
   const res = await axios.get(`${API_URL}/api/system/stats`, { headers: authHeaders() });

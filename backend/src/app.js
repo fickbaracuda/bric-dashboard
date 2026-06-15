@@ -20,6 +20,7 @@ const fastpayRoutes       = require('./routes/warroom-fastpay');
 const farmingRoutes       = require('./routes/warroom-farming');
 const dmFastpayRoutes     = require('./routes/warroom-dm-fastpay');
 const iqTrxRoutes         = require('./routes/warroom-instaqris-trx');
+const asdpRoutes          = require('./routes/warroom-asdp');
 const systemRoutes        = require('./routes/system');
 const requireAuth         = require('./middleware/auth');
 
@@ -90,6 +91,9 @@ app.post('/api/warroom/instaqris-trx/sync',     iqTrxRoutes.syncHandler);       
 app.get('/api/warroom/instaqris-trx/analytics', requireAuth, iqTrxRoutes.analyticsHandler);
 app.get('/api/warroom/instaqris-trx/export',     requireAuth, iqTrxRoutes.exportHandler);
 app.get('/api/warroom/instaqris-trx/merchants',  requireAuth, iqTrxRoutes.merchantsHandler);
+app.post('/api/warroom/asdp/sync',       asdpRoutes.syncHandler);           // token auth, no JWT
+app.get('/api/warroom/asdp/analytics',   requireAuth, asdpRoutes.analyticsHandler);
+app.get('/api/warroom/asdp/outlets',     requireAuth, asdpRoutes.outletsHandler);
 app.use('/api/warroom',        requireAuth, warroomRoutes);
 
 app.use('/api/system', requireAuth, systemRoutes);

@@ -3369,6 +3369,21 @@ body {
 }
 
 /* ═══════════════════════════════════════════
+   WAR-ROOM TERRITORY ASDP (wra-*)
+═══════════════════════════════════════════ */
+.wra-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.wra-kpi-sm  { font-size: 15px !important; }
+.wra-pos     { color: #059669; }
+.wra-neg     { color: #DC2626; }
+@media (max-width: 1300px) { .wra-kpi-grid { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 800px)  { .wra-kpi-grid { grid-template-columns: repeat(2, 1fr); } }
+
+/* ═══════════════════════════════════════════
    WAR-ROOM PA PRODUK (wrpa-*)
 ═══════════════════════════════════════════ */
 .wrpa-page { padding: 24px; }
