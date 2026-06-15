@@ -12,39 +12,61 @@ async function syncHandler(req, res) {
     return res.status(400).json({ error: 'outlets array required' });
   }
 
-  let count = 0;
-  for (const o of outlets) {
-    if (!o.id_outlet) continue;
-    await pool.query(`
-      INSERT INTO warroom_bumdes_outlet
-        (id_outlet, upline, nama_pemilik, notelp_pemilik, tipe_outlet,
-         nama_kota, tanggal_registrasi, tanggal_aktifasi,
-         trx_mei, rev_mei, trx_juni, rev_juni, dev_trx, dev_rev, synced_at)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,NOW())
-      ON CONFLICT (id_outlet) DO UPDATE SET
-        upline=$2, nama_pemilik=$3, notelp_pemilik=$4, tipe_outlet=$5,
-        nama_kota=$6, tanggal_registrasi=$7, tanggal_aktifasi=$8,
-        trx_mei=$9, rev_mei=$10, trx_juni=$11, rev_juni=$12,
-        dev_trx=$13, dev_rev=$14, synced_at=NOW()
-    `, [
-      String(o.id_outlet),
-      o.upline              || null,
-      o.nama_pemilik        || null,
-      String(o.notelp_pemilik || ''),
-      o.tipe_outlet         || null,
-      o.nama_kota           || null,
-      o.tanggal_registrasi  || null,
-      o.tanggal_aktifasi    || null,
-      parseInt(o.trx_mei)   || 0,
-      parseFloat(o.rev_mei) || 0,
-      parseInt(o.trx_juni)  || 0,
-      parseFloat(o.rev_juni)|| 0,
-      parseInt(o.dev_trx)   || 0,
-      parseFloat(o.dev_rev) || 0,
-    ]);
-    count++;
-  }
-  res.json({ ok: true, count });
+  const valid = outlets.filter(o => o.id_outlet);
+  if (!valid.length) return res.json({ ok: true, count: 0 });
+
+  const str = f => valid.map(o => { const v = f(o); return v != null ? String(v).trim() : null; });
+  const int = f => valid.map(o => parseInt(f(o)) || 0);
+  const flt = f => valid.map(o => parseFloat(f(o)) || 0);
+
+  await pool.query(`
+    INSERT INTO warroom_bumdes_outlet
+      (id_outlet, upline, nama_pemilik, notelp_pemilik, tipe_outlet,
+       nama_kota, tanggal_registrasi, tanggal_aktifasi,
+       trx_mei, rev_mei, trx_juni, rev_juni, dev_trx, dev_rev, synced_at)
+    SELECT t.id_outlet, t.upline, t.nama_pemilik, t.notelp_pemilik, t.tipe_outlet,
+           t.nama_kota, NULLIF(t.tgl_reg,'')::date, NULLIF(t.tgl_aktif,'')::date,
+           t.trx_mei, t.rev_mei, t.trx_juni, t.rev_juni, t.dev_trx, t.dev_rev, NOW()
+    FROM unnest(
+      $1::text[], $2::text[], $3::text[], $4::text[], $5::text[],
+      $6::text[], $7::text[], $8::text[],
+      $9::int[], $10::numeric[], $11::int[], $12::numeric[], $13::int[], $14::numeric[]
+    ) AS t(id_outlet, upline, nama_pemilik, notelp_pemilik, tipe_outlet,
+           nama_kota, tgl_reg, tgl_aktif,
+           trx_mei, rev_mei, trx_juni, rev_juni, dev_trx, dev_rev)
+    ON CONFLICT (id_outlet) DO UPDATE SET
+      upline             = EXCLUDED.upline,
+      nama_pemilik       = EXCLUDED.nama_pemilik,
+      notelp_pemilik     = EXCLUDED.notelp_pemilik,
+      tipe_outlet        = EXCLUDED.tipe_outlet,
+      nama_kota          = EXCLUDED.nama_kota,
+      tanggal_registrasi = EXCLUDED.tanggal_registrasi,
+      tanggal_aktifasi   = EXCLUDED.tanggal_aktifasi,
+      trx_mei            = EXCLUDED.trx_mei,
+      rev_mei            = EXCLUDED.rev_mei,
+      trx_juni           = EXCLUDED.trx_juni,
+      rev_juni           = EXCLUDED.rev_juni,
+      dev_trx            = EXCLUDED.dev_trx,
+      dev_rev            = EXCLUDED.dev_rev,
+      synced_at          = EXCLUDED.synced_at
+  `, [
+    str(o => o.id_outlet),
+    str(o => o.upline || null),
+    str(o => o.nama_pemilik || null),
+    str(o => o.notelp_pemilik || ''),
+    str(o => o.tipe_outlet || null),
+    str(o => o.nama_kota || null),
+    str(o => o.tanggal_registrasi || null),
+    str(o => o.tanggal_aktifasi || null),
+    int(o => o.trx_mei),
+    flt(o => o.rev_mei),
+    int(o => o.trx_juni),
+    flt(o => o.rev_juni),
+    int(o => o.dev_trx),
+    flt(o => o.dev_rev),
+  ]);
+
+  res.json({ ok: true, count: valid.length });
 }
 
 /* ── ANALYTICS ── */

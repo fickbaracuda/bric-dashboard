@@ -3,6 +3,15 @@ import { getToken, logout } from '../utils/auth';
 
 const API_URL = import.meta.env.VITE_API_URL || '';
 
+// 5-minute in-memory cache — skips re-fetch when navigating between war-room pages
+const _cache = new Map();
+const WARROOM_TTL = 5 * 60 * 1000;
+function withCache(key, fn) {
+  const hit = _cache.get(key);
+  if (hit && Date.now() - hit.ts < WARROOM_TTL) return Promise.resolve(hit.data);
+  return fn().then(data => { _cache.set(key, { data, ts: Date.now() }); return data; });
+}
+
 function authHeaders() {
   const token = getToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
@@ -173,10 +182,9 @@ export const pingPresence = async () => {
 };
 
 /* WAR-ROOM — Segmen InstaQris */
-export const getSegmenData = async (params = {}) => {
-  const res = await axios.get(`${API_URL}/api/warroom/segmen`, { params, headers: authHeaders() });
-  return res.data;
-};
+export const getSegmenData = (params = {}) =>
+  withCache(`segmen-${JSON.stringify(params)}`, () =>
+    axios.get(`${API_URL}/api/warroom/segmen`, { params, headers: authHeaders() }).then(r => r.data));
 export const getSegmenTrendline = async (days = 30) => {
   const res = await axios.get(`${API_URL}/api/warroom/segmen/trendline`, { params: { days }, headers: authHeaders() });
   return res.data;
@@ -203,57 +211,49 @@ export const getSpeedcashTanggalList = async () => {
   const res = await axios.get(`${API_URL}/api/warroom/speedcash/tanggal-list`, { headers: authHeaders() });
   return res.data;
 };
-export const getSpeedcashAnalytics = async (params = {}) => {
-  const res = await axios.get(`${API_URL}/api/warroom/speedcash/analytics`, { params, headers: authHeaders() });
-  return res.data;
-};
+export const getSpeedcashAnalytics = (params = {}) =>
+  withCache(`speedcash-analytics-${JSON.stringify(params)}`, () =>
+    axios.get(`${API_URL}/api/warroom/speedcash/analytics`, { params, headers: authHeaders() }).then(r => r.data));
 
 /* WAR-ROOM — Ekspedisi */
-export const getEkspedisiAnalytics = async (params = {}) => {
-  const res = await axios.get(`${API_URL}/api/warroom/ekspedisi/analytics`, { params, headers: authHeaders() });
-  return res.data;
-};
+export const getEkspedisiAnalytics = (params = {}) =>
+  withCache(`ekspedisi-analytics-${JSON.stringify(params)}`, () =>
+    axios.get(`${API_URL}/api/warroom/ekspedisi/analytics`, { params, headers: authHeaders() }).then(r => r.data));
 
 /* WAR-ROOM — Fastpay Global */
-export const getFastpayAnalytics = async (params = {}) => {
-  const res = await axios.get(`${API_URL}/api/warroom/fastpay/analytics`, { params, headers: authHeaders() });
-  return res.data;
-};
-export const getFastpayOutlets = async (params = {}) => {
-  const res = await axios.get(`${API_URL}/api/warroom/fastpay/outlets`, { params, headers: authHeaders() });
-  return res.data;
-};
+export const getFastpayAnalytics = (params = {}) =>
+  withCache(`fastpay-analytics-${JSON.stringify(params)}`, () =>
+    axios.get(`${API_URL}/api/warroom/fastpay/analytics`, { params, headers: authHeaders() }).then(r => r.data));
+export const getFastpayOutlets = (params = {}) =>
+  withCache(`fastpay-outlets-${JSON.stringify(params)}`, () =>
+    axios.get(`${API_URL}/api/warroom/fastpay/outlets`, { params, headers: authHeaders() }).then(r => r.data));
 
 /* WAR-ROOM — Farming */
-export const getFarmingAnalytics = async (params = {}) => {
-  const res = await axios.get(`${API_URL}/api/warroom/farming/analytics`, { params, headers: authHeaders() });
-  return res.data;
-};
-export const getFarmingOutlets = async (params = {}) => {
-  const res = await axios.get(`${API_URL}/api/warroom/farming/outlets`, { params, headers: authHeaders() });
-  return res.data;
-};
+export const getFarmingAnalytics = (params = {}) =>
+  withCache(`farming-analytics-${JSON.stringify(params)}`, () =>
+    axios.get(`${API_URL}/api/warroom/farming/analytics`, { params, headers: authHeaders() }).then(r => r.data));
+export const getFarmingOutlets = (params = {}) =>
+  withCache(`farming-outlets-${JSON.stringify(params)}`, () =>
+    axios.get(`${API_URL}/api/warroom/farming/outlets`, { params, headers: authHeaders() }).then(r => r.data));
 
 /* WAR-ROOM — PA Produk */
-export const getPAProdukAnalytics = async (params = {}) => {
-  const res = await axios.get(`${API_URL}/api/warroom/pa-produk/analytics`, { params, headers: authHeaders() });
-  return res.data;
-};
+export const getPAProdukAnalytics = (params = {}) =>
+  withCache(`pa-produk-analytics-${JSON.stringify(params)}`, () =>
+    axios.get(`${API_URL}/api/warroom/pa-produk/analytics`, { params, headers: authHeaders() }).then(r => r.data));
 export const getPAProdukTrendline = async (days = 30) => {
   const res = await axios.get(`${API_URL}/api/warroom/pa-produk/trendline`, { params: { days }, headers: authHeaders() });
   return res.data;
 };
-export const getPAArpuAnalytics = async () => {
-  const res = await axios.get(`${API_URL}/api/warroom/pa-arpu/analytics`, { headers: authHeaders() });
-  return res.data;
-};
+export const getPAArpuAnalytics = () =>
+  withCache('pa-arpu-analytics', () =>
+    axios.get(`${API_URL}/api/warroom/pa-arpu/analytics`, { headers: authHeaders() }).then(r => r.data));
 
 /* WAR-ROOM — MGM PA */
-export const getMgmAnalytics = async (bulan) => {
-  const params = bulan ? { bulan } : {};
-  const res = await axios.get(`${API_URL}/api/warroom/mgm/analytics`, { params, headers: authHeaders() });
-  return res.data;
-};
+export const getMgmAnalytics = (bulan) =>
+  withCache(`mgm-analytics-${bulan || 'latest'}`, () => {
+    const params = bulan ? { bulan } : {};
+    return axios.get(`${API_URL}/api/warroom/mgm/analytics`, { params, headers: authHeaders() }).then(r => r.data);
+  });
 export const searchMgmOutlet = async (q, bulan) => {
   const params = { q, ...(bulan ? { bulan } : {}) };
   const res = await axios.get(`${API_URL}/api/warroom/mgm/search`, { params, headers: authHeaders() });
@@ -261,17 +261,16 @@ export const searchMgmOutlet = async (q, bulan) => {
 };
 
 /* WAR-ROOM — DM Fastpay */
-export const getDmFastpayAnalytics = async (tanggal) => {
-  const params = tanggal ? { tanggal } : {};
-  const res = await axios.get(`${API_URL}/api/warroom/dm-fastpay/analytics`, { params, headers: authHeaders() });
-  return res.data;
-};
+export const getDmFastpayAnalytics = (tanggal) =>
+  withCache(`dm-fastpay-analytics-${tanggal || 'latest'}`, () => {
+    const params = tanggal ? { tanggal } : {};
+    return axios.get(`${API_URL}/api/warroom/dm-fastpay/analytics`, { params, headers: authHeaders() }).then(r => r.data);
+  });
 
 /* WAR-ROOM — InstaQris TRX */
-export const getInstaqrisTrxAnalytics = async (params = {}) => {
-  const res = await axios.get(`${API_URL}/api/warroom/instaqris-trx/analytics`, { params, headers: authHeaders() });
-  return res.data;
-};
+export const getInstaqrisTrxAnalytics = (params = {}) =>
+  withCache(`iqtrx-analytics-${JSON.stringify(params)}`, () =>
+    axios.get(`${API_URL}/api/warroom/instaqris-trx/analytics`, { params, headers: authHeaders() }).then(r => r.data));
 export const getInstaqrisTrxExport = async (params = {}) => {
   const res = await axios.get(`${API_URL}/api/warroom/instaqris-trx/export`, { params, headers: authHeaders() });
   return res.data;
@@ -282,34 +281,28 @@ export const getInstaqrisTrxMerchants = async (params = {}) => {
 };
 
 /* WAR-ROOM — Territory ASDP */
-export const getAsdpAnalytics = async () => {
-  const res = await axios.get(`${API_URL}/api/warroom/asdp/analytics`, { headers: authHeaders() });
-  return res.data;
-};
-export const getAsdpOutlets = async () => {
-  const res = await axios.get(`${API_URL}/api/warroom/asdp/outlets`, { headers: authHeaders() });
-  return res.data;
-};
+export const getAsdpAnalytics = () =>
+  withCache('asdp-analytics', () =>
+    axios.get(`${API_URL}/api/warroom/asdp/analytics`, { headers: authHeaders() }).then(r => r.data));
+export const getAsdpOutlets = () =>
+  withCache('asdp-outlets', () =>
+    axios.get(`${API_URL}/api/warroom/asdp/outlets`, { headers: authHeaders() }).then(r => r.data));
 
 /* WAR-ROOM — Territory BUMDes */
-export const getBumdesAnalytics = async () => {
-  const res = await axios.get(`${API_URL}/api/warroom/bumdes/analytics`, { headers: authHeaders() });
-  return res.data;
-};
-export const getBumdesOutlets = async () => {
-  const res = await axios.get(`${API_URL}/api/warroom/bumdes/outlets`, { headers: authHeaders() });
-  return res.data;
-};
+export const getBumdesAnalytics = () =>
+  withCache('bumdes-analytics', () =>
+    axios.get(`${API_URL}/api/warroom/bumdes/analytics`, { headers: authHeaders() }).then(r => r.data));
+export const getBumdesOutlets = () =>
+  withCache('bumdes-outlets', () =>
+    axios.get(`${API_URL}/api/warroom/bumdes/outlets`, { headers: authHeaders() }).then(r => r.data));
 
 /* WAR-ROOM — Territory LPD */
-export const getLpdAnalytics = async () => {
-  const res = await axios.get(`${API_URL}/api/warroom/lpd/analytics`, { headers: authHeaders() });
-  return res.data;
-};
-export const getLpdOutlets = async () => {
-  const res = await axios.get(`${API_URL}/api/warroom/lpd/outlets`, { headers: authHeaders() });
-  return res.data;
-};
+export const getLpdAnalytics = () =>
+  withCache('lpd-analytics', () =>
+    axios.get(`${API_URL}/api/warroom/lpd/analytics`, { headers: authHeaders() }).then(r => r.data));
+export const getLpdOutlets = () =>
+  withCache('lpd-outlets', () =>
+    axios.get(`${API_URL}/api/warroom/lpd/outlets`, { headers: authHeaders() }).then(r => r.data));
 
 /* System Monitor */
 export const getSystemStats = async () => {

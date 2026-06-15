@@ -1,7 +1,8 @@
-const express    = require('express');
-const cors       = require('cors');
-const helmet     = require('helmet');
-const rateLimit  = require('express-rate-limit');
+const express      = require('express');
+const cors         = require('cors');
+const helmet       = require('helmet');
+const rateLimit    = require('express-rate-limit');
+const compression  = require('compression');
 require('dotenv').config();
 
 const authRoutes       = require('./routes/auth');
@@ -31,6 +32,9 @@ const PORT = process.env.PORT || 3001;
 
 // Trust Nginx proxy (required for rate-limit + X-Forwarded-For)
 app.set('trust proxy', 1);
+
+// Gzip compression — reduces JSON response size ~70%
+app.use(compression({ level: 6, threshold: 1024 }));
 
 // Security headers
 app.use(helmet({
