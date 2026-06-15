@@ -168,42 +168,92 @@ function buildInsight(s) {
   return { paragraph, recs: recs.slice(0, 6) };
 }
 
-function ExecutiveTab({ summary: s, kotas, tipes, lastSync }) {
+function ExecutiveTab({ summary: s, lastSync, outlets }) {
   const devTrx = fmtDev(s.dev_trx_total);
   const devRev = fmtDev(s.dev_rev_total);
   const matPct     = s.total_outlet > 0 ? ((Number(s.mat)||0) / Number(s.total_outlet) * 100).toFixed(1) : '0';
   const nmatContrib= s.mat > 0 ? ((Number(s.nmat)||0) / Number(s.mat) * 100).toFixed(1) : '0';
 
-  const kotaLabels = (kotas||[]).slice(0,8).map(k => k.nama_kota || '-');
-  const kotaTrx    = (kotas||[]).slice(0,8).map(k => Number(k.trx_juni)||0);
-  const tipeLabels = (tipes||[]).map(t => (t.tipe_outlet||'-').replace('(FastPay + FastKAI)','').trim());
-  const tipeTrx    = (tipes||[]).map(t => Number(t.trx_juni)||0);
-  const tipeCount  = (tipes||[]).map(t => Number(t.outlet_count)||0);
+  const trunc = (str, n = 28) => str && str.length > n ? str.slice(0, n) + '…' : (str || '-');
+
+  const topGrowing   = useMemo(() =>
+    (outlets||[]).filter(o => Number(o.dev_trx)>0 && Number(o.trx_mei)>0)
+      .sort((a,b) => Number(b.dev_trx)-Number(a.dev_trx)).slice(0,10), [outlets]);
+  const topDeclining = useMemo(() =>
+    (outlets||[]).filter(o => Number(o.dev_trx)<0)
+      .sort((a,b) => Number(a.dev_trx)-Number(b.dev_trx)).slice(0,6), [outlets]);
+  const topNewActive = useMemo(() =>
+    (outlets||[]).filter(o => Number(o.trx_mei)===0 && Number(o.trx_juni)>0)
+      .sort((a,b) => Number(b.trx_juni)-Number(a.trx_juni)).slice(0,6), [outlets]);
 
   const { paragraph, recs } = buildInsight(s);
+
+  const MiniRow = ({ label, value, cls, color }) => (
+    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center',
+      padding:'4px 0', borderBottom:'1px solid var(--border)', fontSize:12 }}>
+      <span style={{ color:'var(--text-2)', flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{label}</span>
+      <span className={cls} style={{ fontWeight:700, marginLeft:10, whiteSpace:'nowrap', color:color }}>{value}</span>
+    </div>
+  );
 
   return (
     <div>
       {/* 10 KPI Cards — 5 kolom × 2 baris */}
       <div className="wra-kpi-grid">
-        <KPICard icon="ti-bolt"           label="Transaksi"       value={fmtN(s.total_trx_juni)}  sub="Total TRX Juni" />
-        <KPICard icon="ti-cash"           label="Revenue TRX"     value={fmtRp(s.total_rev_juni)} sub="Total Rev Juni" small />
-        <KPICard icon="ti-circle-check"   label="MAT"             value={fmtN(s.mat)}             sub={`${matPct}% activation rate`} />
-        <KPICard icon="ti-star"           label="NMAT"            value={fmtN(s.nmat)}            sub={`${nmatContrib}% dari MAT`} accent="#059669" />
-        <KPICard icon="ti-flame"          label="NMAT ≥100 TRX"  value={fmtN(s.nmat_min100)}     sub="New outlet berperforma tinggi" accent="#F59E0B" />
-        <KPICard icon="ti-bolt-circle"    label="MAT ≥300 TRX"   value={fmtN(s.mat_min300)}      sub="Volume sangat tinggi" accent="#7C3AED" />
-        <KPICard icon="ti-trending-up"    label="Trx New MAT"     value={fmtN(s.trx_new_mat)}     sub="TRX dari outlet baru" accent={COLOR} />
-        <KPICard icon="ti-receipt-2"      label="Rev New MAT"     value={fmtRp(s.rev_new_mat)}    sub="Revenue outlet baru" small accent={COLOR} />
-        <KPICard icon="ti-arrows-diff"    label="Dev TRX Jun-Mei"
+        <KPICard icon="ti-bolt"           label="Transaksi"          value={fmtN(s.total_trx_juni)}  sub="Total TRX Juni" />
+        <KPICard icon="ti-cash"           label="Revenue TRX"        value={fmtRp(s.total_rev_juni)} sub="Total Rev Juni" small />
+        <KPICard icon="ti-circle-check"   label="MAT"                value={fmtN(s.mat)}             sub={`${matPct}% activation rate`} />
+        <KPICard icon="ti-star"           label="NMAT"               value={fmtN(s.nmat)}            sub={`${nmatContrib}% dari MAT`} accent="#059669" />
+        <KPICard icon="ti-flame"          label="NMAT Min 100 TRX"   value={fmtN(s.nmat_min100)}     sub="New outlet berperforma tinggi" accent="#F59E0B" />
+        <KPICard icon="ti-bolt-circle"    label="MAT Min 300 TRX"    value={fmtN(s.mat_min300)}      sub="Volume sangat tinggi" accent="#7C3AED" />
+        <KPICard icon="ti-trending-up"    label="Trx New MAT"        value={fmtN(s.trx_new_mat)}     sub="TRX dari outlet baru" accent={COLOR} />
+        <KPICard icon="ti-receipt-2"      label="Rev New MAT"        value={fmtRp(s.rev_new_mat)}    sub="Revenue outlet baru" small accent={COLOR} />
+        <KPICard icon="ti-arrows-diff"    label="Dev TRX Juni-Mei"
           value={devTrx.val} subCls={devTrx.cls} sub="Selisih TRX Juni vs Mei"
           accent={Number(s.dev_trx_total) >= 0 ? '#059669' : '#DC2626'} />
-        <KPICard icon="ti-arrows-diff"    label="Dev Rev Jun-Mei"
+        <KPICard icon="ti-arrows-diff"    label="Dev Rev Juni-Mei"
           value={devRev.val} subCls={devRev.cls} sub="Selisih Rev Juni vs Mei" small
           accent={Number(s.dev_rev_total) >= 0 ? '#059669' : '#DC2626'} />
       </div>
 
-      {/* Ringkasan Eksekutif + Rekomendasi — 2 kolom */}
+      {/* Charts: Top Growing | Top Declining + Top New Active */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 14 }}>
+        {/* Kiri: Top Growing */}
+        <HBarChart
+          labels={topGrowing.map(o => trunc(o.nama_pemilik))}
+          values={topGrowing.map(o => Number(o.dev_trx))}
+          color="#059669"
+          title="📈 Top Growing Outlet (Dev TRX)"
+        />
+
+        {/* Kanan: Top Declining + Top New Active */}
+        <div className="wrfp-chart-card" style={{ margin: 0 }}>
+          <div style={{ fontWeight: 700, fontSize: 13, color: '#DC2626', marginBottom: 8 }}>
+            📉 Top Declining Outlet
+          </div>
+          {topDeclining.length === 0
+            ? <div style={{ fontSize:12, color:'var(--text-4)', padding:'6px 0' }}>Tidak ada outlet declining</div>
+            : topDeclining.map(o => {
+                const d = fmtDev(o.dev_trx);
+                return <MiniRow key={o.id_outlet} label={trunc(o.nama_pemilik)} value={d.val} cls={d.cls} />;
+              })
+          }
+
+          <div style={{ fontWeight: 700, fontSize: 13, color: COLOR, marginTop: 16, marginBottom: 8 }}>
+            🌟 Top New Active Outlet
+          </div>
+          {topNewActive.length === 0
+            ? <div style={{ fontSize:12, color:'var(--text-4)', padding:'6px 0' }}>Tidak ada outlet baru aktif</div>
+            : topNewActive.map(o => (
+                <MiniRow key={o.id_outlet} label={trunc(o.nama_pemilik)}
+                  value={fmtN(o.trx_juni) + ' TRX'} color={COLOR} />
+              ))
+          }
+        </div>
+      </div>
+
+      {/* Ringkasan Eksekutif + Rekomendasi — 2 kolom, di bawah */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
         <div className="wrfp-chart-card" style={{ margin: 0 }}>
           <div style={{ fontWeight: 700, marginBottom: 10, color: 'var(--text-1)', fontSize: 13, display: 'flex', alignItems: 'center', gap: 7 }}>
             <i className="ti ti-report-analytics" style={{ color: COLOR }} /> Ringkasan Eksekutif
@@ -234,15 +284,6 @@ function ExecutiveTab({ summary: s, kotas, tipes, lastSync }) {
             ))}
           </div>
         </div>
-      </div>
-
-      {/* Charts */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-        <HBarChart labels={kotaLabels} values={kotaTrx} title="TRX per Kota (Top 8)" />
-        <DonutChart labels={tipeLabels} values={tipeTrx} colors={TIPE_COLORS} title="Distribusi TRX per Tipe Outlet" />
-      </div>
-      <div style={{ marginTop: 14 }}>
-        <DonutChart labels={tipeLabels} values={tipeCount} colors={TIPE_COLORS} title="Jumlah Outlet per Tipe" />
       </div>
 
       {lastSync && (
@@ -627,7 +668,7 @@ export default function WarRoomBumdes() {
   const s = analytics?.summary || {};
 
   const tabContent = [
-    <ExecutiveTab key={0} summary={s} kotas={analytics?.kotas||[]} tipes={analytics?.tipes||[]} lastSync={analytics?.last_sync} />,
+    <ExecutiveTab key={0} summary={s} lastSync={analytics?.last_sync} outlets={outlets} />,
     <OutletTab    key={1} outlets={outlets} />,
     <UplineTab    key={2} uplines={analytics?.uplines||[]} />,
     <KotaTab      key={3} kotas={analytics?.kotas||[]} />,
