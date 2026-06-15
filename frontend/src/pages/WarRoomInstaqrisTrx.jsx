@@ -1193,14 +1193,14 @@ export default function WarRoomInstaqrisTrx() {
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState(null);
   const [allMs, setAllMs]     = useState([]);
-  const [bulan, setBulan]     = useState('');
+  const [bulan, setBulan]     = useState('2026-06');
   const [tab, setTab]         = useState(0);
 
   useEffect(() => {
     (async () => {
       try {
         setLoading(true); setError(null);
-        const { merchants } = await getInstaqrisTrxMerchants();
+        const { merchants } = await getInstaqrisTrxMerchants(bulan ? { bulan } : {});
         setAllMs(merchants || []);
       } catch (e) {
         setError(e.message || 'Gagal memuat data');
@@ -1208,12 +1208,9 @@ export default function WarRoomInstaqrisTrx() {
         setLoading(false);
       }
     })();
-  }, []);
+  }, [bulan]);
 
-  const ms = useMemo(() =>
-    bulan ? allMs.filter(m => m.bulan === bulan) : allMs,
-    [allMs, bulan]
-  );
+  const ms = allMs;
 
   const tabComponents = [
     <ExecutiveTab  key={0} ms={ms} />,

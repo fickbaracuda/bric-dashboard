@@ -283,6 +283,9 @@ async function exportHandler(req, res) {
 
 /* ── MERCHANTS (full list with computed fields for client-side filter/sort) ── */
 async function merchantsHandler(req, res) {
+  const { bulan } = req.query;
+  const w = bulan ? 'WHERE bulan = $1' : '';
+  const p = bulan ? [bulan] : [];
   try {
     const result = await pool.query(`
       SELECT
@@ -324,10 +327,10 @@ async function merchantsHandler(req, res) {
           GREATEST(0, 100 - COALESCE(CURRENT_DATE - last_transaction_date::date, 60)::numeric * 2) * 0.20 +
           LEAST(total_transaction::numeric * 3, 100) * 0.15
         )::numeric, 1) AS final_priority_score
-      FROM instaqris_trx_merchant
+      FROM instaqris_trx_merchant ${w}
       ORDER BY total_transaction DESC, merchant_id
-    `);
-    res.json({ merchants: result.rows, total: result.rows.length });
+    `, p);
+    res.json({ merchants: result.rows, total: result.rows.length, bulan: bulan || null });
   } catch (err) {
     console.error('instaqris-trx merchants:', err);
     res.status(500).json({ error: err.message });

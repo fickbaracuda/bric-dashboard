@@ -276,8 +276,8 @@ export const getInstaqrisTrxExport = async (params = {}) => {
   const res = await axios.get(`${API_URL}/api/warroom/instaqris-trx/export`, { params, headers: authHeaders() });
   return res.data;
 };
-export const getInstaqrisTrxMerchants = async () => {
-  const res = await axios.get(`${API_URL}/api/warroom/instaqris-trx/merchants`, { headers: authHeaders() });
+export const getInstaqrisTrxMerchants = async (params = {}) => {
+  const res = await axios.get(`${API_URL}/api/warroom/instaqris-trx/merchants`, { params, headers: authHeaders() });
   return res.data;
 };
 
