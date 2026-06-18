@@ -126,6 +126,121 @@ function AlertCard({ unit, daysLeft }) {
   );
 }
 
+/* ── Modal detail per unit ── */
+function UnitModal({ unit, daysLeft, onClose }) {
+  if (!unit) return null;
+
+  const gap          = Math.max((unit.target_rkap || 0) - (unit.est_rev_juni || unit.juni || 0), 0);
+  const dailyNeeded  = daysLeft > 0 && gap > 0 ? gap / daysLeft : 0;
+  const deltaMoM     = (unit.juni || 0) - (unit.mei || 0);
+  const pctMoM       = unit.mei > 0 ? ((deltaMoM / unit.mei) * 100) : null;
+  const pctProgress  = unit.target_rkap > 0 ? (unit.juni / unit.target_rkap) * 100 : 0;
+  const rec          = getRekomendasi(unit, daysLeft);
+  const statusColor  = barColor(unit.status);
+
+  const Row = ({ label, val, valStyle }) => (
+    <div className="um-row">
+      <span className="um-row-label">{label}</span>
+      <span className="um-row-val" style={valStyle}>{val}</span>
+    </div>
+  );
+
+  return (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal-box um-box">
+        {/* Header */}
+        <div className="modal-header">
+          <div style={{ display:'flex', alignItems:'center', gap:10, minWidth:0 }}>
+            <span className={`pill ${pillClass(unit.status)}`}>{unit.status}</span>
+            <span className="modal-title" style={{ fontSize:15 }}>{unit.nama}</span>
+          </div>
+          <button className="modal-close" onClick={onClose}>✕</button>
+        </div>
+
+        <div className="modal-body" style={{ padding:'16px 20px 20px', display:'flex', flexDirection:'column', gap:16 }}>
+
+          {/* Est KPI hero */}
+          <div className="um-hero">
+            <div className="um-hero-top">
+              <div>
+                <div className="um-hero-label">Est % KPI Juni</div>
+                <div className="um-hero-val" style={{ color: statusColor }}>
+                  {unit.est_kpi_juni?.toFixed(2)}%
+                </div>
+              </div>
+              {unit.rank && (
+                <div className="um-rank-badge">Rank #{unit.rank}</div>
+              )}
+            </div>
+            <div className="um-progress-wrap">
+              <ProgressBar pct={pctProgress} color={statusColor} />
+              <div className="um-progress-labels">
+                <span style={{ color: statusColor, fontWeight:600 }}>{pctProgress.toFixed(1)}% dari target</span>
+                <span style={{ color:'var(--text-4)', fontSize:11 }}>Real KPI: {unit.real_kpi?.toFixed(2)}%</span>
+              </div>
+            </div>
+          </div>
+
+          {/* KPI cards row */}
+          <div className="um-cards">
+            {[
+              { label:'Revenue Juni',  val: fmtRev(unit.juni) },
+              { label:'Target RKAP',   val: fmtRev(unit.target_rkap) },
+              { label:'Est Rev Juni',  val: fmtRev(unit.est_rev_juni) },
+              { label:'Avg Rev / Hari',val: fmtRev(unit.avg_rev_day) },
+            ].map(c => (
+              <div key={c.label} className="um-card">
+                <div className="um-card-label">{c.label}</div>
+                <div className="um-card-val">{c.val}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* MoM + Gap analysis */}
+          <div className="um-analysis">
+            <div className="um-analysis-box">
+              <div className="um-analysis-title">📅 vs Bulan Lalu</div>
+              <Row label="Revenue Mei"  val={fmtRev(unit.mei)} />
+              <Row label="Revenue Juni" val={fmtRev(unit.juni)} valStyle={{ fontWeight:700 }} />
+              <div className="um-divider" />
+              <Row label="Selisih MoM"
+                val={`${fmtRevShort(deltaMoM)}${pctMoM !== null ? ` (${pctMoM >= 0 ? '+' : ''}${pctMoM.toFixed(1)}%)` : ''}`}
+                valStyle={{ color: deltaMoM >= 0 ? '#1D9E75' : '#EF4444', fontWeight:700 }} />
+            </div>
+            <div className="um-analysis-box">
+              <div className="um-analysis-title">🎯 Gap Analysis</div>
+              <Row label="Gap ke Target"
+                val={gap > 0 ? fmtRev(gap) : '✓ On Track'}
+                valStyle={{ color: gap > 0 ? '#EF4444' : '#1D9E75', fontWeight:700 }} />
+              <Row label="Sisa Hari"     val={`${daysLeft} hari`} />
+              {dailyNeeded > 0 && (
+                <Row label="Perlu / Hari"
+                  val={fmtRev(dailyNeeded)}
+                  valStyle={{ color:'#EF4444', fontWeight:700 }} />
+              )}
+              <Row label="Pace Saat Ini" val={`${fmtRev(unit.avg_rev_day)}/hari`} />
+            </div>
+          </div>
+
+          {/* Recommendation */}
+          {rec ? (
+            <div className="alert-card-rec" style={{
+              borderLeftColor: { urgen:'#DC2626', tinggi:'#EF4444', sedang:'#F59E0B', pantau:'#F59E0B' }[rec.level],
+              margin:0,
+            }}>
+              💡 {rec.text}
+            </div>
+          ) : (
+            <div className="alert-card-rec" style={{ borderLeftColor:'#1D9E75', background:'#F0FDF4', margin:0 }}>
+              ✅ On track — Est KPI {unit.est_kpi_juni?.toFixed(1)}%. Pertahankan momentum dan pace saat ini.
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const BULAN_OPTIONS = ['JAN_2026','FEB_2026','MAR_2026','APR_2026','MEI_2026','JUN_2026'];
 const FILTERS = ['Semua','Aman','Waspada','Awas','Kritis'];
 const DAYS_IN_MONTH = { JAN:31,FEB:28,MAR:31,APR:30,MEI:31,JUN:30,JUL:31,AGU:31,SEP:30,OKT:31,NOV:30,DES:31 };
@@ -143,14 +258,15 @@ const HIDDEN_UNITS = [
 ];
 
 export default function Scoreboard() {
-  const [data,    setData]    = useState(null);
-  const [metric,  setMetric]  = useState('kpi');
-  const [bulan,   setBulan]   = useState('JUN_2026');
-  const [filter,  setFilter]  = useState('Semua');
-  const [loading, setLoading] = useState(true);
-  const [syncing, setSyncing] = useState(false);
-  const [error,   setError]   = useState(null);
-  const [toast,   setToast]   = useState('');
+  const [data,         setData]         = useState(null);
+  const [metric,       setMetric]       = useState('kpi');
+  const [bulan,        setBulan]        = useState('JUN_2026');
+  const [filter,       setFilter]       = useState('Semua');
+  const [loading,      setLoading]      = useState(true);
+  const [syncing,      setSyncing]      = useState(false);
+  const [error,        setError]        = useState(null);
+  const [toast,        setToast]        = useState('');
+  const [selectedUnit, setSelectedUnit] = useState(null);
 
   const fetchData = (b, m) => {
     setLoading(true); setError(null);
@@ -309,7 +425,8 @@ export default function Scoreboard() {
                   <div className="tier-desc">{t.desc}</div>
                   <div className="tier-units">
                     {t.units.map(u => (
-                      <div key={u.nama} className="tier-unit-row">
+                      <div key={u.nama} className="tier-unit-row tier-unit-row--click"
+                        onClick={() => setSelectedUnit(u)}>
                         <span className="tier-unit-nama">{u.nama}</span>
                         <span className="tier-unit-kpi" style={{color:t.color}}>{u.est_kpi_juni?.toFixed(1)}%</span>
                       </div>
@@ -401,8 +518,12 @@ export default function Scoreboard() {
                     const isTotal  = row.nama==='REVENUE BISNIS BMS';
                     const isSub    = row.is_subtotal && !isTotal;
                     const isParent = row.is_parent;
+                    const isUnit   = !isSub && !isTotal && !isParent;
                     return (
-                      <tr key={i} className={`table-row${isTotal?' row-total':isSub?' row-subtotal':isParent?' row-parent':''}`}>
+                      <tr key={i}
+                        className={`table-row${isTotal?' row-total':isSub?' row-subtotal':isParent?' row-parent':''}`}
+                        style={isUnit ? { cursor:'pointer' } : undefined}
+                        onClick={isUnit ? () => setSelectedUnit(row) : undefined}>
                         <td className={`td-nama${isTotal?' td-nama--total':isSub?' td-nama--sub':isParent?' td-nama--parent':''}`}>
                           {isParent && <span className="parent-badge">GROUP</span>}
                           {row.nama}
@@ -446,13 +567,16 @@ export default function Scoreboard() {
               </div>
               <div className="alert-cards-grid">
                 {attentionUnits.map(u => (
-                  <AlertCard key={u.nama} unit={u} daysLeft={daysLeft} />
+                  <div key={u.nama} style={{ cursor:'pointer' }} onClick={() => setSelectedUnit(u)}>
+                    <AlertCard unit={u} daysLeft={daysLeft} />
+                  </div>
                 ))}
               </div>
             </section>
           )}
         </>
       )}
+      <UnitModal unit={selectedUnit} daysLeft={daysLeft} onClose={() => setSelectedUnit(null)} />
     </Layout>
   );
 }

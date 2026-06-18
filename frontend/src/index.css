@@ -845,6 +845,33 @@ body {
 .modal-close:hover { color: var(--text-1); }
 .modal-body { padding: 20px 24px 24px; }
 
+/* ── Unit Detail Modal ── */
+.um-box { max-width: 580px; }
+
+.um-hero { background: var(--bg-page); border-radius: 10px; padding: 14px 16px; }
+.um-hero-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; }
+.um-hero-label { font-size: 11px; font-weight: 600; color: var(--text-4); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 2px; }
+.um-hero-val   { font-size: 32px; font-weight: 800; line-height: 1; }
+.um-rank-badge { font-size: 11px; font-weight: 700; color: var(--text-3); background: var(--bg-card); border: 1px solid var(--border); border-radius: 20px; padding: 3px 10px; white-space: nowrap; }
+.um-progress-wrap { margin-top: 6px; }
+.um-progress-labels { display: flex; justify-content: space-between; margin-top: 5px; }
+
+.um-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.um-card { background: var(--bg-page); border-radius: 8px; padding: 10px 12px; }
+.um-card-label { font-size: 10px; font-weight: 600; color: var(--text-4); text-transform: uppercase; letter-spacing: .4px; margin-bottom: 4px; }
+.um-card-val   { font-size: 14px; font-weight: 700; color: var(--text-1); }
+
+.um-analysis { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.um-analysis-box { background: var(--bg-page); border-radius: 8px; padding: 12px 14px; }
+.um-analysis-title { font-size: 11px; font-weight: 700; color: var(--text-2); margin-bottom: 8px; }
+.um-row  { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; font-size: 12px; }
+.um-row-label { color: var(--text-3); }
+.um-row-val   { font-weight: 600; color: var(--text-1); }
+.um-divider { border-top: 1px solid var(--border); margin: 6px 0; }
+
+.tier-unit-row--click { cursor: pointer; border-radius: 5px; padding: 2px 4px; margin: 0 -4px; transition: background .15s; }
+.tier-unit-row--click:hover { background: rgba(0,0,0,.05); }
+
 /* Form */
 .user-form { display: flex; flex-direction: column; gap: 16px; }
 .form-row   { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
