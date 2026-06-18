@@ -65,13 +65,13 @@ function getRekomendasi(unit, daysLeft) {
   return null;
 }
 
-/* ── Segmentation tier ── */
-function getTier(k) {
-  if (k >= 150) return { label: 'Luar Biasa', emoji: '🔥', cls: 'tier-s', color: '#1D9E75' };
-  if (k >= 100) return { label: 'Aman',       emoji: '✅', cls: 'tier-a', color: '#059669' };
-  if (k >= 80)  return { label: 'Waspada',    emoji: '⚡', cls: 'tier-b', color: '#F59E0B' };
-  if (k >= 70)  return { label: 'Awas',       emoji: '🔶', cls: 'tier-c', color: '#EF4444' };
-  return           { label: 'Kritis',      emoji: '🚨', cls: 'tier-d', color: '#DC2626' };
+/* ── Status computation — single source of truth for all status logic ── */
+function getStatus(estKpi) {
+  const k = Number(estKpi) || 0;
+  if (k >= 100) return 'Aman';
+  if (k >= 80)  return 'Waspada';
+  if (k >= 70)  return 'Awas';
+  return 'Kritis';
 }
 
 /* ── Components ── */
@@ -175,8 +175,14 @@ export default function Scoreboard() {
     }
   };
 
-  const allRows  = (data?.all_rows  || []).filter(r => !HIDDEN_UNITS.includes(r.nama));
-  const rankings = (data?.rankings  || []).filter(u => !u.is_parent && !HIDDEN_UNITS.includes(u.nama));
+  // Override status from Apps Script with frontend-computed value so segmentasi,
+  // table pill, progress bar, alert cards, and summary counts are all consistent.
+  const allRows  = (data?.all_rows  || [])
+    .filter(r => !HIDDEN_UNITS.includes(r.nama))
+    .map(r => ({ ...r, status: getStatus(r.est_kpi_juni) }));
+  const rankings = (data?.rankings  || [])
+    .filter(u => !u.is_parent && !HIDDEN_UNITS.includes(u.nama))
+    .map(u => ({ ...u, status: getStatus(u.est_kpi_juni) }));
   const daysElapsed = data?.days_elapsed || 0;
   const bulanLabel  = bulan.replace('_', ' ');
   const monthKey    = bulan.split('_')[0];
@@ -406,7 +412,7 @@ export default function Scoreboard() {
                         <td>{fmtRev(row.est_rev_juni)}</td>
                         <td>{row.real_kpi?.toFixed(2)}%</td>
                         <td><ProgressBar pct={pct} color={barColor(row.status)} /></td>
-                        <td><strong style={{color:row.est_kpi_juni>=100?'#1D9E75':row.est_kpi_juni>=80?'#F59E0B':'#EF4444'}}>{row.est_kpi_juni?.toFixed(2)}%</strong></td>
+                        <td><strong style={{color:barColor(row.status)}}>{row.est_kpi_juni?.toFixed(2)}%</strong></td>
                         <td>
                           {!isSub&&!isTotal&&!isParent
                             ? <span className={`pill ${pillClass(row.status)}`}>{row.status}</span>
