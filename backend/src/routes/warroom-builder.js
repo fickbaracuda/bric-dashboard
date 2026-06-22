@@ -1341,8 +1341,8 @@ async function pushHandler(req, res) {
       [id, 'apps-script-push', null, null, null, headerRows,
        periodInfo.cutoff_day ? `Day ${periodInfo.cutoff_day}` : null,
        periodInfo.period_type,
-       allDataObjs,   // simpan SEMUA baris — generate akan pakai ini
-       flatCols]      // JSONB: pass array langsung, pg handle serialize
+       JSON.stringify(allDataObjs),
+       JSON.stringify(flatCols)]
     );
 
     // Simpan auto_mappings ke wb_column_mappings agar wizard bisa lanjut
