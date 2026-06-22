@@ -132,30 +132,72 @@ function extractGid(url) {
   return m ? m[1] : '0';
 }
 
+function buildCsvUrls(sheetId, gid) {
+  // gviz endpoint is most reliable for "Anyone with link can view" sheets
+  return [
+    `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&gid=${gid}`,
+    `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`,
+    `https://docs.google.com/spreadsheets/d/${sheetId}/pub?output=csv&gid=${gid}`,
+  ];
+}
 function buildCsvUrl(sheetId, gid) {
-  return `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`;
+  return buildCsvUrls(sheetId, gid)[0];
 }
 
-function fetchUrl(url) {
+function fetchRaw(url, redirectDepth) {
+  if ((redirectDepth || 0) > 5) return Promise.reject(new Error('Too many redirects'));
   return new Promise((resolve, reject) => {
     const client = url.startsWith('https') ? https : http;
-    const options = { headers: { 'User-Agent': 'Mozilla/5.0' } };
+    const options = {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; BRICBot/1.0)',
+        'Accept': 'text/csv,text/plain,*/*',
+      },
+    };
     const req = client.get(url, options, (res) => {
-      // follow redirect
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        return fetchUrl(res.headers.location).then(resolve).catch(reject);
+        const loc = res.headers.location;
+        res.resume();
+        return fetchRaw(loc.startsWith('http') ? loc : new URL(loc, url).href, (redirectDepth||0)+1)
+          .then(resolve).catch(reject);
       }
       if (res.statusCode !== 200) {
+        res.resume();
         return reject(new Error(`HTTP ${res.statusCode}`));
       }
       let data = '';
       res.setEncoding('utf8');
       res.on('data', chunk => { data += chunk; });
-      res.on('end',  () => resolve(data));
+      res.on('end', () => {
+        // Detect HTML response (login page / consent page returned instead of CSV)
+        const trimmed = data.trimStart();
+        if (trimmed.startsWith('<!DOCTYPE') || trimmed.startsWith('<html')) {
+          return reject(new Error('Sheet tidak bisa diakses — pastikan sheet sudah di-share "Anyone with the link can view"'));
+        }
+        resolve(data);
+      });
     });
     req.on('error', reject);
     req.setTimeout(30000, () => { req.destroy(); reject(new Error('Timeout')); });
   });
+}
+
+async function fetchUrl(url) {
+  return fetchRaw(url, 0);
+}
+
+async function fetchSheet(sheetId, gid) {
+  const urls = buildCsvUrls(sheetId, gid);
+  let lastErr;
+  for (const u of urls) {
+    try {
+      const data = await fetchRaw(u, 0);
+      return { data, csvUrl: u };
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr;
 }
 
 function parseCSV(text) {
@@ -833,12 +875,11 @@ router.post('/warrooms/:id/sheet/preview', async (req, res) => {
   const sheetId = extractSheetId(sheet_url);
   if (!sheetId) return res.status(400).json({ error: 'URL Google Sheet tidak valid' });
 
-  const gid    = extractGid(sheet_url);
-  const csvUrl = buildCsvUrl(sheetId, gid);
-  const t0     = Date.now();
+  const gid = extractGid(sheet_url);
+  const t0  = Date.now();
 
   try {
-    const csvText    = await fetchUrl(csvUrl);
+    const { data: csvText, csvUrl } = await fetchSheet(sheetId, gid);
     const allRows    = parseCSV(csvText);
     const { headerRows, dataStartRow } = detectHeaderRows(allRows);
     const flatCols   = flattenMultiHeader(allRows.slice(0, headerRows), headerRows);
@@ -863,21 +904,6 @@ router.post('/warrooms/:id/sheet/preview', async (req, res) => {
       };
     });
 
-    // Upsert sheet source
-    await pool.query(`
-      INSERT INTO wb_sheet_sources
-        (warroom_id, sheet_url, sheet_id, gid, csv_url, header_rows,
-         detected_day, detected_period, raw_preview, detected_cols, updated_at)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())
-      ON CONFLICT DO NOTHING`,
-      [req.params.id, sheet_url, sheetId, gid, csvUrl, headerRows,
-       periodInfo.cutoff_day ? `Day ${periodInfo.cutoff_day}` : null,
-       periodInfo.period_type,
-       JSON.stringify(previewRows),
-       JSON.stringify(flatCols)]
-    );
-
-    // Actually we need UPDATE ON CONFLICT — use DELETE+INSERT pattern instead
     await pool.query('DELETE FROM wb_sheet_sources WHERE warroom_id=$1', [req.params.id]);
     await pool.query(`
       INSERT INTO wb_sheet_sources
@@ -956,8 +982,12 @@ router.post('/warrooms/:id/generate', async (req, res) => {
     const sheet   = sheetRes.rows[0];
     const mappings = mapRes.rows;
 
-    // Fetch CSV
-    const csvText = await fetchUrl(sheet.csv_url);
+    // Fetch CSV — try all URL variants (gviz → export → pub)
+    const sheetIdGen = sheet.sheet_id || extractSheetId(sheet.sheet_url || '');
+    const gidGen     = sheet.gid || '0';
+    const { data: csvText } = sheetIdGen
+      ? await fetchSheet(sheetIdGen, gidGen)
+      : await fetchRaw(sheet.csv_url, 0).then(data => ({ data }));
     const allRows = parseCSV(csvText);
     const { headerRows, dataStartRow } = detectHeaderRows(allRows);
     const flatCols = flattenMultiHeader(allRows.slice(0, headerRows), headerRows);
