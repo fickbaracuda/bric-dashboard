@@ -21,13 +21,6 @@ import WarRoomAsdp from './pages/WarRoomAsdp';
 import WarRoomBumdes from './pages/WarRoomBumdes';
 import WarRoomLpd from './pages/WarRoomLpd';
 import ServerMonitor from './pages/ServerMonitor';
-import WBOverview from './pages/warroom-builder/WBOverview';
-import WBCreate from './pages/warroom-builder/WBCreate';
-import WBLibrary from './pages/warroom-builder/WBLibrary';
-import WBDetail from './pages/warroom-builder/WBDetail';
-import WBActions from './pages/warroom-builder/WBActions';
-import WBAlerts from './pages/warroom-builder/WBAlerts';
-import WBSettings from './pages/warroom-builder/WBSettings';
 import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './components/Layout';
 
@@ -72,13 +65,6 @@ export default function App() {
         <Route path="/war-room/bumdes"         element={<ProtectedRoute><WarRoomBumdes /></ProtectedRoute>} />
         <Route path="/war-room/lpd"            element={<ProtectedRoute><WarRoomLpd /></ProtectedRoute>} />
         <Route path="/server-monitor"          element={<ProtectedRoute><ServerMonitor /></ProtectedRoute>} />
-        <Route path="/warroom-builder"         element={<ProtectedRoute><WBOverview /></ProtectedRoute>} />
-        <Route path="/warroom-builder/create"  element={<ProtectedRoute><WBCreate /></ProtectedRoute>} />
-        <Route path="/warroom-builder/library" element={<ProtectedRoute><WBLibrary /></ProtectedRoute>} />
-        <Route path="/warroom-builder/actions" element={<ProtectedRoute><WBActions /></ProtectedRoute>} />
-        <Route path="/warroom-builder/alerts"  element={<ProtectedRoute><WBAlerts /></ProtectedRoute>} />
-        <Route path="/warroom-builder/settings" element={<ProtectedRoute><WBSettings /></ProtectedRoute>} />
-        <Route path="/warroom-builder/:id"     element={<ProtectedRoute><WBDetail /></ProtectedRoute>} />
         <Route path="/dashboard"  element={<ProtectedRoute><ComingSoon title="Dashboard Pencapaian" /></ProtectedRoute>} />
         <Route path="/tren"       element={<ProtectedRoute><ComingSoon title="Tren Harian" /></ProtectedRoute>} />
         <Route path="/per-unit"   element={<ProtectedRoute><ComingSoon title="Per Unit" /></ProtectedRoute>} />

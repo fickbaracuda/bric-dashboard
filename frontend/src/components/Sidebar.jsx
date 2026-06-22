@@ -150,8 +150,6 @@ export default function Sidebar({ onClose }) {
   const isPAMember    = anggotaId ? membersPA.some(m => String(m.id) === anggotaId) : false;
   const isSCMember    = anggotaId ? membersSC.some(m => String(m.id) === anggotaId) : false;
 
-  const isWBPath = location.pathname.startsWith('/warroom-builder');
-
   const isWinmePath    = location.pathname === '/winme';
   const isWinmeTimPath = location.pathname === '/scoreboard-tim'    || isWinmeMember;
   const isWRIQPath     = location.pathname === '/war-room/instaqris';
@@ -170,7 +168,6 @@ export default function Sidebar({ onClose }) {
   const isWRBumdesPath = location.pathname === '/war-room/bumdes';
   const isWRLpdPath    = location.pathname === '/war-room/lpd';
 
-  const [wbOpen,    setWBOpen]    = useState(isWBPath);
   const [winmeOpen, setWinmeOpen] = useState(isWinmePath || isWinmeTimPath || isWRIQPath || isWRIQTRXPath);
   const [timOpen,   setTimOpen]   = useState(isWinmeTimPath);
   const [paOpen,    setPAOpen]    = useState(isPABasePath || isPATimPath || isWREkspPath || isWRFPPath || isWRFarmPath || isWRPAProduk || isWRDMFPPath || isWRAsdpPath || isWRBumdesPath || isWRLpdPath);
@@ -179,7 +176,6 @@ export default function Sidebar({ onClose }) {
   const [scTimOpen, setSCTimOpen] = useState(isSCTimPath);
 
   useEffect(() => {
-    if (isWBPath) setWBOpen(true);
     if (isWinmePath || isWinmeTimPath || isWRIQPath || isWRIQTRXPath) setWinmeOpen(true);
     if (isWinmeTimPath) setTimOpen(true);
     if (isPABasePath || isPATimPath || isWREkspPath || isWRFPPath || isWRFarmPath || isWRPAProduk || isWRDMFPPath || isWRAsdpPath || isWRBumdesPath || isWRLpdPath) setPAOpen(true);
@@ -236,69 +232,6 @@ export default function Sidebar({ onClose }) {
           <i className="ti ti-medal" aria-hidden="true" />
           <span>Leader Scoreboard</span>
         </NavLink>
-
-        <div className="sidebar-menu-sep" />
-
-        {/* ── Warroom Builder — level 1 accordion ── */}
-        <div className="sidebar-accordion-wrap">
-          <NavLink
-            to="/warroom-builder"
-            onClick={() => { setWBOpen(o => !o); onClose(); }}
-            className={({ isActive }) =>
-              'sidebar-link sidebar-link-accordion' +
-              (isActive || isWBPath ? ' sidebar-link--active' : '')
-            }
-          >
-            <i className="ti ti-layout-dashboard" aria-hidden="true" style={{ color: '#1D9E75' }} />
-            <span style={{ flex: 1 }}>Warroom Builder</span>
-            <i
-              className={'ti ti-chevron-down sidebar-chevron' + (wbOpen ? ' sidebar-chevron--open' : '')}
-              onClick={e => { e.preventDefault(); e.stopPropagation(); setWBOpen(o => !o); }}
-              aria-hidden="true"
-            />
-          </NavLink>
-
-          <Accordion open={wbOpen}>
-            <div className="sidebar-submenu">
-              <NavLink to="/warroom-builder" end onClick={onClose}
-                className={({ isActive }) =>
-                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
-                }>
-                <i className="ti ti-home" style={{ color: '#1D9E75' }} aria-hidden="true" />
-                <span>Overview</span>
-              </NavLink>
-              <NavLink to="/warroom-builder/create" onClick={onClose}
-                className={({ isActive }) =>
-                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
-                }>
-                <i className="ti ti-plus" style={{ color: '#1D9E75' }} aria-hidden="true" />
-                <span>Buat Warroom</span>
-                <span className="sidebar-warroom-badge" style={{ background: '#1D9E75' }}>NEW</span>
-              </NavLink>
-              <NavLink to="/warroom-builder/library" onClick={onClose}
-                className={({ isActive }) =>
-                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
-                }>
-                <i className="ti ti-books" style={{ color: '#1D9E75' }} aria-hidden="true" />
-                <span>Warroom Library</span>
-              </NavLink>
-              <NavLink to="/warroom-builder/actions" onClick={onClose}
-                className={({ isActive }) =>
-                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
-                }>
-                <i className="ti ti-checklist" style={{ color: '#F59E0B' }} aria-hidden="true" />
-                <span>Action Center</span>
-              </NavLink>
-              <NavLink to="/warroom-builder/alerts" onClick={onClose}
-                className={({ isActive }) =>
-                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
-                }>
-                <i className="ti ti-bell-ringing" style={{ color: '#EF4444' }} aria-hidden="true" />
-                <span>Alert Center</span>
-              </NavLink>
-            </div>
-          </Accordion>
-        </div>
 
         <div className="sidebar-menu-sep" />
 
