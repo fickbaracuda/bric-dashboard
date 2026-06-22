@@ -20,7 +20,6 @@ import WarRoomInstaqrisTrx from './pages/WarRoomInstaqrisTrx';
 import WarRoomAsdp from './pages/WarRoomAsdp';
 import WarRoomBumdes from './pages/WarRoomBumdes';
 import WarRoomLpd from './pages/WarRoomLpd';
-import InstaQrisInsight from './pages/InstaQrisInsight';
 import ServerMonitor from './pages/ServerMonitor';
 import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './components/Layout';
@@ -62,7 +61,6 @@ export default function App() {
         <Route path="/war-room/mgm-pa"        element={<ProtectedRoute><WarRoomMgmPa /></ProtectedRoute>} />
         <Route path="/war-room/dm-fastpay"     element={<ProtectedRoute><WarRoomDmFastpay /></ProtectedRoute>} />
         <Route path="/war-room/instaqris-trx" element={<ProtectedRoute><WarRoomInstaqrisTrx /></ProtectedRoute>} />
-        <Route path="/instaqris-insight"      element={<ProtectedRoute><InstaQrisInsight /></ProtectedRoute>} />
         <Route path="/war-room/asdp"           element={<ProtectedRoute><WarRoomAsdp /></ProtectedRoute>} />
         <Route path="/war-room/bumdes"         element={<ProtectedRoute><WarRoomBumdes /></ProtectedRoute>} />
         <Route path="/war-room/lpd"            element={<ProtectedRoute><WarRoomLpd /></ProtectedRoute>} />
