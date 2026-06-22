@@ -143,8 +143,9 @@ export default function WBCreate() {
         setError('Data belum diterima. Pastikan script sudah dijalankan di Google Sheet.');
         return;
       }
-      const columns = JSON.parse(ss.detected_cols || '[]');
-      const previewRows = JSON.parse(ss.raw_preview || '[]');
+      // detected_cols & raw_preview adalah JSONB — pg sudah deserialize ke JS array
+      const columns    = Array.isArray(ss.detected_cols) ? ss.detected_cols : JSON.parse(ss.detected_cols || '[]');
+      const previewRows = Array.isArray(ss.raw_preview)  ? ss.raw_preview   : JSON.parse(ss.raw_preview   || '[]');
       setPreview({
         columns,
         preview: previewRows,

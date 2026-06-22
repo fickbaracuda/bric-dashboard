@@ -982,28 +982,43 @@ router.post('/warrooms/:id/generate', async (req, res) => {
     const sheet   = sheetRes.rows[0];
     const mappings = mapRes.rows;
 
-    // Fetch CSV — try all URL variants (gviz → export → pub)
-    const sheetIdGen = sheet.sheet_id || extractSheetId(sheet.sheet_url || '');
-    const gidGen     = sheet.gid || '0';
-    const { data: csvText } = sheetIdGen
-      ? await fetchSheet(sheetIdGen, gidGen)
-      : await fetchRaw(sheet.csv_url, 0).then(data => ({ data }));
-    const allRows = parseCSV(csvText);
-    const { headerRows, dataStartRow } = detectHeaderRows(allRows);
-    const flatCols = flattenMultiHeader(allRows.slice(0, headerRows), headerRows);
-    const dataRows = allRows.slice(dataStartRow);
+    // Ambil data: push mode (csv_url null) pakai raw_preview yg sudah disimpan
+    let rawObjects, flatCols, periodInfo;
 
-    // Convert to objects using flat column names
-    const rawObjects = dataRows.map(row => {
-      const obj = {};
-      flatCols.forEach((col, i) => { obj[col] = row[i] !== undefined ? row[i] : ''; });
-      return obj;
-    });
+    const isPushMode = !sheet.sheet_id && sheet.sheet_url === 'apps-script-push';
+
+    if (isPushMode) {
+      // raw_preview JSONB — pg sudah deserialize ke JS array
+      const storedRows = Array.isArray(sheet.raw_preview) ? sheet.raw_preview : [];
+      const storedCols = Array.isArray(sheet.detected_cols) ? sheet.detected_cols : [];
+      if (!storedRows.length || !storedCols.length) {
+        return res.status(400).json({ error: 'Push data kosong. Jalankan ulang Apps Script.' });
+      }
+      flatCols   = storedCols;
+      rawObjects = storedRows;
+      periodInfo = { period_type: sheet.detected_period || 'full_month', cutoff_day: null };
+    } else {
+      // Fetch dari Google Sheet
+      const sheetIdGen = sheet.sheet_id || extractSheetId(sheet.sheet_url || '');
+      const gidGen     = sheet.gid || '0';
+      const { data: csvText } = sheetIdGen
+        ? await fetchSheet(sheetIdGen, gidGen)
+        : await fetchRaw(sheet.csv_url, 0).then(data => ({ data }));
+      const allRows               = parseCSV(csvText);
+      const { headerRows: hr, dataStartRow } = detectHeaderRows(allRows);
+      flatCols   = flattenMultiHeader(allRows.slice(0, hr), hr);
+      const dataRows              = allRows.slice(dataStartRow);
+      rawObjects = dataRows.map(row => {
+        const obj = {};
+        flatCols.forEach((col, i) => { obj[col] = row[i] !== undefined ? row[i] : ''; });
+        return obj;
+      });
+      periodInfo = detectPeriod(flatCols, allRows.slice(0, 3));
+    }
 
     // Apply mappings + compute metrics
     const parsedData = computeRowMetrics(rawObjects, mappings);
     const summary    = computeSummary(parsedData);
-    const periodInfo = detectPeriod(flatCols, allRows.slice(0, 3));
     const insights   = generateInsights(parsedData, summary, warroom);
     const alertsArr  = generateAlerts(summary, warroom);
     const actionsArr = generateActions(parsedData, insights, warroom);
@@ -1292,11 +1307,13 @@ async function pushHandler(req, res) {
     const dataRows    = allRows.slice(dataStartRow);
     const periodInfo  = detectPeriod(flatCols, allRows.slice(0, 3));
 
-    const previewRows = dataRows.slice(0, 20).map(row => {
+    // Semua baris sebagai objek (untuk generate), preview UI cukup 20
+    const allDataObjs = dataRows.map(row => {
       const obj = {};
-      flatCols.forEach((col, i) => { obj[col] = row[i] || ''; });
+      flatCols.forEach((col, i) => { obj[col] = row[i] !== undefined ? row[i] : ''; });
       return obj;
     });
+    const previewRows = allDataObjs.slice(0, 20);
 
     const autoMappings = flatCols.map(col => {
       const { field, confidence } = autoDetectField(col);
@@ -1319,8 +1336,8 @@ async function pushHandler(req, res) {
       [id, 'apps-script-push', null, null, null, headerRows,
        periodInfo.cutoff_day ? `Day ${periodInfo.cutoff_day}` : null,
        periodInfo.period_type,
-       JSON.stringify(previewRows),
-       JSON.stringify(flatCols)]
+       allDataObjs,   // simpan SEMUA baris — generate akan pakai ini
+       flatCols]      // JSONB: pass array langsung, pg handle serialize
     );
 
     // Simpan auto_mappings ke wb_column_mappings agar wizard bisa lanjut
