@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import Chart from 'chart.js/auto';
 import Layout from '../../components/Layout';
-import { wbGetDashboard, wbGenerate, wbRemap, wbResolveAlert, wbUpdateAction } from '../../services/wbApi';
+import { wbGetDashboard, wbGenerate, wbRemap, wbGetWarroom, wbSheetSave, wbResolveAlert, wbUpdateAction } from '../../services/wbApi';
 import {
   SCORE_STATUS_COLORS, BU_COLORS, ACTION_TYPE_LABELS,
   ACTION_STATUS_LABELS, ALERT_LEVEL_COLORS,
@@ -610,6 +610,150 @@ function TabActions({ actions: initialActions, warroom }) {
   );
 }
 
+/* ── Konstanta Standard Fields ── */
+const STANDARD_FIELDS = [
+  { value: '',                         label: '— Tidak Dipetakan —' },
+  { value: 'entity_id',                label: 'Entity ID (Kode/ID Unik)' },
+  { value: 'entity_name',              label: 'Entity Name (Nama)' },
+  { value: 'category',                 label: 'Kategori / Segmen' },
+  { value: 'province',                 label: 'Provinsi' },
+  { value: 'city',                     label: 'Kota / Kabupaten' },
+  { value: 'registration_date',        label: 'Tanggal Registrasi' },
+  { value: 'first_trx_date',           label: 'Tanggal Transaksi Pertama' },
+  { value: 'last_trx_date',            label: 'Tanggal Transaksi Terakhir' },
+  { value: 'previous_trx',             label: '★ TRX Periode Lalu' },
+  { value: 'current_trx',              label: '★ TRX Periode Ini (WAJIB untuk dashboard)' },
+  { value: 'same_period_previous_trx', label: 'TRX Same Period Lalu (MTD)' },
+  { value: 'same_period_current_trx',  label: 'TRX Same Period Ini (MTD)' },
+  { value: 'previous_revenue',         label: '★ Revenue Periode Lalu' },
+  { value: 'current_revenue',          label: '★ Revenue Periode Ini (WAJIB untuk dashboard)' },
+  { value: 'previous_margin',          label: 'Margin Periode Lalu' },
+  { value: 'current_margin',           label: 'Margin Periode Ini' },
+  { value: 'dev_trx',                  label: 'Dev TRX (Selisih sudah dihitung)' },
+  { value: 'dev_revenue',              label: 'Dev Revenue (Selisih sudah dihitung)' },
+  { value: 'dev_margin',               label: 'Dev Margin (Selisih sudah dihitung)' },
+  { value: 'mat',                      label: 'MAT' },
+  { value: 'arpt',                     label: 'ARPT' },
+  { value: 'atpu',                     label: 'ATPU' },
+  { value: 'arpu',                     label: 'ARPU' },
+  { value: 'success_rate',             label: 'Success Rate' },
+  { value: 'failure_rate',             label: 'Failure Rate' },
+  { value: 'pic',                      label: 'PIC' },
+  { value: 'no_hp',                    label: 'No HP / WhatsApp' },
+];
+
+/* ── Modal Kelola Mapping ── */
+function MappingModal({ warroomId, onClose, onSaved }) {
+  const [cols,    setCols]    = useState([]);
+  const [mapping, setMapping] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [saving,  setSaving]  = useState(false);
+
+  useEffect(() => {
+    wbGetWarroom(warroomId).then(wr => {
+      const ss = wr.sheet_source;
+      const existingMaps = wr.column_mappings || [];
+      const detectedCols = Array.isArray(ss?.detected_cols)
+        ? ss.detected_cols
+        : JSON.parse(ss?.detected_cols || '[]');
+
+      const mapByCol = {};
+      for (const m of existingMaps) mapByCol[m.original_col] = m;
+
+      const initMapping = {};
+      for (const col of detectedCols) {
+        initMapping[col] = mapByCol[col]?.standard_field || '';
+      }
+      setCols(detectedCols);
+      setMapping(initMapping);
+      setLoading(false);
+    }).catch(() => setLoading(false));
+  }, [warroomId]);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const mappings = cols.map(col => ({
+        original_col:   col,
+        standard_field: mapping[col] || null,
+        confidence:     mapping[col] ? 0.9 : 0,
+        data_type:      ['entity_id','entity_name','category','province','city','pic','no_hp',
+                         'registration_date','first_trx_date','last_trx_date'].includes(mapping[col])
+                        ? 'text' : 'number',
+      }));
+      await wbSheetSave(warroomId, mappings);
+      onSaved();
+    } catch (e) {
+      alert('Gagal simpan: ' + (e.response?.data?.error || e.message));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const hasCurrTrx = Object.values(mapping).includes('current_trx');
+  const hasCurrRev = Object.values(mapping).includes('current_revenue');
+
+  return (
+    <div className="wb-modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="wb-modal" style={{ maxWidth: 640, maxHeight: '85vh', overflowY: 'auto' }}>
+        <div className="wb-modal-header">
+          <h2 className="wb-modal-title"><i className="ti ti-table-options" /> Kelola Mapping Kolom</h2>
+          <button className="wb-modal-close" onClick={onClose}><i className="ti ti-x" /></button>
+        </div>
+        <div className="wb-modal-body">
+          {loading ? (
+            <div className="wb-loading"><i className="ti ti-loader wb-spin" /> Memuat kolom...</div>
+          ) : (
+            <>
+              {(!hasCurrTrx || !hasCurrRev) && (
+                <div className="wb-info-box" style={{ marginBottom: 12, background: '#FEF3C7', borderColor: '#F59E0B', color: '#92400E' }}>
+                  <i className="ti ti-alert-triangle" style={{ color: '#D97706' }} />
+                  <div>
+                    {!hasCurrTrx && <div>Kolom <b>TRX Periode Ini</b> belum dipetakan — diperlukan untuk menghitung Entity Aktif dan Status Growth.</div>}
+                    {!hasCurrRev && <div>Kolom <b>Revenue Periode Ini</b> belum dipetakan — diperlukan untuk Revenue Analysis.</div>}
+                  </div>
+                </div>
+              )}
+              <table className="wb-table wb-table-sm">
+                <thead>
+                  <tr>
+                    <th>Kolom di Sheet</th>
+                    <th>Petakan ke Standard Field</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {cols.map(col => (
+                    <tr key={col}>
+                      <td><code style={{ fontSize: 12, background: '#F3F4F6', padding: '2px 6px', borderRadius: 4 }}>{col}</code></td>
+                      <td>
+                        <select
+                          value={mapping[col] || ''}
+                          onChange={e => setMapping(prev => ({ ...prev, [col]: e.target.value }))}
+                          style={{ width: '100%', padding: '4px 8px', fontSize: 13, border: '1px solid #D1D5DB', borderRadius: 6 }}
+                        >
+                          {STANDARD_FIELDS.map(sf => (
+                            <option key={sf.value} value={sf.value}>{sf.label}</option>
+                          ))}
+                        </select>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
+        </div>
+        <div className="wb-modal-footer">
+          <button className="wb-btn-ghost" onClick={onClose}>Batal</button>
+          <button className="wb-btn-primary" onClick={handleSave} disabled={saving || loading}>
+            {saving ? <><i className="ti ti-loader wb-spin" /> Menyimpan...</> : <><i className="ti ti-check" /> Simpan & Regenerate</>}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ── Main Component ── */
 export default function WBDetail() {
   const { id }       = useParams();
@@ -620,6 +764,7 @@ export default function WBDetail() {
   const [syncing,    setSyncing]    = useState(false);
   const [syncResult, setSyncResult] = useState(null);
   const [remapping,  setRemapping]  = useState(false);
+  const [showMapping, setShowMapping] = useState(false);
 
   const load = () => {
     setLoading(true);
@@ -714,14 +859,12 @@ export default function WBDetail() {
             )}
             <button
               className="wb-btn-ghost"
-              onClick={handleRemap}
-              disabled={remapping || syncing}
-              title="Re-detect mapping kolom dari data tersimpan, lalu regenerate"
+              onClick={() => setShowMapping(true)}
+              disabled={syncing || remapping}
+              title="Petakan kolom sheet ke standard fields secara manual"
               style={{ fontSize: 13 }}
             >
-              {remapping
-                ? <><i className="ti ti-loader wb-spin" /> Remapping...</>
-                : <><i className="ti ti-table-options" /> Remap Kolom</>}
+              <i className="ti ti-table-options" /> Kelola Mapping
             </button>
             <button
               className="wb-btn-primary"
@@ -736,7 +879,7 @@ export default function WBDetail() {
         </div>
 
         {/* Mapping warning — data ada tapi semua nilai numerik 0 */}
-        {snapshot && (summary.total_active ?? 0) === 0 && (summary.total_entities ?? 0) > 0 && (
+        {snapshot && (summary.active_entity ?? 0) === 0 && (summary.total_entity ?? 0) > 0 && (
           <div className="wb-info-box" style={{ marginBottom: 8, background: '#FEF3C7', borderColor: '#F59E0B', color: '#92400E' }}>
             <i className="ti ti-alert-triangle" style={{ color: '#D97706' }} />
             <div>
@@ -822,6 +965,17 @@ export default function WBDetail() {
           </>
         )}
       </div>
+
+      {showMapping && (
+        <MappingModal
+          warroomId={id}
+          onClose={() => setShowMapping(false)}
+          onSaved={() => {
+            setShowMapping(false);
+            handleSync();
+          }}
+        />
+      )}
     </Layout>
   );
 }

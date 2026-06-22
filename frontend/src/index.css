@@ -3917,3 +3917,13 @@ body {
 .wb-status-kpi { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; font-size: 13px; }
 .wb-status-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
 .wb-status-count { font-size: 16px; font-weight: 700; }
+
+/* wb-modal */
+.wb-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 16px; }
+.wb-modal { background: var(--bg-card); border-radius: 12px; width: 100%; box-shadow: 0 8px 32px rgba(0,0,0,.2); display: flex; flex-direction: column; }
+.wb-modal-header { display: flex; align-items: center; justify-content: space-between; padding: 18px 20px 14px; border-bottom: 1px solid var(--border); }
+.wb-modal-title { font-size: 16px; font-weight: 600; color: var(--text-1); display: flex; align-items: center; gap: 8px; margin: 0; }
+.wb-modal-close { background: none; border: none; cursor: pointer; color: var(--text-3); font-size: 20px; padding: 2px; display: flex; }
+.wb-modal-close:hover { color: var(--text-1); }
+.wb-modal-body { padding: 16px 20px; overflow-y: auto; flex: 1; }
+.wb-modal-footer { display: flex; gap: 8px; justify-content: flex-end; padding: 12px 20px; border-top: 1px solid var(--border); }
