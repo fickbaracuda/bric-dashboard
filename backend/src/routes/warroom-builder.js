@@ -1282,14 +1282,13 @@ async function pushHandler(req, res) {
   if (token !== WB_PUSH_TOKEN) return res.status(401).json({ error: 'Unauthorized' });
 
   const { id } = req.params;
-  const { columns, rows } = req.body;
-  if (!Array.isArray(columns) || !Array.isArray(rows)) {
-    return res.status(400).json({ error: 'columns[] dan rows[] wajib ada' });
-  }
+  const { csv, columns, rows } = req.body;
 
-  const t0 = Date.now();
-  try {
-    // Bangun CSV teks dari columns + rows lalu simpan sebagai sheet source
+  // Terima format CSV string (baru, lebih cepat) atau columns+rows (lama)
+  let csvText;
+  if (csv && typeof csv === 'string') {
+    csvText = csv;
+  } else if (Array.isArray(columns) && Array.isArray(rows)) {
     const csvLines = [columns.join(',')];
     for (const row of rows) {
       const vals = columns.map(c => {
@@ -1299,7 +1298,13 @@ async function pushHandler(req, res) {
       });
       csvLines.push(vals.join(','));
     }
-    const csvText = csvLines.join('\n');
+    csvText = csvLines.join('\n');
+  } else {
+    return res.status(400).json({ error: 'csv string atau columns[]+rows[] wajib ada' });
+  }
+
+  const t0 = Date.now();
+  try {
 
     const allRows     = parseCSV(csvText);
     const { headerRows, dataStartRow } = detectHeaderRows(allRows);

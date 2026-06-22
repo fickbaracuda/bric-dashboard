@@ -168,45 +168,54 @@ export default function WBCreate() {
   const buildAppsScript = (warroomId) => {
     const origin = window.location.origin;
     return `function pushToWarroomBuilder() {
-  var ss      = SpreadsheetApp.getActiveSpreadsheet();
-  var sheet   = ss.getActiveSheet();
-  var data    = sheet.getDataRange().getValues();
+  var sheet   = SpreadsheetApp.getActiveSheet();
+  var lastRow = sheet.getLastRow();
+  var lastCol = sheet.getLastColumn();
 
-  if (data.length < 2) {
+  if (lastRow < 2) {
     SpreadsheetApp.getUi().alert('Sheet kosong atau hanya header');
     return;
   }
 
-  var headers = data[0].map(function(h) { return String(h || '').trim(); });
-  var rows    = [];
+  // Baca semua data sekaligus (1 API call)
+  var data = sheet.getRange(1, 1, lastRow, lastCol).getValues();
 
-  for (var i = 1; i < data.length; i++) {
-    var row     = data[i];
-    var isEmpty = row.every(function(v) { return v === '' || v === null || v === undefined; });
-    if (isEmpty) continue;
-    var obj = {};
-    headers.forEach(function(h, j) {
-      if (!h) return;
+  // Build CSV langsung — jauh lebih cepat dari membuat array of objects
+  var csvLines = [];
+  for (var i = 0; i < data.length; i++) {
+    var row   = data[i];
+    var cells = [];
+    var hasValue = (i === 0); // baris header selalu disimpan
+    for (var j = 0; j < row.length; j++) {
       var v = row[j];
+      var s;
       if (v instanceof Date) {
-        obj[h] = Utilities.formatDate(v, 'Asia/Jakarta', 'yyyy-MM-dd');
+        s = Utilities.formatDate(v, 'Asia/Jakarta', 'yyyy-MM-dd');
+        hasValue = true;
+      } else if (v === '' || v === null || v === undefined) {
+        s = '';
       } else {
-        obj[h] = v;  // angka tetap number — jangan diubah ke string
+        s = String(v);
+        hasValue = true;
       }
-    });
-    rows.push(obj);
+      // CSV escape hanya kalau ada karakter khusus
+      if (s.indexOf(',') !== -1 || s.indexOf('"') !== -1 || s.indexOf('\\n') !== -1) {
+        s = '"' + s.replace(/"/g, '""') + '"';
+      }
+      cells.push(s);
+    }
+    if (hasValue) csvLines.push(cells.join(','));
   }
 
-  var payload = {
-    token:   'bric2026bimasaktisecret',
-    columns: headers.filter(function(h) { return h !== ''; }),
-    rows:    rows
-  };
+  var payload = JSON.stringify({
+    token: 'bric2026bimasaktisecret',
+    csv:   csvLines.join('\\n')
+  });
 
   var options = {
-    method:          'post',
-    contentType:     'application/json',
-    payload:         JSON.stringify(payload),
+    method:             'post',
+    contentType:        'application/json',
+    payload:            payload,
     muteHttpExceptions: true
   };
 
@@ -218,12 +227,11 @@ export default function WBCreate() {
   if (code === 200) {
     var result = JSON.parse(body);
     SpreadsheetApp.getUi().alert(
-      'Sukses!\\nBaris terkirim: ' + result.rows_received +
-      '\\nBaris valid: ' + result.rows_parsed +
+      'Sukses!\\nBaris valid: ' + result.rows_parsed +
       '\\nKolom: ' + result.columns.length
     );
   } else {
-    SpreadsheetApp.getUi().alert('Error ' + code + ':\\n' + body);
+    SpreadsheetApp.getUi().alert('Error ' + code + ':\\n' + body.substring(0, 500));
   }
 }`;
   };
