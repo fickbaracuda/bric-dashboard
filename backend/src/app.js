@@ -25,6 +25,7 @@ const asdpRoutes          = require('./routes/warroom-asdp');
 const bumdesRoutes        = require('./routes/warroom-bumdes');
 const lpdRoutes           = require('./routes/warroom-lpd');
 const systemRoutes        = require('./routes/system');
+const iqInsightRoutes     = require('./routes/instaqris-insight');
 const requireAuth         = require('./middleware/auth');
 
 const app  = express();
@@ -108,6 +109,7 @@ app.get('/api/warroom/lpd/analytics',    requireAuth, lpdRoutes.analyticsHandler
 app.get('/api/warroom/lpd/outlets',      requireAuth, lpdRoutes.outletsHandler);
 app.use('/api/warroom',        requireAuth, warroomRoutes);
 
+app.use('/api/instaqris-insight', requireAuth, iqInsightRoutes);
 app.use('/api/system', requireAuth, systemRoutes);
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
