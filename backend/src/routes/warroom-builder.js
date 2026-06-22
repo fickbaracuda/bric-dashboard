@@ -274,37 +274,62 @@ function flattenMultiHeader(rows, headerRows) {
 function autoDetectField(colName) {
   const c = colName.toLowerCase();
   const hints = [
-    { field: 'entity_id',                  patterns: ['id_outlet','id outlet','kode','mcc','entity_id','id_mcc','id_merchant','id_seller','id_agent','id_partner'] },
-    { field: 'entity_name',                 patterns: ['nama','name','kategori','segmen','produk','product','entity_name'] },
-    { field: 'category',                    patterns: ['category','kategori','segment','segmen'] },
-    { field: 'province',                    patterns: ['provinsi','province','propinsi'] },
-    { field: 'city',                        patterns: ['kota','city','kabupaten'] },
-    { field: 'registration_date',           patterns: ['tgl_reg','tgl reg','tanggal reg','registration','reg_date'] },
-    { field: 'first_trx_date',              patterns: ['first_trx','first trx','tgl_first','tanggal first'] },
-    { field: 'last_trx_date',               patterns: ['last_trx','last trx','tgl_last','tanggal last'] },
-    { field: 'previous_trx',               patterns: ['trx_mei','trx_apr','trx_april','trx_previous','prev_trx','trx_lalu'] },
-    { field: 'current_trx',                patterns: ['trx_jun','trx_juni','trx_current','curr_trx','trx_sekarang'] },
-    { field: 'same_period_previous_trx',   patterns: ['trx_1_9_mei','trx_mei_9','trx_same_prev'] },
-    { field: 'same_period_current_trx',    patterns: ['trx_1_9_jun','trx_jun_9','trx_same_curr'] },
-    { field: 'previous_revenue',           patterns: ['rev_mei','rev_apr','revenue_mei','revenue_apr','rev_previous'] },
-    { field: 'current_revenue',            patterns: ['rev_jun','rev_juni','revenue_jun','revenue_juni','rev_current'] },
-    { field: 'previous_margin',            patterns: ['margin_mei','margin_apr','margin_previous'] },
-    { field: 'current_margin',             patterns: ['margin_jun','margin_juni','margin_current'] },
-    { field: 'dev_trx',                    patterns: ['dev_trx','delta_trx','selisih_trx','growth_trx'] },
-    { field: 'dev_revenue',               patterns: ['dev_rev','dev_revenue','delta_rev','delta_revenue'] },
-    { field: 'dev_margin',                patterns: ['dev_margin','delta_margin'] },
-    { field: 'mat',                        patterns: ['mat'] },
-    { field: 'arpt',                       patterns: ['arpt'] },
-    { field: 'atpu',                       patterns: ['atpu'] },
-    { field: 'arpu',                       patterns: ['arpu'] },
-    { field: 'success_rate',              patterns: ['success_rate','sukses'] },
-    { field: 'failure_rate',              patterns: ['failure_rate','gagal'] },
-    { field: 'pic',                        patterns: ['pic','penanggung','person'] },
-    { field: 'no_hp',                      patterns: ['no_hp','hp','phone','telepon','wa'] },
+    { field: 'entity_id',         patterns: ['id_outlet','id_merchant','id_seller','id_agent','id_partner','id_mitra',
+                                             'id_mcc','merchant_id','outlet_id','seller_id','kode_outlet','kode_merchant',
+                                             'kode_mitra','mid','qris_id','no_id','nomor_id','entity_id','mcc','kode'] },
+    { field: 'entity_name',       patterns: ['nama_outlet','nama_merchant','nama_toko','nama_mitra','nama_seller',
+                                             'nama_agent','merchant_name','outlet_name','entity_name',
+                                             'nama','name','kategori','segmen','produk','product'] },
+    { field: 'category',          patterns: ['category','kategori','segment','segmen','tipe','jenis','type'] },
+    { field: 'province',          patterns: ['provinsi','province','propinsi','prov'] },
+    { field: 'city',              patterns: ['kota','city','kabupaten','kab','wilayah'] },
+    { field: 'registration_date', patterns: ['tgl_reg','tgl_daftar','tanggal_reg','tanggal_daftar','registration_date','reg_date','join_date'] },
+    { field: 'first_trx_date',    patterns: ['first_trx','tgl_first','tanggal_first','tgl_trx_pertama','first_transaction'] },
+    { field: 'last_trx_date',     patterns: ['last_trx','tgl_last','tanggal_last','tgl_trx_terakhir','last_transaction'] },
+    { field: 'same_period_previous_trx', patterns: ['trx_1_9_mei','trx_mei_9','trx_same_prev','sp_prev'] },
+    { field: 'same_period_current_trx',  patterns: ['trx_1_9_jun','trx_jun_9','trx_same_curr','sp_curr'] },
+    { field: 'mat',               patterns: ['mat'] },
+    { field: 'arpt',              patterns: ['arpt'] },
+    { field: 'atpu',              patterns: ['atpu'] },
+    { field: 'arpu',              patterns: ['arpu'] },
+    { field: 'success_rate',      patterns: ['success_rate','sukses','berhasil'] },
+    { field: 'failure_rate',      patterns: ['failure_rate','gagal','failed'] },
+    { field: 'pic',               patterns: ['pic','penanggung_jawab','person_in_charge'] },
+    { field: 'no_hp',             patterns: ['no_hp','nomor_hp','telepon','phone','wa','whatsapp'] },
   ];
 
+  // Bulan previous / current untuk deteksi otomatis arah kolom
+  const PREV_MONTHS = ['jan','feb','mar','apr','april','mei','may'];
+  const CURR_MONTHS = ['jun','juni','jul','juli','agt','agst','agus','aug','sep','okt','oct','nov','des','dec'];
+  const hasPrevMonth = PREV_MONTHS.some(m => c.includes(m));
+  const hasCurrMonth = CURR_MONTHS.some(m => c.includes(m));
+  const hasTrx    = c.includes('trx') || c.includes('transaksi') || c.includes('transaction');
+  const hasRev    = c.includes('rev') || c.includes('revenue') || c.includes('omzet') || c.includes('pendapatan');
+  const hasMargin = c.includes('margin');
+  const hasDev    = c.includes('dev_') || c.includes('delta_') || c.includes('selisih') || c.includes('growth') || c.includes('pertumbuhan');
+
+  // Dev/delta fields — deteksi lebih dulu agar tidak salah masuk ke prev/curr
+  if (hasDev && hasTrx)    return { field: 'dev_trx',     confidence: 0.9 };
+  if (hasDev && hasRev)    return { field: 'dev_revenue',  confidence: 0.9 };
+  if (hasDev && hasMargin) return { field: 'dev_margin',   confidence: 0.9 };
+
+  // TRX berdasarkan bulan
+  if (hasTrx && hasPrevMonth && !hasCurrMonth) return { field: 'previous_trx', confidence: 0.9 };
+  if (hasTrx && hasCurrMonth && !hasPrevMonth) return { field: 'current_trx',  confidence: 0.9 };
+  // Revenue berdasarkan bulan
+  if (hasRev && hasPrevMonth && !hasCurrMonth) return { field: 'previous_revenue', confidence: 0.9 };
+  if (hasRev && hasCurrMonth && !hasPrevMonth) return { field: 'current_revenue',  confidence: 0.9 };
+  // Margin berdasarkan bulan
+  if (hasMargin && hasPrevMonth && !hasCurrMonth) return { field: 'previous_margin', confidence: 0.9 };
+  if (hasMargin && hasCurrMonth && !hasPrevMonth) return { field: 'current_margin',  confidence: 0.9 };
+
+  // Fallback field tunggal tanpa info bulan
+  if (c === 'trx' || c === 'total_trx' || c === 'jumlah_trx') return { field: 'current_trx',    confidence: 0.6 };
+  if (c === 'revenue' || c === 'omzet' || c === 'pendapatan')  return { field: 'current_revenue', confidence: 0.6 };
+  if (c === 'margin')                                           return { field: 'current_margin',  confidence: 0.6 };
+
   for (const h of hints) {
-    if (h.patterns.some(p => c.includes(p.replace(/_/g, '_')) || c === p)) {
+    if (h.patterns.some(p => c.includes(p) || c === p)) {
       return { field: h.field, confidence: 0.8 };
     }
   }
@@ -943,6 +968,16 @@ router.post('/warrooms/:id/sheet/preview', async (req, res) => {
   }
 });
 
+// Determine data_type dari standard_field
+function fieldDataType(standardField) {
+  const numeric = [
+    'previous_trx','current_trx','same_period_previous_trx','same_period_current_trx',
+    'previous_revenue','current_revenue','previous_margin','current_margin',
+    'dev_trx','dev_revenue','dev_margin','mat','arpt','atpu','arpu','success_rate','failure_rate',
+  ];
+  return numeric.includes(standardField) ? 'number' : 'text';
+}
+
 // POST /warrooms/:id/sheet/save — simpan column mappings
 router.post('/warrooms/:id/sheet/save', async (req, res) => {
   const { mappings } = req.body;
@@ -960,6 +995,47 @@ router.post('/warrooms/:id/sheet/save', async (req, res) => {
     }
     await pool.query('UPDATE wb_warrooms SET updated_at=NOW() WHERE id=$1', [req.params.id]);
     res.json({ ok: true, saved: mappings.length });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /warrooms/:id/remap — re-detect column mappings dari detected_cols yang tersimpan
+router.post('/warrooms/:id/remap', async (req, res) => {
+  try {
+    const sheetRes = await pool.query(
+      'SELECT detected_cols FROM wb_sheet_sources WHERE warroom_id=$1',
+      [req.params.id]
+    );
+    if (!sheetRes.rows.length) return res.status(400).json({ error: 'Sheet source belum ada' });
+
+    const raw = sheetRes.rows[0].detected_cols;
+    const cols = Array.isArray(raw) ? raw : JSON.parse(raw || '[]');
+    if (!cols.length) return res.status(400).json({ error: 'detected_cols kosong — push ulang data dari Apps Script' });
+
+    const mappings = cols.map(col => {
+      const d = autoDetectField(col);
+      return {
+        original_col:   col,
+        standard_field: d.field,
+        confidence:     d.confidence,
+        data_type:      d.field ? fieldDataType(d.field) : 'text',
+        period_tag:     null,
+      };
+    });
+
+    await pool.query('DELETE FROM wb_column_mappings WHERE warroom_id=$1', [req.params.id]);
+    for (const m of mappings) {
+      await pool.query(
+        `INSERT INTO wb_column_mappings (warroom_id,original_col,standard_field,confidence,data_type,period_tag)
+         VALUES ($1,$2,$3,$4,$5,$6)`,
+        [req.params.id, m.original_col, m.standard_field || null, m.confidence || 0, m.data_type || 'text', null]
+      );
+    }
+    await pool.query('UPDATE wb_warrooms SET updated_at=NOW() WHERE id=$1', [req.params.id]);
+
+    const mapped = mappings.filter(m => m.standard_field);
+    res.json({ ok: true, total: mappings.length, mapped: mapped.length, mappings });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

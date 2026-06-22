@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import Chart from 'chart.js/auto';
 import Layout from '../../components/Layout';
-import { wbGetDashboard, wbGenerate, wbResolveAlert, wbUpdateAction } from '../../services/wbApi';
+import { wbGetDashboard, wbGenerate, wbRemap, wbResolveAlert, wbUpdateAction } from '../../services/wbApi';
 import {
   SCORE_STATUS_COLORS, BU_COLORS, ACTION_TYPE_LABELS,
   ACTION_STATUS_LABELS, ALERT_LEVEL_COLORS,
@@ -619,6 +619,7 @@ export default function WBDetail() {
   const [loading,    setLoading]    = useState(true);
   const [syncing,    setSyncing]    = useState(false);
   const [syncResult, setSyncResult] = useState(null);
+  const [remapping,  setRemapping]  = useState(false);
 
   const load = () => {
     setLoading(true);
@@ -641,6 +642,21 @@ export default function WBDetail() {
       alert('Sync gagal: ' + (e.response?.data?.error || e.message));
     } finally {
       setSyncing(false);
+    }
+  };
+
+  const handleRemap = async () => {
+    if (!confirm('Re-detect mapping kolom dari data yang sudah dikirim, lalu langsung regenerate dashboard?\n\nIni akan menimpa mapping yang ada sekarang.')) return;
+    setRemapping(true);
+    try {
+      const r = await wbRemap(id);
+      const msg = `Remap selesai: ${r.mapped}/${r.total} kolom terdeteksi.\nLangsung generate dashboard...`;
+      alert(msg);
+      await handleSync();
+    } catch (e) {
+      alert('Remap gagal: ' + (e.response?.data?.error || e.message));
+    } finally {
+      setRemapping(false);
     }
   };
 
@@ -697,9 +713,20 @@ export default function WBDetail() {
               </span>
             )}
             <button
+              className="wb-btn-ghost"
+              onClick={handleRemap}
+              disabled={remapping || syncing}
+              title="Re-detect mapping kolom dari data tersimpan, lalu regenerate"
+              style={{ fontSize: 13 }}
+            >
+              {remapping
+                ? <><i className="ti ti-loader wb-spin" /> Remapping...</>
+                : <><i className="ti ti-table-options" /> Remap Kolom</>}
+            </button>
+            <button
               className="wb-btn-primary"
               onClick={handleSync}
-              disabled={syncing}
+              disabled={syncing || remapping}
             >
               {syncing
                 ? <><i className="ti ti-loader wb-spin" /> Syncing...</>
@@ -707,6 +734,17 @@ export default function WBDetail() {
             </button>
           </div>
         </div>
+
+        {/* Mapping warning — data ada tapi semua nilai numerik 0 */}
+        {snapshot && (summary.total_active ?? 0) === 0 && (summary.total_entities ?? 0) > 0 && (
+          <div className="wb-info-box" style={{ marginBottom: 8, background: '#FEF3C7', borderColor: '#F59E0B', color: '#92400E' }}>
+            <i className="ti ti-alert-triangle" style={{ color: '#D97706' }} />
+            <div>
+              Data {fmt(summary.total_entities)} baris terdeteksi, tapi kolom TRX/Revenue belum terpetakan.
+              Klik <strong style={{ cursor: 'pointer', textDecoration: 'underline' }} onClick={handleRemap}>Remap Kolom</strong> untuk auto-detect ulang, lalu generate.
+            </div>
+          </div>
+        )}
 
         {/* Sync result flash */}
         {syncResult && (

@@ -41,6 +41,10 @@ export const wbSheetSave = (warroom_id, mappings) =>
 export const wbGenerate = (id) =>
   axios.post(`${BASE}/warrooms/${id}/generate`, {}, { headers: h(), timeout: 120000 }).then(r => r.data);
 
+// Remap — re-detect column mappings dari detected_cols tersimpan lalu regenerate
+export const wbRemap = (id) =>
+  axios.post(`${BASE}/warrooms/${id}/remap`, {}, { headers: h() }).then(r => r.data);
+
 // Dashboard
 export const wbGetDashboard = (id) =>
   axios.get(`${BASE}/warrooms/${id}/dashboard`, { headers: h() }).then(r => r.data);
