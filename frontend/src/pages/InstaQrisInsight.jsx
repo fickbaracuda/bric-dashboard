@@ -1,7 +1,12 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import Chart from 'chart.js/auto';
 import Layout from '../components/Layout';
-import { authHeaders } from '../services/api';
+import { getToken } from '../utils/auth';
+
+function authHeaders() {
+  const token = getToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
 
 const API = '/api/instaqris-insight';
 const COLOR_IQI = '#7F77DD';

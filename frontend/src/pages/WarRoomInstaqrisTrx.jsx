@@ -651,7 +651,7 @@ function ScoreTab({ ms }) {
           <option value={0}>Semua Score</option>
           <option value={70}>Score ≥ 70 (Tinggi)</option>
           <option value={40}>Score ≥ 40 (Sedang)</option>
-          <option value={1}>Score > 0 (Aktif)</option>
+          <option value={1}>Score &gt; 0 (Aktif)</option>
         </select>
         <span className="writ-filter-badge">{fmtN(filtered.length)} merchant</span>
       </div>

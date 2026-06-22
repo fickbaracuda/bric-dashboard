@@ -48,7 +48,6 @@ function ModalMember({ initial, leaders, unit, onSave, onClose }) {
   const [form, setForm] = useState({
     nama: '', posisi: 'tim', fungsi: '',
     avatar_warna: '#7F77DD', unit: unit || 'winme_instaqris',
-    leader_id: leaders[0]?.id || '',
     ...initial,
     leader_id: initial?.leader_id || leaders[0]?.id || '',
   });
