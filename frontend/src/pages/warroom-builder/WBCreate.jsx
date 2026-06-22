@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import Layout from '../../components/Layout';
 import {
   wbCreateWarroom, wbUpdateWarroom, wbSheetPreview, wbSheetSave,
-  wbGenerate,
+  wbGenerate, wbGetWarroom,
 } from '../../services/wbApi';
 import {
   WARROOM_TYPE_REGISTRY, PLUGIN_REGISTRY, BUSINESS_UNITS,
@@ -54,8 +54,10 @@ export default function WBCreate() {
   const [loading,   setLoading]   = useState(false);
   const [error,     setError]     = useState('');
 
-  // Step 1: Sheet URL
-  const [sheetUrl, setSheetUrl] = useState('');
+  // Step 1: mode + URL
+  const [inputMode,     setInputMode]     = useState('script'); // 'url' | 'script'
+  const [sheetUrl,      setSheetUrl]      = useState('');
+  const [scriptCreated, setScriptCreated] = useState(false);
 
   // Step 2-3: Preview result
   const [preview,   setPreview]   = useState(null); // result of wbSheetPreview
@@ -86,7 +88,7 @@ export default function WBCreate() {
   const goNext = () => { clearError(); setStep(s => s + 1); };
   const goPrev = () => { clearError(); setStep(s => s - 1); };
 
-  /* ── Step 1: Create warroom + fetch preview ── */
+  /* ── Step 1 mode URL: Create warroom + fetch preview ── */
   const handleStep1 = async () => {
     if (!sheetUrl.trim()) { setError('URL Google Sheet wajib diisi'); return; }
     if (!sheetUrl.includes('docs.google.com/spreadsheets')) {
@@ -96,14 +98,11 @@ export default function WBCreate() {
     setLoading(true);
     setError('');
     try {
-      // Buat warroom draft dulu
       const wr = await wbCreateWarroom({
         name: 'Draft Warroom', business_unit: 'Custom', business_model: 'Custom',
         entity_type: 'Custom', entity_label: 'Entity', color: '#1D9E75',
       });
       setWarroom(wr);
-
-      // Fetch preview
       const prev = await wbSheetPreview(wr.id, sheetUrl);
       setPreview(prev);
       setMappings(prev.auto_mappings || []);
@@ -113,6 +112,119 @@ export default function WBCreate() {
     } finally {
       setLoading(false);
     }
+  };
+
+  /* ── Step 1 mode Apps Script: Buat warroom → tampilkan script ── */
+  const handleCreateForScript = async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const wr = await wbCreateWarroom({
+        name: 'Draft Warroom', business_unit: 'Custom', business_model: 'Custom',
+        entity_type: 'Custom', entity_label: 'Entity', color: '#1D9E75',
+      });
+      setWarroom(wr);
+      setScriptCreated(true);
+    } catch (e) {
+      setError(e.response?.data?.error || e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /* ── Step 1 mode Apps Script: Cek apakah push sudah diterima ── */
+  const handleCheckPush = async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const wr = await wbGetWarroom(warroom.id);
+      const ss = wr.sheet_source;
+      if (!ss || !ss.detected_cols) {
+        setError('Data belum diterima. Pastikan script sudah dijalankan di Google Sheet.');
+        return;
+      }
+      const columns = JSON.parse(ss.detected_cols || '[]');
+      const previewRows = JSON.parse(ss.raw_preview || '[]');
+      setPreview({
+        columns,
+        preview: previewRows,
+        total_rows: previewRows.length,
+        period_info: {
+          period_type: ss.detected_period,
+          cutoff_day: ss.detected_day ? parseInt(ss.detected_day) : null,
+        },
+        auto_mappings: wr.column_mappings || [],
+      });
+      setMappings(wr.column_mappings || []);
+      goNext();
+    } catch (e) {
+      setError(e.response?.data?.error || e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const buildAppsScript = (warroomId) => {
+    const origin = window.location.origin;
+    return `function pushToWarroomBuilder() {
+  var ss      = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet   = ss.getActiveSheet();
+  var data    = sheet.getDataRange().getValues();
+
+  if (data.length < 2) {
+    SpreadsheetApp.getUi().alert('Sheet kosong atau hanya header');
+    return;
+  }
+
+  var headers = data[0].map(function(h) { return String(h || '').trim(); });
+  var rows    = [];
+
+  for (var i = 1; i < data.length; i++) {
+    var row     = data[i];
+    var isEmpty = row.every(function(v) { return v === '' || v === null || v === undefined; });
+    if (isEmpty) continue;
+    var obj = {};
+    headers.forEach(function(h, j) {
+      if (!h) return;
+      var v = row[j];
+      if (v instanceof Date) {
+        obj[h] = Utilities.formatDate(v, 'Asia/Jakarta', 'yyyy-MM-dd');
+      } else {
+        obj[h] = v;  // angka tetap number — jangan diubah ke string
+      }
+    });
+    rows.push(obj);
+  }
+
+  var payload = {
+    token:   'bric2026bimasaktisecret',
+    columns: headers.filter(function(h) { return h !== ''; }),
+    rows:    rows
+  };
+
+  var options = {
+    method:          'post',
+    contentType:     'application/json',
+    payload:         JSON.stringify(payload),
+    muteHttpExceptions: true
+  };
+
+  var url      = '${origin}/api/warroom-builder/push/${warroomId}';
+  var response = UrlFetchApp.fetch(url, options);
+  var code     = response.getResponseCode();
+  var body     = response.getContentText();
+
+  if (code === 200) {
+    var result = JSON.parse(body);
+    SpreadsheetApp.getUi().alert(
+      'Sukses!\\nBaris terkirim: ' + result.rows_received +
+      '\\nBaris valid: ' + result.rows_parsed +
+      '\\nKolom: ' + result.columns.length
+    );
+  } else {
+    SpreadsheetApp.getUi().alert('Error ' + code + ':\\n' + body);
+  }
+}`;
   };
 
   /* ── Step 4: Save mappings → go to step 5 ── */
@@ -209,36 +321,161 @@ export default function WBCreate() {
 
         <div className="wb-wizard-body">
 
-          {/* ── STEP 1: Sheet URL ── */}
+          {/* ── STEP 1: Sumber Data ── */}
           {step === 1 && (
             <div className="wb-wizard-step-content">
-              <h2 className="wb-wizard-step-title">Paste Google Sheet URL</h2>
+              <h2 className="wb-wizard-step-title">Sumber Data</h2>
               <p className="wb-wizard-step-desc">
-                Tempelkan URL Google Sheet yang berisi data warroom Anda.
-                Sheet harus dapat diakses secara publik (share → Anyone with the link → Viewer).
+                Pilih cara mengambil data dari Google Sheet.
               </p>
-              <div className="wb-field-group">
-                <label className="wb-label">Google Sheet URL <span className="wb-required">*</span></label>
-                <input
-                  className="wb-input"
-                  placeholder="https://docs.google.com/spreadsheets/d/..."
-                  value={sheetUrl}
-                  onChange={e => setSheetUrl(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && handleStep1()}
-                />
-                <div className="wb-field-hint">
-                  Format: https://docs.google.com/spreadsheets/d/<b>[ID]</b>/edit#gid=<b>[GID]</b>
-                </div>
-              </div>
-              <div className="wb-wizard-actions">
+
+              {/* Mode Toggle */}
+              <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
                 <button
-                  className="wb-btn-primary"
-                  onClick={handleStep1}
-                  disabled={loading}
+                  onClick={() => setInputMode('script')}
+                  style={{
+                    flex: 1, padding: '12px 16px', borderRadius: 10, cursor: 'pointer',
+                    border: inputMode === 'script' ? '2px solid #7C3AED' : '2px solid var(--border)',
+                    background: inputMode === 'script' ? '#F5F3FF' : 'var(--bg-card)',
+                    textAlign: 'left',
+                  }}
                 >
-                  {loading ? <><i className="ti ti-loader wb-spin" /> Mengambil data...</> : <>Ambil Data <i className="ti ti-arrow-right" /></>}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                    <i className="ti ti-code" style={{ color: '#7C3AED', fontSize: 18 }} />
+                    <span style={{ fontWeight: 700, fontSize: 13 }}>Apps Script</span>
+                    <span style={{ background: '#7C3AED', color: '#fff', fontSize: 10, padding: '1px 6px', borderRadius: 10 }}>REKOMENDASI</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
+                    Sheet perusahaan / private — kirim data via script ke dashboard
+                  </div>
+                </button>
+                <button
+                  onClick={() => setInputMode('url')}
+                  style={{
+                    flex: 1, padding: '12px 16px', borderRadius: 10, cursor: 'pointer',
+                    border: inputMode === 'url' ? '2px solid var(--primary)' : '2px solid var(--border)',
+                    background: inputMode === 'url' ? 'var(--primary-bg)' : 'var(--bg-card)',
+                    textAlign: 'left',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                    <i className="ti ti-link" style={{ color: 'var(--primary)', fontSize: 18 }} />
+                    <span style={{ fontWeight: 700, fontSize: 13 }}>URL Publik</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
+                    Sheet sudah di-share "Anyone with the link can view"
+                  </div>
                 </button>
               </div>
+
+              {/* ── Apps Script mode ── */}
+              {inputMode === 'script' && !scriptCreated && (
+                <>
+                  <div className="wb-info-box">
+                    <i className="ti ti-info-circle" />
+                    <div>
+                      Kami akan generate <b>Apps Script</b> yang bisa di-paste ke Google Sheet Anda.
+                      Script tersebut akan mengirim data ke dashboard secara aman — sheet tetap private.
+                    </div>
+                  </div>
+                  <div style={{ background: '#F9FAFB', border: '1px solid var(--border)', borderRadius: 10, padding: 16, marginBottom: 16 }}>
+                    <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>Cara kerja:</div>
+                    <ol style={{ fontSize: 13, color: 'var(--text-2)', paddingLeft: 20, lineHeight: 2 }}>
+                      <li>Klik tombol di bawah → sistem buat Warroom ID unik</li>
+                      <li>Copy script yang muncul</li>
+                      <li>Buka Google Sheet → <b>Extensions → Apps Script</b></li>
+                      <li>Paste script → klik <b>Run</b></li>
+                      <li>Kembali ke sini → klik <b>Cek Data Diterima</b></li>
+                    </ol>
+                  </div>
+                  <div className="wb-wizard-actions">
+                    <button className="wb-btn-generate" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: '#7C3AED', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}
+                      onClick={handleCreateForScript} disabled={loading}>
+                      {loading
+                        ? <><i className="ti ti-loader wb-spin" /> Membuat...</>
+                        : <><i className="ti ti-wand" /> Buat Warroom & Dapatkan Script</>}
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {inputMode === 'script' && scriptCreated && warroom && (
+                <>
+                  <div style={{ background: '#F0FFF4', border: '1px solid #BBF7D0', borderRadius: 8, padding: '10px 14px', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <i className="ti ti-circle-check" style={{ color: '#059669' }} />
+                    <span style={{ fontSize: 13, color: '#065F46' }}>
+                      Warroom ID: <b>{warroom.id}</b> — script siap di-copy
+                    </span>
+                  </div>
+
+                  <div style={{ marginBottom: 12 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                      <label className="wb-label" style={{ margin: 0 }}>Apps Script — copy & paste ke Google Apps Script</label>
+                      <button
+                        className="wb-btn-ghost wb-btn-sm"
+                        onClick={() => navigator.clipboard.writeText(buildAppsScript(warroom.id)).then(() => alert('Script berhasil di-copy!'))}
+                      >
+                        <i className="ti ti-copy" /> Copy Script
+                      </button>
+                    </div>
+                    <pre style={{
+                      background: '#0F172A', color: '#E2E8F0', padding: 16, borderRadius: 8,
+                      fontSize: 11, lineHeight: 1.6, overflow: 'auto', maxHeight: 280,
+                      fontFamily: 'Consolas, monospace', whiteSpace: 'pre',
+                    }}>
+                      {buildAppsScript(warroom.id)}
+                    </pre>
+                  </div>
+
+                  <div className="wb-info-box" style={{ marginBottom: 16 }}>
+                    <i className="ti ti-steps" />
+                    <div style={{ fontSize: 13 }}>
+                      <b>Cara paste:</b> Google Sheet → <b>Extensions</b> → <b>Apps Script</b> → hapus kode lama → paste → klik <b>▶ Run</b> → izinkan akses → lihat popup konfirmasi sukses.
+                    </div>
+                  </div>
+
+                  <div className="wb-wizard-actions">
+                    <button
+                      className="wb-btn-primary"
+                      onClick={handleCheckPush}
+                      disabled={loading}
+                    >
+                      {loading
+                        ? <><i className="ti ti-loader wb-spin" /> Mengecek...</>
+                        : <><i className="ti ti-refresh" /> Cek Data Diterima</>}
+                    </button>
+                    <span style={{ fontSize: 12, color: 'var(--text-4)' }}>
+                      Klik setelah script berhasil dijalankan di Google Sheet
+                    </span>
+                  </div>
+                </>
+              )}
+
+              {/* ── URL mode ── */}
+              {inputMode === 'url' && (
+                <>
+                  <div className="wb-field-group">
+                    <label className="wb-label">Google Sheet URL <span className="wb-required">*</span></label>
+                    <input
+                      className="wb-input"
+                      placeholder="https://docs.google.com/spreadsheets/d/..."
+                      value={sheetUrl}
+                      onChange={e => setSheetUrl(e.target.value)}
+                      onKeyDown={e => e.key === 'Enter' && handleStep1()}
+                    />
+                    <div className="wb-field-hint">
+                      Format: https://docs.google.com/spreadsheets/d/<b>[ID]</b>/edit#gid=<b>[GID]</b>
+                    </div>
+                  </div>
+                  <div className="wb-wizard-actions">
+                    <button className="wb-btn-primary" onClick={handleStep1} disabled={loading}>
+                      {loading
+                        ? <><i className="ti ti-loader wb-spin" /> Mengambil data...</>
+                        : <>Ambil Data <i className="ti ti-arrow-right" /></>}
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           )}
 

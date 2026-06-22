@@ -1258,4 +1258,105 @@ router.get('/alerts', async (req, res) => {
 // GET /health
 router.get('/health', (req, res) => res.json({ status: 'ok', module: 'warroom-builder' }));
 
+// ── Push handler (token auth, no JWT) — dipanggil dari Apps Script ──
+// POST /api/warroom-builder/push/:id  (didaftarkan di app.js sebelum requireAuth)
+const WB_PUSH_TOKEN = 'bric2026bimasaktisecret';
+
+async function pushHandler(req, res) {
+  const token = req.headers['x-sync-token'] || req.body?.token;
+  if (token !== WB_PUSH_TOKEN) return res.status(401).json({ error: 'Unauthorized' });
+
+  const { id } = req.params;
+  const { columns, rows } = req.body;
+  if (!Array.isArray(columns) || !Array.isArray(rows)) {
+    return res.status(400).json({ error: 'columns[] dan rows[] wajib ada' });
+  }
+
+  const t0 = Date.now();
+  try {
+    // Bangun CSV teks dari columns + rows lalu simpan sebagai sheet source
+    const csvLines = [columns.join(',')];
+    for (const row of rows) {
+      const vals = columns.map(c => {
+        const v = row[c] !== undefined ? String(row[c]) : '';
+        return v.includes(',') || v.includes('"') || v.includes('\n')
+          ? '"' + v.replace(/"/g, '""') + '"' : v;
+      });
+      csvLines.push(vals.join(','));
+    }
+    const csvText = csvLines.join('\n');
+
+    const allRows     = parseCSV(csvText);
+    const { headerRows, dataStartRow } = detectHeaderRows(allRows);
+    const flatCols    = flattenMultiHeader(allRows.slice(0, headerRows), headerRows);
+    const dataRows    = allRows.slice(dataStartRow);
+    const periodInfo  = detectPeriod(flatCols, allRows.slice(0, 3));
+
+    const previewRows = dataRows.slice(0, 20).map(row => {
+      const obj = {};
+      flatCols.forEach((col, i) => { obj[col] = row[i] || ''; });
+      return obj;
+    });
+
+    const autoMappings = flatCols.map(col => {
+      const { field, confidence } = autoDetectField(col);
+      return {
+        original_col: col,
+        standard_field: field,
+        confidence,
+        data_type: field && ['entity_id','entity_name','category','province','city','pic','no_hp',
+          'registration_date','first_trx_date','last_trx_date','growth_status'].includes(field)
+          ? 'text' : 'number',
+      };
+    });
+
+    await pool.query('DELETE FROM wb_sheet_sources WHERE warroom_id=$1', [id]);
+    await pool.query(`
+      INSERT INTO wb_sheet_sources
+        (warroom_id, sheet_url, sheet_id, gid, csv_url, header_rows,
+         detected_day, detected_period, raw_preview, detected_cols)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [id, 'apps-script-push', null, null, null, headerRows,
+       periodInfo.cutoff_day ? `Day ${periodInfo.cutoff_day}` : null,
+       periodInfo.period_type,
+       JSON.stringify(previewRows),
+       JSON.stringify(flatCols)]
+    );
+
+    // Simpan auto_mappings ke wb_column_mappings agar wizard bisa lanjut
+    await pool.query('DELETE FROM wb_column_mappings WHERE warroom_id=$1', [id]);
+    for (const m of autoMappings) {
+      await pool.query(
+        `INSERT INTO wb_column_mappings
+           (warroom_id, original_col, standard_field, confidence, data_type)
+         VALUES ($1,$2,$3,$4,$5)`,
+        [id, m.original_col, m.standard_field || null, m.confidence || 0, m.data_type || 'text']
+      );
+    }
+
+    await pool.query(`
+      INSERT INTO wb_import_logs (warroom_id, action, status, rows_processed, duration_ms)
+      VALUES ($1,'push','success',$2,$3)`,
+      [id, dataRows.length, Date.now() - t0]);
+
+    res.json({
+      ok: true,
+      rows_received: rows.length,
+      rows_parsed: dataRows.length,
+      columns: flatCols,
+      period_info: periodInfo,
+      auto_mappings: autoMappings,
+      preview: previewRows,
+    });
+  } catch (e) {
+    console.error('[WB push]', e.message);
+    await pool.query(`
+      INSERT INTO wb_import_logs (warroom_id, action, status, error_message, duration_ms)
+      VALUES ($1,'push','failed',$2,$3)`,
+      [id, e.message, Date.now() - t0]).catch(() => {});
+    res.status(500).json({ error: e.message });
+  }
+}
+
 module.exports = router;
+module.exports.pushHandler = pushHandler;

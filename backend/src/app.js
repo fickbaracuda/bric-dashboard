@@ -109,6 +109,7 @@ app.get('/api/warroom/lpd/analytics',    requireAuth, lpdRoutes.analyticsHandler
 app.get('/api/warroom/lpd/outlets',      requireAuth, lpdRoutes.outletsHandler);
 app.use('/api/warroom',        requireAuth, warroomRoutes);
 
+app.post('/api/warroom-builder/push/:id', wbRoutes.pushHandler);  // token auth, no JWT
 app.use('/api/warroom-builder', requireAuth, wbRoutes);
 app.use('/api/system', requireAuth, systemRoutes);
 
