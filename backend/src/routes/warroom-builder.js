@@ -1363,7 +1363,7 @@ async function pushHandler(req, res) {
 
     res.json({
       ok: true,
-      rows_received: rows.length,
+      rows_received: rows?.length ?? dataRows.length,
       rows_parsed: dataRows.length,
       columns: flatCols,
       period_info: periodInfo,
