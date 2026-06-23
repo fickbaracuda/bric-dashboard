@@ -154,6 +154,7 @@ export default function Sidebar({ onClose }) {
   const isWinmeTimPath = location.pathname === '/scoreboard-tim'    || isWinmeMember;
   const isWRIQPath     = location.pathname === '/war-room/instaqris';
   const isWRIQTRXPath  = location.pathname === '/war-room/instaqris-trx';
+  const isDataRawPath  = location.pathname.startsWith('/data-raw');
   const isPABasePath   = location.pathname === '/payment-agent';
   const isPATimPath    = location.pathname === '/scoreboard-tim-pa' || isPAMember;
   const isDDPath       = location.pathname === '/dompet-digital';
@@ -168,7 +169,7 @@ export default function Sidebar({ onClose }) {
   const isWRBumdesPath = location.pathname === '/war-room/bumdes';
   const isWRLpdPath    = location.pathname === '/war-room/lpd';
 
-  const [winmeOpen, setWinmeOpen] = useState(isWinmePath || isWinmeTimPath || isWRIQPath || isWRIQTRXPath);
+  const [winmeOpen, setWinmeOpen] = useState(isWinmePath || isWinmeTimPath || isWRIQPath || isWRIQTRXPath || isDataRawPath);
   const [timOpen,   setTimOpen]   = useState(isWinmeTimPath);
   const [paOpen,    setPAOpen]    = useState(isPABasePath || isPATimPath || isWREkspPath || isWRFPPath || isWRFarmPath || isWRPAProduk || isWRDMFPPath || isWRAsdpPath || isWRBumdesPath || isWRLpdPath);
   const [paTimOpen, setPATimOpen] = useState(isPATimPath);
@@ -176,7 +177,7 @@ export default function Sidebar({ onClose }) {
   const [scTimOpen, setSCTimOpen] = useState(isSCTimPath);
 
   useEffect(() => {
-    if (isWinmePath || isWinmeTimPath || isWRIQPath || isWRIQTRXPath) setWinmeOpen(true);
+    if (isWinmePath || isWinmeTimPath || isWRIQPath || isWRIQTRXPath || isDataRawPath) setWinmeOpen(true);
     if (isWinmeTimPath) setTimOpen(true);
     if (isPABasePath || isPATimPath || isWREkspPath || isWRFPPath || isWRFarmPath || isWRPAProduk || isWRDMFPPath || isWRAsdpPath || isWRBumdesPath || isWRLpdPath) setPAOpen(true);
     if (isPATimPath) setPATimOpen(true);
@@ -347,6 +348,23 @@ export default function Sidebar({ onClose }) {
                 <i className="ti ti-qrcode" style={{ color: '#7F77DD' }} aria-hidden="true" />
                 <span>Instaqris - TRX</span>
                 <span className="sidebar-warroom-badge" style={{ background: '#7F77DD' }}>TRX</span>
+              </NavLink>
+
+              {/* ── Data Raw ── */}
+              <div className="sidebar-warroom-label">
+                <i className="ti ti-database" aria-hidden="true" />
+                Data
+              </div>
+              <NavLink
+                to="/data-raw"
+                onClick={onClose}
+                className={({ isActive }) =>
+                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                }
+              >
+                <i className="ti ti-table" style={{ color: '#3B82F6' }} aria-hidden="true" />
+                <span>Data Raw</span>
+                <span className="sidebar-warroom-badge" style={{ background: '#3B82F6' }}>RAW</span>
               </NavLink>
 
             </div>

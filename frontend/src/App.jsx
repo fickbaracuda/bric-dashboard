@@ -21,6 +21,7 @@ import WarRoomAsdp from './pages/WarRoomAsdp';
 import WarRoomBumdes from './pages/WarRoomBumdes';
 import WarRoomLpd from './pages/WarRoomLpd';
 import ServerMonitor from './pages/ServerMonitor';
+import DataRaw from './pages/DataRaw';
 import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './components/Layout';
 
@@ -52,6 +53,7 @@ export default function App() {
         <Route path="/scoreboard-tim" element={<ProtectedRoute><ScoreboardTim /></ProtectedRoute>} />
         <Route path="/scoreboard-tim-pa" element={<ProtectedRoute><ScoreboardTim unit="payment_agent" unitLabel="PAYMENT AGENT" unitColor="#639922" /></ProtectedRoute>} />
         <Route path="/scoreboard-tim-sc" element={<ProtectedRoute><ScoreboardTim unit="speedcash" unitLabel="SPEEDCASH" unitColor="#EF4444" /></ProtectedRoute>} />
+        <Route path="/data-raw"            element={<ProtectedRoute><DataRaw /></ProtectedRoute>} />
         <Route path="/war-room/instaqris" element={<ProtectedRoute><WarRoom /></ProtectedRoute>} />
         <Route path="/war-room/speedcash"   element={<ProtectedRoute><WarRoomSpeedcash /></ProtectedRoute>} />
         <Route path="/war-room/ekspedisi"      element={<ProtectedRoute><WarRoomEkspedisi /></ProtectedRoute>} />
