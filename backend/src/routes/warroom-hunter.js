@@ -135,7 +135,7 @@ function compute(d1Rows, d2Rows, d3Rows) {
 
     const jml_trx    = Math.max(ii(d2.jml_trx), ii(d1.trx));
     const margin     = n(d2.margin);
-    const is_act     = !!(d3.id_aktifasi && ii(d3.is_active) === 1);
+    const is_act     = ii(d3.is_active) === 1;
     const komisi     = n(d3.komisi_aktifasi);
     const total_rev  = margin + komisi;
     const aging      = d1.tgl_reg
