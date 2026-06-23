@@ -109,7 +109,10 @@ app.get('/api/warroom/lpd/analytics',    requireAuth, lpdRoutes.analyticsHandler
 app.get('/api/warroom/lpd/outlets',      requireAuth, lpdRoutes.outletsHandler);
 app.use('/api/warroom',        requireAuth, warroomRoutes);
 
-app.post('/api/data-raw/outlet/sync', dataRawRoutes.outletSyncHandler); // token auth, no JWT
+app.post('/api/data-raw/outlet/sync',    dataRawRoutes.outletSyncHandler);    // token auth, no JWT
+app.post('/api/data-raw/affiliate/sync', dataRawRoutes.affiliateSyncHandler); // token auth, no JWT
+app.post('/api/data-raw/qris/sync',      dataRawRoutes.qrisSyncHandler);      // token auth, no JWT
+app.post('/api/data-raw/trx/sync',       dataRawRoutes.trxSyncHandler);       // token auth, no JWT
 app.use('/api/data-raw', requireAuth, dataRawRoutes);
 
 app.use('/api/system', requireAuth, systemRoutes);

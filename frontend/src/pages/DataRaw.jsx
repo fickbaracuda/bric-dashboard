@@ -4,12 +4,15 @@ import { getToken } from '../utils/auth';
 
 const API = import.meta.env.VITE_API_URL || '';
 
-const APPS_SCRIPT = `// ============================================================
-// BRIC Dashboard — Sync Data Raw Outlet InstaQris
-// Paste ke Extensions → Apps Script di Google Sheets outlet
-// Jalankan fungsi: syncSemuaSheet()
+// ── Apps Script generator ─────────────────────────────────────────────────
+function buildScript(dataType, label) {
+  return `// ============================================================
+// BRIC Dashboard — Sync ${label}
+// Buka Google Sheets ini → Extensions → Apps Script
+// Paste kode ini → Save → Run: syncSemuaSheet()
 // ============================================================
-const VPS_URL    = 'https://bmsretail.my.id/api/data-raw/outlet/sync';
+const DATA_TYPE  = '${dataType}';
+const VPS_URL    = 'https://bmsretail.my.id/api/data-raw/' + DATA_TYPE + '/sync';
 const SYNC_TOKEN = 'bric2026bimasaktisecret';
 
 function syncSemuaSheet() {
@@ -28,22 +31,20 @@ function syncSemuaSheet() {
     const lastRow = sheet.getLastRow();
     const lastCol = sheet.getLastColumn();
     if (lastRow < 2) {
-      results.push('⏭ Skip "' + sheetName + '" (data kosong)');
+      results.push('⏭ Skip "' + sheetName + '" (kosong)');
       continue;
     }
 
     const data    = sheet.getRange(1, 1, lastRow, lastCol).getValues();
     const headers = data[0].map(function(h) { return String(h).trim(); });
 
-    // Indeks kolom dengan header tidak kosong
     const validIdx = [];
     headers.forEach(function(h, i) { if (h) validIdx.push(i); });
     const cleanHdr = validIdx.map(function(i) { return headers[i]; });
 
     const rows = [];
     for (var r = 1; r < data.length; r++) {
-      const row = data[r];
-      // Skip baris di mana semua kolom valid kosong
+      const row    = data[r];
       const hasVal = validIdx.some(function(i) { return row[i] !== '' && row[i] != null; });
       if (!hasVal) continue;
 
@@ -85,11 +86,11 @@ function syncSemuaSheet() {
     Utilities.sleep(300);
   }
 
-  SpreadsheetApp.getUi().alert('Hasil Sync:\\n\\n' + results.join('\\n'));
+  SpreadsheetApp.getUi().alert('Hasil Sync ' + DATA_TYPE + ':\\n\\n' + results.join('\\n'));
 }
 
-// Deteksi bulan dari nama sheet tab
-// Support: "April26", "April 26", "April 2026", "Apr2026", "04/2026", dll
+// Deteksi bulan dari nama tab sheet
+// Support: "April26", "April 2026", "Apr26", "04/2026", dll
 function parseBulan(name) {
   const MONTH = {
     januari:1, jan:1, februari:2, feb:2, maret:3, mar:3,
@@ -102,22 +103,29 @@ function parseBulan(name) {
 
   // Cari tahun: 4 digit (2026) atau 2 digit (26 → 2026)
   let yr = null;
-  const allNums = name.match(/\\d+/g) || [];
-  for (const d of allNums) {
+  const nums = name.match(/\\d+/g) || [];
+  for (const d of nums) {
     if (d.length === 4 && d.startsWith('20')) { yr = d; break; }
     if (d.length === 2 && parseInt(d) >= 20 && parseInt(d) <= 99) { yr = '20' + d; break; }
   }
   if (!yr) return null;
 
-  // Cari nama bulan
   for (const k in MONTH) {
     if (lower.indexOf(k) !== -1) return yr + '-' + String(MONTH[k]).padStart(2, '0');
   }
-  // Format "MM/YYYY" atau "MM-YYYY"
   const m = name.match(/\\b(\\d{1,2})[\\/-](20\\d{2})\\b/);
   if (m) return m[2] + '-' + m[1].padStart(2, '0');
   return null;
 }`;
+}
+
+// ── Tab config ────────────────────────────────────────────────────────────
+const TABS = [
+  { key: 'outlet',    label: 'Data Outlet',         icon: 'ti-building-store', color: '#3B82F6' },
+  { key: 'affiliate', label: 'Data Affiliate',       icon: 'ti-users-group',   color: '#8B5CF6' },
+  { key: 'qris',      label: 'Data Penerbitan QRIS', icon: 'ti-qrcode',        color: '#10B981' },
+  { key: 'trx',       label: 'Data Transaksi',       icon: 'ti-cash',          color: '#F59E0B' },
+];
 
 function fmtBulan(b) {
   if (!b) return '-';
@@ -126,8 +134,24 @@ function fmtBulan(b) {
   return `${months[parseInt(m, 10) - 1] || m} ${y}`;
 }
 
+function fmtAge(ts) {
+  if (!ts) return '';
+  const s = Math.floor((Date.now() - new Date(ts)) / 1000);
+  if (s < 60)    return `${s}d lalu`;
+  if (s < 3600)  return `${Math.floor(s / 60)}mnt lalu`;
+  if (s < 86400) return `${Math.floor(s / 3600)}jam lalu`;
+  return `${Math.floor(s / 86400)}hr lalu`;
+}
+
+function curMonth() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+}
+
+// ── Main page ─────────────────────────────────────────────────────────────
 export default function DataRaw() {
   const [activeTab, setActiveTab] = useState('outlet');
+  const tab = TABS.find(t => t.key === activeTab);
 
   return (
     <Layout>
@@ -140,22 +164,34 @@ export default function DataRaw() {
         </div>
 
         <div className="dr-tabs">
-          <button
-            className={`dr-tab${activeTab === 'outlet' ? ' dr-tab--active' : ''}`}
-            onClick={() => setActiveTab('outlet')}
-          >
-            <i className="ti ti-building-store" />
-            Data Outlet
-          </button>
+          {TABS.map(t => (
+            <button
+              key={t.key}
+              className={`dr-tab${activeTab === t.key ? ' dr-tab--active' : ''}`}
+              style={activeTab === t.key ? { color: t.color, borderBottomColor: t.color } : {}}
+              onClick={() => setActiveTab(t.key)}
+            >
+              <i className={`ti ${t.icon}`} />
+              {t.label}
+            </button>
+          ))}
         </div>
 
-        {activeTab === 'outlet' && <OutletTab />}
+        {/* key= forces remount + fresh state on tab switch */}
+        <DataTab
+          key={activeTab}
+          apiPath={activeTab}
+          label={tab.label}
+          color={tab.color}
+          script={buildScript(activeTab, tab.label)}
+        />
       </div>
     </Layout>
   );
 }
 
-function OutletTab() {
+// ── Generic tab component ─────────────────────────────────────────────────
+function DataTab({ apiPath, label, color, script }) {
   const [bulanList,     setBulanList]     = useState([]);
   const [selectedBulan, setSelectedBulan] = useState('');
   const [search,        setSearch]        = useState('');
@@ -165,8 +201,9 @@ function OutletTab() {
   const [page,          setPage]          = useState(1);
   const [loading,       setLoading]       = useState(false);
   const [showScript,    setShowScript]    = useState(false);
-  const PER_PAGE = 200;
+  const PER_PAGE    = 200;
   const searchTimer = useRef(null);
+  const thisBulan   = curMonth();
 
   const fetchData = useCallback(async (bulan, q, pg) => {
     setLoading(true);
@@ -174,16 +211,18 @@ function OutletTab() {
       const params = new URLSearchParams({ page: pg, per_page: PER_PAGE });
       if (bulan) params.set('bulan', bulan);
       if (q)     params.set('q', q);
-      const res  = await fetch(`${API}/api/data-raw/outlet?${params}`, { headers: { Authorization: `Bearer ${getToken()}` } });
+      const res  = await fetch(`${API}/api/data-raw/${apiPath}?${params}`, {
+        headers: { Authorization: `Bearer ${getToken()}` },
+      });
       const data = await res.json();
       setRows(data.rows || []);
       setColumns(data.columns || []);
       setTotal(parseInt(data.total) || 0);
       if (data.bulan_list?.length) setBulanList(data.bulan_list);
-    } catch { /* network error */ } finally {
+    } catch { /* ignore */ } finally {
       setLoading(false);
     }
-  }, []);
+  }, [apiPath]);
 
   useEffect(() => { fetchData('', '', 1); }, [fetchData]);
 
@@ -194,8 +233,13 @@ function OutletTab() {
     searchTimer.current = setTimeout(() => { setPage(1); fetchData(selectedBulan, v, 1); }, 450);
   }
   function gotoPage(pg)    { setPage(pg); fetchData(selectedBulan, search, pg); }
+  function refresh()       { fetchData(selectedBulan, search, page); }
 
-  const totalPages = Math.ceil(total / PER_PAGE);
+  const totalPages  = Math.ceil(total / PER_PAGE);
+  // Apakah sedang menampilkan bulan berjalan?
+  const showingCurMonth = selectedBulan === thisBulan
+    || (!selectedBulan && bulanList.some(b => b.bulan === thisBulan));
+  const curInfo = bulanList.find(b => b.bulan === thisBulan);
 
   return (
     <div className="dr-outlet-wrap">
@@ -210,7 +254,8 @@ function OutletTab() {
             <option value="">Semua Bulan</option>
             {bulanList.map(b => (
               <option key={b.bulan} value={b.bulan}>
-                {fmtBulan(b.bulan)} — {b.sheet_name} ({Number(b.row_count).toLocaleString()} baris)
+                {fmtBulan(b.bulan)}
+                {b.bulan === thisBulan ? ' 🔄' : ''} — {b.sheet_name} ({Number(b.row_count).toLocaleString()} baris)
               </option>
             ))}
           </select>
@@ -219,7 +264,7 @@ function OutletTab() {
             <i className="ti ti-search" />
             <input
               className="dr-search"
-              placeholder="Cari ID Outlet, Nama, Kota…"
+              placeholder="Cari data…"
               value={search}
               onChange={e => handleSearch(e.target.value)}
             />
@@ -232,15 +277,37 @@ function OutletTab() {
         </div>
 
         <div className="dr-toolbar-right">
+          {showingCurMonth && curInfo?.last_synced && (
+            <span className="dr-sync-badge">
+              <i className="ti ti-clock" />
+              {fmtAge(curInfo.last_synced)}
+            </span>
+          )}
           <span className="dr-total-label">
             {loading ? 'Memuat…' : `${total.toLocaleString()} baris`}
           </span>
+          <button
+            className="dr-btn-refresh"
+            onClick={refresh}
+            disabled={loading}
+            title="Refresh data"
+          >
+            <i className={`ti ti-refresh${loading ? ' dr-spinner' : ''}`} />
+          </button>
           <button className="dr-btn-script" onClick={() => setShowScript(true)}>
             <i className="ti ti-brand-google" />
             Apps Script
           </button>
         </div>
       </div>
+
+      {/* Banner bulan berjalan */}
+      {showingCurMonth && (
+        <div className="dr-live-banner">
+          <i className="ti ti-refresh" />
+          Data bulan berjalan — jalankan Apps Script kapanpun untuk update, lalu klik tombol refresh.
+        </div>
+      )}
 
       {/* Table */}
       <div className="dr-table-wrap">
@@ -293,16 +360,19 @@ function OutletTab() {
         </div>
       )}
 
-      {showScript && <ScriptModal onClose={() => setShowScript(false)} />}
+      {showScript && (
+        <ScriptModal script={script} label={label} onClose={() => setShowScript(false)} />
+      )}
     </div>
   );
 }
 
-function ScriptModal({ onClose }) {
+// ── Script modal ──────────────────────────────────────────────────────────
+function ScriptModal({ script, label, onClose }) {
   const [copied, setCopied] = useState(false);
 
   function copy() {
-    navigator.clipboard.writeText(APPS_SCRIPT).then(() => {
+    navigator.clipboard.writeText(script).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2500);
     });
@@ -314,7 +384,7 @@ function ScriptModal({ onClose }) {
         <div className="dr-modal-head">
           <div className="dr-modal-title">
             <i className="ti ti-brand-google" />
-            Apps Script — Sync Data Outlet ke BRIC
+            Apps Script — Sync {label}
           </div>
           <button className="dr-modal-close" onClick={onClose}>
             <i className="ti ti-x" />
@@ -325,11 +395,11 @@ function ScriptModal({ onClose }) {
           <div className="dr-script-info">
             <i className="ti ti-info-circle" />
             <div>
-              Buka Google Sheets → <strong>Extensions → Apps Script</strong> → paste kode ini → Save → Run <code>syncSemuaSheet()</code>.
-              <br />Setiap tab sheet (mis: "April 2026", "Mei 2026") akan terdeteksi otomatis sebagai bulan.
+              Buka Google Sheets <strong>{label}</strong> → <strong>Extensions → Apps Script</strong> → paste → Save → Run <code>syncSemuaSheet()</code>.
+              <br />Untuk update data bulan berjalan, cukup jalankan ulang kapanpun — data lama otomatis terganti.
             </div>
           </div>
-          <pre className="dr-script-code">{APPS_SCRIPT}</pre>
+          <pre className="dr-script-code">{script}</pre>
         </div>
 
         <div className="dr-modal-foot">
