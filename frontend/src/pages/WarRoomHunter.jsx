@@ -44,12 +44,12 @@ const STAGE_COLOR = {
   activation_loss:          '#991B1B',
 };
 const STATUS_LABEL = {
-  super_hunter:       'Super Hunter',
-  activation_hunter:  'Activation Hunter',
-  acquisition_hunter: 'Acquisition Hunter',
-  revenue_hunter:     'Revenue Hunter',
-  dormant_hunter:     'Dormant Hunter',
-  costly_hunter:      'Costly Hunter',
+  super_hunter:       'Super PB',
+  activation_hunter:  'Activation PB',
+  acquisition_hunter: 'Acquisition PB',
+  revenue_hunter:     'Revenue PB',
+  dormant_hunter:     'Dormant PB',
+  costly_hunter:      'Costly PB',
 };
 const STATUS_COLOR = {
   super_hunter:       '#7C3AED',
@@ -95,82 +95,107 @@ function WaLink({ no }) {
 function buildScript() {
   return `// ============================================================
 // BRIC Dashboard — Sync Hunter (D.1, D.2, D.3)
-// Buka Google Sheets Hunter → Extensions → Apps Script
-// Paste kode ini → Save → Run: syncHunterData()
+// D.1 = data Mei (referensi registrasi, tidak berubah)
+// D.2 = data transaksi bulan berjalan (Juni, dst)
+// D.3 = data aktivasi bulan berjalan (Juni, dst)
+//
+// Cara pakai:
+// 1. Extensions → Apps Script → paste kode ini → Save
+// 2. Run: syncHunterData()
 // ============================================================
 var VPS_URL    = 'https://bmsretail.my.id/api/warroom/hunter/sync';
 var SYNC_TOKEN = 'bric2026bimasaktisecret';
 
+function getCurrentBulan() {
+  var now = new Date();
+  return now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+}
+
 function syncHunterData() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var ui = SpreadsheetApp.getUi();
+
   var s1 = ss.getSheetByName('D.1');
   var s2 = ss.getSheetByName('D.2');
   var s3 = ss.getSheetByName('D.3');
 
-  if (!s1 || !s2 || !s3) {
-    SpreadsheetApp.getUi().alert('Sheet D.1, D.2, atau D.3 tidak ditemukan!');
-    return;
-  }
+  if (!s1) { ui.alert('❌ Sheet "D.1" tidak ditemukan!'); return; }
+  if (!s2) { ui.alert('❌ Sheet "D.2" tidak ditemukan!'); return; }
+  if (!s3) { ui.alert('❌ Sheet "D.3" tidak ditemukan!'); return; }
+
+  ss.toast('Membaca data...', 'Hunter Sync', 5);
 
   var d1 = readSheet(s1);
   var d2 = readSheet(s2);
   var d3 = readSheet(s3);
 
-  // Auto-detect bulan dari Tgl Reg di D.1
-  var bulan = '';
-  var mc = {};
-  d1.forEach(function(r) {
-    var tgl = r['Tgl Reg'] || '';
-    var m   = String(tgl).slice(0, 7);
-    if (/^\\d{4}-\\d{2}$/.test(m)) mc[m] = (mc[m]||0) + 1;
-  });
-  var best = Object.entries(mc).sort(function(a,b){ return b[1]-a[1]; })[0];
-  if (best) bulan = best[0];
+  if (d1.length === 0) { ui.alert('❌ Sheet D.1 kosong.'); return; }
 
-  if (!bulan) {
-    var input = Browser.inputBox('Bulan (format YYYY-MM, contoh: 2026-05):');
-    if (input === 'cancel' || !input) return;
-    bulan = input;
+  // Bulan laporan = bulan D.2 & D.3 (default: bulan ini)
+  var defaultBulan = getCurrentBulan();
+  var resp = ui.prompt(
+    '🎯 Hunter Sync — Bulan Laporan',
+    'D.1 = data Mei (referensi tetap)\\n' +
+    'D.2 & D.3 = data bulan laporan\\n\\n' +
+    'Masukkan bulan laporan (YYYY-MM).\\n' +
+    'Kosongkan untuk pakai bulan ini (' + defaultBulan + '):',
+    ui.ButtonSet.OK_CANCEL
+  );
+
+  if (resp.getSelectedButton() !== ui.Button.OK) { ui.alert('Dibatalkan.'); return; }
+
+  var inputBulan = resp.getResponseText().trim();
+  var bulan      = inputBulan || defaultBulan;
+
+  if (!/^\\d{4}-\\d{2}$/.test(bulan)) {
+    ui.alert('❌ Format bulan tidak valid. Gunakan YYYY-MM (contoh: 2026-06).');
+    return;
   }
 
-  var ui = SpreadsheetApp.getUi();
-  var yes = ui.alert('Konfirmasi Sync Hunter',
-    'Bulan  : ' + bulan +
-    '\\nD.1   : ' + d1.length + ' baris' +
-    '\\nD.2   : ' + d2.length + ' baris' +
-    '\\nD.3   : ' + d3.length + ' baris' +
-    '\\n\\nLanjutkan?', ui.ButtonSet.YES_NO);
-  if (yes !== ui.Button.YES) return;
+  var confirm = ui.alert('Konfirmasi',
+    '🎯 Sync Hunter\\n\\n' +
+    'Bulan laporan : ' + bulan + '\\n' +
+    'D.1 (ref Mei) : ' + d1.length + ' baris\\n' +
+    'D.2 (trx)     : ' + d2.length + ' baris\\n' +
+    'D.3 (akt)     : ' + d3.length + ' baris\\n\\n' +
+    'Data lama bulan ' + bulan + ' akan DIGANTI. Lanjutkan?',
+    ui.ButtonSet.YES_NO);
+  if (confirm !== ui.Button.YES) { ui.alert('Dibatalkan.'); return; }
+
+  ss.toast('Mengirim data ke server...', 'Hunter Sync', 60);
 
   try {
-    var resp = UrlFetchApp.fetch(VPS_URL, {
-      method: 'post',
-      contentType: 'application/json',
-      payload: JSON.stringify({ token: SYNC_TOKEN, bulan: bulan, d1: d1, d2: d2, d3: d3 }),
+    var response = UrlFetchApp.fetch(VPS_URL, {
+      method:             'post',
+      contentType:        'application/json',
+      payload:            JSON.stringify({ token: SYNC_TOKEN, bulan: bulan, d1: d1, d2: d2, d3: d3 }),
       muteHttpExceptions: true,
+      followRedirects:    true
     });
-    var body = JSON.parse(resp.getContentText());
+    var code = response.getResponseCode();
+    var body = JSON.parse(response.getContentText());
+    if (code !== 200) { ui.alert('❌ HTTP ' + code + '\\n\\n' + response.getContentText().slice(0, 400)); return; }
     if (body.ok) {
-      ui.alert('✅ Sync berhasil!\\nBulan: ' + body.bulan +
-        '\\nD.1: ' + body.d1_rows + ' baris' +
-        '\\nD.2: ' + body.d2_rows + ' baris' +
-        '\\nD.3: ' + body.d3_rows + ' baris' +
-        '\\nDurasi: ' + body.duration_ms + 'ms');
+      ui.alert('✅ Sync Berhasil!\\n\\nBulan : ' + body.bulan +
+        '\\nD.1   : ' + body.d1_rows + ' baris' +
+        '\\nD.2   : ' + body.d2_rows + ' baris' +
+        '\\nD.3   : ' + body.d3_rows + ' baris' +
+        '\\nDurasi: ' + body.duration_ms + ' ms');
     } else {
-      ui.alert('❌ Error: ' + JSON.stringify(body));
+      ui.alert('❌ Server error:\\n\\n' + JSON.stringify(body).slice(0, 400));
     }
   } catch (e) {
-    ui.alert('❌ Exception: ' + e.message);
+    ui.alert('❌ Exception:\\n\\n' + e.message);
   }
 }
 
 function readSheet(sheet) {
   var last = sheet.getLastRow();
   var lc   = sheet.getLastColumn();
-  if (last < 2) return [];
+  if (last < 2 || lc < 1) return [];
   var data    = sheet.getRange(1, 1, last, lc).getValues();
   var headers = data[0].map(function(h) { return String(h).trim(); });
-  var rows = [];
+  var rows    = [];
   for (var r = 1; r < data.length; r++) {
     var row    = data[r];
     var hasVal = headers.some(function(h, i) { return h && row[i] !== '' && row[i] != null; });
@@ -179,23 +204,27 @@ function readSheet(sheet) {
     headers.forEach(function(h, i) {
       if (!h) return;
       var v = row[i];
-      if (v instanceof Date) {
-        v = Utilities.formatDate(v, 'Asia/Jakarta', 'yyyy-MM-dd');
-      } else if (v === undefined || v === null) {
-        v = '';
-      }
+      if (v instanceof Date) v = Utilities.formatDate(v, 'Asia/Jakarta', 'yyyy-MM-dd');
+      else if (v === undefined || v === null) v = '';
       obj[h] = v;
     });
     rows.push(obj);
   }
   return rows;
+}
+
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu('🎯 Hunter Sync')
+    .addItem('Sync ke Dashboard', 'syncHunterData')
+    .addToUi();
 }`;
 }
 
 // ── TABS ──────────────────────────────────────────────────────────────────
 const TABS = [
   { key: 'command',     label: '🎯 Command Center',      icon: 'ti-dashboard' },
-  { key: 'leaderboard', label: '🏆 Hunter Leaderboard',  icon: 'ti-trophy' },
+  { key: 'leaderboard', label: '🏆 Leaderboard PB',       icon: 'ti-trophy' },
   { key: 'action',      label: '⚡ Action Queue',         icon: 'ti-list-check' },
   { key: 'funnel',      label: '🔽 Funnel',               icon: 'ti-filter' },
   { key: 'revenue',     label: '💰 Revenue Intelligence', icon: 'ti-coin' },
@@ -331,7 +360,7 @@ function CommandCenter({ cc }) {
     <div className="wh-section">
       {/* KPI Grid */}
       <div className="wh-kpi-grid">
-        <KPI icon="ti-users" label="Total Hunter" value={fmtN(cc.total_hunters)} color="#3B82F6" />
+        <KPI icon="ti-users" label="Total PB (Pembina Bisnis)" value={fmtN(cc.total_hunters)} color="#3B82F6" />
         <KPI icon="ti-user-plus" label="Total Register" value={fmtN(cc.total_register)} />
         <KPI icon="ti-check-circle" label="Sudah Aktivasi" value={fmtN(cc.total_aktivasi)}
              sub={fmtP(cc.activation_rate) + ' activation rate'} color="#10B981" />
@@ -416,14 +445,14 @@ function Leaderboard({ list }) {
       <div className="wh-card">
         <div className="wh-card-title">
           <i className="ti ti-trophy" />
-          Hunter Leaderboard — {list.length} Hunter
+          Leaderboard Pembina Bisnis — {list.length} PB
         </div>
         <div className="wh-table-wrap">
           <table className="wh-table">
             <thead>
               <tr>
                 <th>#</th>
-                <Th col="upline">Hunter</Th>
+                <Th col="upline">Pembina Bisnis</Th>
                 <Th col="reg">Register</Th>
                 <Th col="akt">Aktivasi</Th>
                 <Th col="act_rate">Act%</Th>
@@ -509,7 +538,7 @@ function ActionQueue({ queue }) {
       <div className="wh-card">
         <div className="wh-card-title">
           <i className="ti ti-list-check" />
-          Action Queue — {filtered.length} outlet yang perlu ditindak
+          Action Queue — {filtered.length} outlet prioritas
         </div>
 
         <div className="wh-toolbar">
@@ -523,7 +552,7 @@ function ActionQueue({ queue }) {
             ))}
           </div>
           <input className="wh-search"
-            placeholder="Cari nama / ID / hunter…"
+            placeholder="Cari nama / ID / PB…"
             value={search}
             onChange={e => setSearch(e.target.value)} />
         </div>
@@ -536,7 +565,7 @@ function ActionQueue({ queue }) {
                 <th>ID Loket</th>
                 <th>Nama</th>
                 <th>No Telp</th>
-                <th>Hunter</th>
+                <th>PB</th>
                 <th>Type</th>
                 <th>Kota</th>
                 <th>Stage</th>
@@ -624,14 +653,14 @@ function FunnelTab({ cc, funnel }) {
         </div>
       </div>
 
-      {/* Per-hunter funnel */}
+      {/* Per-PB funnel */}
       <div className="wh-card">
-        <div className="wh-card-title"><i className="ti ti-user-check" /> Funnel per Hunter</div>
+        <div className="wh-card-title"><i className="ti ti-user-check" /> Funnel per Pembina Bisnis</div>
         <div className="wh-table-wrap">
           <table className="wh-table">
             <thead>
               <tr>
-                <th>Hunter</th>
+                <th>Pembina Bisnis</th>
                 <th>Register</th>
                 <th>Aktivasi</th>
                 <th>Drop R→A</th>
@@ -678,7 +707,7 @@ function RevenueTab({ rev }) {
     { label:'Gross Biaya Aktivasi',   val: rev.gross_aktivasi,      color:'#3B82F6', icon:'ti-receipt' },
     { label:'HPP',                    val: -rev.hpp_total,           color:'#DC2626', icon:'ti-minus-circle' },
     { label:'Ongkos Kirim',           val: -rev.ongkos_kirim_total,  color:'#DC2626', icon:'ti-truck' },
-    { label:'Fee Upline',             val: -rev.fee_upline_total,    color:'#DC2626', icon:'ti-arrow-up-circle' },
+    { label:'Fee Pembina Bisnis',      val: -rev.fee_upline_total,    color:'#DC2626', icon:'ti-arrow-up-circle' },
     { label:'Net Komisi Aktivasi',    val: rev.net_komisi,           color: rev.net_komisi>=0?'#059669':'#DC2626', icon:'ti-coin' },
     { label:'Margin Transaksi',       val: rev.margin_trx,           color:'#7C3AED', icon:'ti-chart-bar' },
     { label:'Total Net Revenue',      val: rev.total_net_revenue,    color: rev.total_net_revenue>=0?'#F97316':'#DC2626', icon:'ti-currency-dollar' },
@@ -709,12 +738,12 @@ function RevenueTab({ rev }) {
                 <tr>
                   <th>ID Loket</th>
                   <th>Nama</th>
-                  <th>Hunter</th>
+                  <th>PB</th>
                   <th>Type Loket</th>
                   <th>Biaya Aktifasi</th>
                   <th>HPP</th>
                   <th>Ongkir</th>
-                  <th>Fee Upline</th>
+                  <th>Fee PB</th>
                   <th>Komisi (Rugi)</th>
                   <th>Trx</th>
                   <th>No Telp</th>
@@ -874,7 +903,7 @@ function ScriptModal({ onClose }) {
             <div>
               Buka Google Sheets Hunter (<code>1WyYG0obpT0rGYlgsVlq6EO_6m4c5eTDethTEA09PNyU</code>)
               → <strong>Extensions → Apps Script</strong> → paste → Save → Run <code>syncHunterData()</code>.
-              <br />Script otomatis baca sheet <strong>D.1, D.2, D.3</strong> dan detect bulan dari kolom Tgl Reg.
+              <br /><strong>D.1</strong> = data Mei (referensi registrasi, tidak berubah) · <strong>D.2 & D.3</strong> = data bulan berjalan (Juni, dst).
             </div>
           </div>
           <pre className="dr-script-code">{code}</pre>
