@@ -171,34 +171,54 @@ function compute(d1Rows, d2Rows, d3Rows) {
   });
 
   // ── Command Center ────────────────────────────────────────────────────
+  // totalReg = outlet terdaftar di D.1 (Mei)
+  // totalAkt = outlet teraktivasi di D.3 (Juni, is_active=1), bebas dari D.1
   const totalReg   = master.length;
-  const totalAkt   = master.filter(m => m.is_act).length;
-  const belumAkt   = master.filter(m => !m.is_act).length;
-  const sudahTrx   = master.filter(m => m.jml_trx > 0).length;
-  const outlet0Trx = master.filter(m => m.is_act && m.jml_trx === 0).length;
-  const repeatTrx  = master.filter(m => m.jml_trx > 1).length;
-  const revPos     = master.filter(m => m.total_rev > 0).length;
-  const totalTrx   = master.reduce((s, m) => s + m.jml_trx, 0);
-  const totalMgn   = master.reduce((s, m) => s + m.margin, 0);
-  const netKomisi  = master.reduce((s, m) => s + m.komisi, 0);
+  const totalAkt   = d3Rows.filter(r => ii(r.is_active) === 1).length;
+  const belumAkt   = master.filter(m => !m.is_act).length;  // D.1 yang belum ada di D.3
+  const sudahTrx   = d3Rows.filter(r => ii(r.is_active) === 1 && ii((d2Map.get(r.id_outlet) || {}).jml_trx) > 0).length;
+  const outlet0Trx = totalAkt - sudahTrx;
+  const repeatTrx  = d3Rows.filter(r => ii(r.is_active) === 1 && ii((d2Map.get(r.id_outlet) || {}).jml_trx) > 1).length;
+  const totalTrx   = d3Rows.filter(r => ii(r.is_active) === 1).reduce((s, r) => s + ii((d2Map.get(r.id_outlet) || {}).jml_trx), 0);
+  const totalMgn   = d3Rows.filter(r => ii(r.is_active) === 1).reduce((s, r) => s + n((d2Map.get(r.id_outlet) || {}).margin), 0);
+  const netKomisi  = d3Rows.filter(r => ii(r.is_active) === 1).reduce((s, r) => s + n(r.komisi_aktifasi), 0);
   const totalRev   = totalMgn + netKomisi;
+  const revPos     = d3Rows.filter(r => ii(r.is_active) === 1 && (n(r.komisi_aktifasi) + n((d2Map.get(r.id_outlet)||{}).margin)) > 0).length;
   const actRate    = totalReg > 0 ? totalAkt / totalReg : 0;
   const trxRate    = totalAkt > 0 ? sudahTrx / totalAkt : 0;
   const avgMgn     = totalTrx > 0 ? totalMgn / totalTrx : 0;
-  const negAktCnt  = master.filter(m => m.komisi < 0).length;
-  const hunterSet  = new Set(master.map(m => m.upline));
+  const negAktCnt  = d3Rows.filter(r => ii(r.is_active) === 1 && n(r.komisi_aktifasi) < 0).length;
+  const hunterSet  = new Set([
+    ...d1Rows.map(r => r.upline),
+    ...d3Rows.map(r => r.upline),
+  ].filter(Boolean));
 
-  // ── Hunter Leaderboard ────────────────────────────────────────────────
+  // ── PB Leaderboard ────────────────────────────────────────────────────
+  // reg  = registrasi dari D.1 per upline
+  // akt  = aktivasi dari D.3 per upline (is_active=1), BEBAS dari D.1
+  // trx/margin = D.2 untuk outlet yang diaktivasi oleh PB tersebut
   const hMap = new Map();
+
+  // Registrasi dari D.1
   for (const m of master) {
     const k = m.upline;
     if (!hMap.has(k)) hMap.set(k, { upline: k, reg:0, akt:0, trx_out:0, total_trx:0, margin:0, rev_akt:0, neg_k:0 });
+    hMap.get(k).reg++;
+  }
+
+  // Aktivasi dari D.3 langsung (bisa outlet di luar D.1)
+  for (const d3 of d3Rows) {
+    if (ii(d3.is_active) !== 1) continue;
+    const k = d3.upline || '-';
+    if (!hMap.has(k)) hMap.set(k, { upline: k, reg:0, akt:0, trx_out:0, total_trx:0, margin:0, rev_akt:0, neg_k:0 });
     const h = hMap.get(k);
-    h.reg++;
-    if (m.is_act) { h.akt++; h.rev_akt += m.komisi; }
-    if (m.jml_trx > 0) { h.trx_out++; h.total_trx += m.jml_trx; }
-    h.margin += m.margin;
-    if (m.komisi < 0) h.neg_k++;
+    h.akt++;
+    h.rev_akt += n(d3.komisi_aktifasi);
+    if (n(d3.komisi_aktifasi) < 0) h.neg_k++;
+    // TRX outlet yang diaktivasi oleh PB ini
+    const d2 = d2Map.get(d3.id_outlet) || {};
+    if (ii(d2.jml_trx) > 0) { h.trx_out++; h.total_trx += ii(d2.jml_trx); }
+    h.margin += n(d2.margin);
   }
 
   const hList = Array.from(hMap.values()).map(h => ({
@@ -259,12 +279,12 @@ function compute(d1Rows, d2Rows, d3Rows) {
     .sort((a, b) => b.priority - a.priority)
     .slice(0, 300);
 
-  // ── Funnel per hunter ─────────────────────────────────────────────────
+  // ── Funnel per PB ─────────────────────────────────────────────────────
+  // rr = registrasi (D.1), aa = aktivasi (D.3), tt = yang sudah TRX (D.2)
   const funnelHunter = hList.map(h => {
-    const my = master.filter(m => m.upline === h.upline);
-    const rr = my.length;
-    const aa = my.filter(m => m.is_act).length;
-    const tt = my.filter(m => m.jml_trx > 0).length;
+    const rr = h.reg;
+    const aa = h.akt;
+    const tt = h.trx_out;
     let bot = 'OK';
     if (aa / Math.max(rr, 1) < 0.3)         bot = 'Closing Aktivasi';
     else if (tt / Math.max(aa, 1) < 0.3)    bot = 'Edukasi Penggunaan';
@@ -274,13 +294,30 @@ function compute(d1Rows, d2Rows, d3Rows) {
   });
 
   // ── Revenue Intelligence ──────────────────────────────────────────────
-  const aktRows = master.filter(m => m.id_aktifasi);
-  const gross   = aktRows.reduce((s, m) => s + m.biaya_aktifasi, 0);
-  const hpp     = aktRows.reduce((s, m) => s + m.hpp, 0);
-  const ongkir  = aktRows.reduce((s, m) => s + m.ongkos_kirim, 0);
-  const feeUp   = aktRows.reduce((s, m) => s + m.fee_upline, 0);
-  const lossRows = aktRows
-    .filter(m => m.komisi < 0)
+  // Dari D.3 langsung (semua aktivasi Juni, bukan hanya yang match D.1)
+  const aktD3  = d3Rows.filter(r => ii(r.is_active) === 1);
+  const gross  = aktD3.reduce((s, r) => s + n(r.biaya_aktifasi), 0);
+  const hpp    = aktD3.reduce((s, r) => s + n(r.hpp), 0);
+  const ongkir = aktD3.reduce((s, r) => s + n(r.ongkos_kirim), 0);
+  const feeUp  = aktD3.reduce((s, r) => s + n(r.fee_upline), 0);
+  const lossRows = aktD3
+    .filter(r => n(r.komisi_aktifasi) < 0)
+    .map(r => {
+      const d1 = d1Rows.find(d => d.id_loket === r.id_outlet) || {};
+      return {
+        upline: r.upline, id_loket: r.id_outlet,
+        nama: d1.nama || r.nama_pemilik || '',
+        no_telp: d1.no_telp || '',
+        type_loket: r.tipe_outlet || d1.type_loket || '-',
+        kota: d1.kota || '',
+        biaya_aktifasi: n(r.biaya_aktifasi),
+        hpp: n(r.hpp),
+        ongkos_kirim: n(r.ongkos_kirim),
+        fee_upline: n(r.fee_upline),
+        komisi: n(r.komisi_aktifasi),
+        jml_trx: ii((d2Map.get(r.id_outlet) || {}).jml_trx),
+      };
+    })
     .sort((a, b) => a.komisi - b.komisi)
     .slice(0, 50);
 
