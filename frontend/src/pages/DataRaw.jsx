@@ -89,7 +89,7 @@ function syncSemuaSheet() {
 }
 
 // Deteksi bulan dari nama sheet tab
-// Contoh: "April 2026" → "2026-04", "Apr 2026" → "2026-04"
+// Support: "April26", "April 26", "April 2026", "Apr2026", "04/2026", dll
 function parseBulan(name) {
   const MONTH = {
     januari:1, jan:1, februari:2, feb:2, maret:3, mar:3,
@@ -99,8 +99,17 @@ function parseBulan(name) {
     november:11, nov:11, desember:12, des:12, dec:12
   };
   const lower = name.toLowerCase().replace(/[^a-z0-9\\s]/g, ' ');
-  const yr    = (name.match(/\\b(20\\d{2})\\b/) || [])[1];
+
+  // Cari tahun: 4 digit (2026) atau 2 digit (26 → 2026)
+  let yr = null;
+  const allNums = name.match(/\\d+/g) || [];
+  for (const d of allNums) {
+    if (d.length === 4 && d.startsWith('20')) { yr = d; break; }
+    if (d.length === 2 && parseInt(d) >= 20 && parseInt(d) <= 99) { yr = '20' + d; break; }
+  }
   if (!yr) return null;
+
+  // Cari nama bulan
   for (const k in MONTH) {
     if (lower.indexOf(k) !== -1) return yr + '-' + String(MONTH[k]).padStart(2, '0');
   }
