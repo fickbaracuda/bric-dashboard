@@ -168,10 +168,12 @@ export default function Sidebar({ onClose }) {
   const isWRAsdpPath   = location.pathname === '/war-room/asdp';
   const isWRBumdesPath = location.pathname === '/war-room/bumdes';
   const isWRLpdPath    = location.pathname === '/war-room/lpd';
+  const isWRMgmPath    = location.pathname === '/war-room/mgm-pa';
+  const isWRHunterPath = location.pathname === '/war-room/hunter';
 
   const [winmeOpen, setWinmeOpen] = useState(isWinmePath || isWinmeTimPath || isWRIQPath || isWRIQTRXPath || isDataRawPath);
   const [timOpen,   setTimOpen]   = useState(isWinmeTimPath);
-  const [paOpen,    setPAOpen]    = useState(isPABasePath || isPATimPath || isWREkspPath || isWRFPPath || isWRFarmPath || isWRPAProduk || isWRDMFPPath || isWRAsdpPath || isWRBumdesPath || isWRLpdPath);
+  const [paOpen,    setPAOpen]    = useState(isPABasePath || isPATimPath || isWREkspPath || isWRFPPath || isWRFarmPath || isWRPAProduk || isWRDMFPPath || isWRAsdpPath || isWRBumdesPath || isWRLpdPath || isWRMgmPath || isWRHunterPath);
   const [paTimOpen, setPATimOpen] = useState(isPATimPath);
   const [ddOpen,    setDDOpen]    = useState(isDDPath || isSCTimPath || isWRSCPath);
   const [scTimOpen, setSCTimOpen] = useState(isSCTimPath);
@@ -179,7 +181,7 @@ export default function Sidebar({ onClose }) {
   useEffect(() => {
     if (isWinmePath || isWinmeTimPath || isWRIQPath || isWRIQTRXPath || isDataRawPath) setWinmeOpen(true);
     if (isWinmeTimPath) setTimOpen(true);
-    if (isPABasePath || isPATimPath || isWREkspPath || isWRFPPath || isWRFarmPath || isWRPAProduk || isWRDMFPPath || isWRAsdpPath || isWRBumdesPath || isWRLpdPath) setPAOpen(true);
+    if (isPABasePath || isPATimPath || isWREkspPath || isWRFPPath || isWRFarmPath || isWRPAProduk || isWRDMFPPath || isWRAsdpPath || isWRBumdesPath || isWRLpdPath || isWRMgmPath || isWRHunterPath) setPAOpen(true);
     if (isPATimPath) setPATimOpen(true);
     if (isDDPath || isSCTimPath || isWRSCPath) setDDOpen(true);
     if (isSCTimPath) setSCTimOpen(true);
@@ -515,6 +517,18 @@ export default function Sidebar({ onClose }) {
                 <i className="ti ti-users-group" style={{ color: '#10B981' }} aria-hidden="true" />
                 <span>MGM PA</span>
                 <span className="sidebar-warroom-badge" style={{ background: '#10B981' }}>MGM</span>
+              </NavLink>
+              <NavLink
+                to="/war-room/hunter"
+                onClick={onClose}
+                className={({ isActive }) =>
+                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                }
+                style={{ paddingLeft: 28 }}
+              >
+                <i className="ti ti-crosshair" style={{ color: '#F97316' }} aria-hidden="true" />
+                <span>Hunter</span>
+                <span className="sidebar-warroom-badge" style={{ background: '#F97316' }}>HNT</span>
               </NavLink>
               <NavLink
                 to="/war-room/dm-fastpay"

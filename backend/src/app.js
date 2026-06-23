@@ -25,6 +25,7 @@ const asdpRoutes          = require('./routes/warroom-asdp');
 const bumdesRoutes        = require('./routes/warroom-bumdes');
 const lpdRoutes           = require('./routes/warroom-lpd');
 const dataRawRoutes       = require('./routes/data-raw');
+const hunterRoutes        = require('./routes/warroom-hunter');
 const systemRoutes        = require('./routes/system');
 const requireAuth         = require('./middleware/auth');
 
@@ -107,6 +108,8 @@ app.get('/api/warroom/bumdes/outlets',   requireAuth, bumdesRoutes.outletsHandle
 app.post('/api/warroom/lpd/sync',        lpdRoutes.syncHandler);             // token auth, no JWT
 app.get('/api/warroom/lpd/analytics',    requireAuth, lpdRoutes.analyticsHandler);
 app.get('/api/warroom/lpd/outlets',      requireAuth, lpdRoutes.outletsHandler);
+app.post('/api/warroom/hunter/sync',     hunterRoutes.syncHandler);           // token auth, no JWT
+app.get('/api/warroom/hunter/analytics', requireAuth, hunterRoutes.analyticsHandler);
 app.use('/api/warroom',        requireAuth, warroomRoutes);
 
 app.post('/api/data-raw/outlet/sync',    dataRawRoutes.outletSyncHandler);    // token auth, no JWT
