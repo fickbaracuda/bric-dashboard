@@ -9,7 +9,7 @@ const APPS_SCRIPT = `// ========================================================
 // Paste ke Extensions → Apps Script di Google Sheets outlet
 // Jalankan fungsi: syncSemuaSheet()
 // ============================================================
-const VPS_URL    = 'http://147.139.201.43/api/data-raw/outlet/sync';
+const VPS_URL    = 'https://bmsretail.my.id/api/data-raw/outlet/sync';
 const SYNC_TOKEN = 'bric2026bimasaktisecret';
 
 function syncSemuaSheet() {
