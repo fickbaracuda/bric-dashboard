@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import Chart from 'chart.js/auto';
 import Layout from '../components/Layout';
-import { authHeaders } from '../services/api';
+import { getToken } from '../utils/auth';
+
+const authHeaders = () => ({ Authorization: `Bearer ${getToken()}` });
 
 const API = '/api/data-raw/outlet-analytics';
 const ACCENT = '#2563EB';
