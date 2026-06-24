@@ -576,10 +576,252 @@ async function qrisAnalyticsHandler(req, res) {
   }
 }
 
+// ── Outlet-level analytics ────────────────────────────────────────────────
+async function getFullOutletCatalog() {
+  const res = await pool.query(`
+    SELECT DISTINCT ON (row_data->>'ID Outlet')
+      row_data->>'ID Outlet'                                      AS id_outlet,
+      COALESCE(NULLIF(row_data->>'Nama Merchant',    ''), '-')    AS nama_merchant,
+      COALESCE(NULLIF(row_data->>'Nama Kategori',    ''), 'Lainnya') AS kategori,
+      COALESCE(NULLIF(row_data->>'Kota',             ''), '-')    AS kota,
+      COALESCE(NULLIF(row_data->>'Provinsi',         ''), '-')    AS provinsi,
+      COALESCE(NULLIF(row_data->>'ID Upline',        ''), '-')    AS id_upline,
+      COALESCE(NULLIF(row_data->>'Nama Paket',       ''), '-')    AS nama_paket,
+      NULLIF(row_data->>'Tanggal Aktivasi',          '')          AS tgl_aktivasi
+    FROM iq_raw_outlet
+    WHERE row_data->>'ID Outlet' IS NOT NULL AND row_data->>'ID Outlet' <> ''
+    ORDER BY row_data->>'ID Outlet', bulan DESC
+  `);
+  return new Map(res.rows.map(r => [r.id_outlet, r]));
+}
+
+async function aggOutletPerf(bulan, maxDay = null) {
+  if (!bulan) return new Map();
+  const params = [bulan];
+  let df = '';
+  if (maxDay !== null) {
+    params.push(maxDay);
+    df = `AND row_data->>'Tanggal' IS NOT NULL
+          AND EXTRACT(DAY FROM (row_data->>'Tanggal')::date) <= $2`;
+  }
+  const res = await pool.query(`
+    SELECT
+      row_data->>'ID Outlet'                                        AS id_outlet,
+      COALESCE(SUM((row_data->>'Jumlah Transaksi')::numeric), 0)   AS total_trx,
+      COALESCE(SUM((row_data->>'Jumlah Omzet')::numeric), 0)       AS total_omzet,
+      COALESCE(SUM((row_data->>'Margin')::numeric), 0)             AS total_margin,
+      COUNT(DISTINCT row_data->>'Tanggal')                         AS days_active
+    FROM iq_raw_trx
+    WHERE bulan=$1
+      AND row_data->>'ID Outlet' IS NOT NULL AND row_data->>'ID Outlet' <> ''
+      ${df}
+    GROUP BY row_data->>'ID Outlet'
+  `, params);
+  return new Map(res.rows.map(r => [r.id_outlet, r]));
+}
+
+// GET /api/data-raw/outlet-analytics?bulan=2026-06
+async function outletAnalyticsHandler(req, res) {
+  let { bulan } = req.query;
+  try {
+    const blRes = await pool.query(`SELECT DISTINCT bulan FROM iq_raw_trx ORDER BY bulan DESC`);
+    const bulanList = blRes.rows.map(r => r.bulan);
+    if (!bulanList.length) return res.json({ empty: true, bulan_list: [] });
+    if (!bulan || !bulanList.includes(bulan)) bulan = bulanList[0];
+
+    const b1 = bulan, b2 = prevBulanStr(b1), b3 = prevBulanStr(b2);
+
+    const maxTglRes = await pool.query(
+      `SELECT MAX(row_data->>'Tanggal') AS max_tgl FROM iq_raw_trx WHERE bulan=$1 AND row_data->>'Tanggal' IS NOT NULL`,
+      [b1]
+    );
+    const maxTgl = maxTglRes.rows[0]?.max_tgl;
+    const maxDay = maxTgl ? parseInt(String(maxTgl).slice(8, 10), 10) : null;
+
+    const [catalog, junMap, meiMap, aprMap, percRes, dailyRes] = await Promise.all([
+      getFullOutletCatalog(),
+      aggOutletPerf(b1, null),
+      aggOutletPerf(b2, maxDay),
+      aggOutletPerf(b3, maxDay),
+
+      pool.query(`
+        SELECT
+          percentile_cont(0.25) WITHIN GROUP (ORDER BY total_trx)    AS trx_p25,
+          percentile_cont(0.50) WITHIN GROUP (ORDER BY total_trx)    AS trx_p50,
+          percentile_cont(0.75) WITHIN GROUP (ORDER BY total_trx)    AS trx_p75,
+          percentile_cont(0.90) WITHIN GROUP (ORDER BY total_trx)    AS trx_p90,
+          percentile_cont(0.75) WITHIN GROUP (ORDER BY total_margin) AS margin_p75,
+          AVG(CASE WHEN total_trx > 0 THEN total_margin / total_trx END) AS avg_mpt
+        FROM (
+          SELECT SUM((row_data->>'Jumlah Transaksi')::numeric) AS total_trx,
+                 SUM((row_data->>'Margin')::numeric)           AS total_margin
+          FROM iq_raw_trx WHERE bulan=$1
+            AND row_data->>'ID Outlet' IS NOT NULL AND row_data->>'ID Outlet' <> ''
+          GROUP BY row_data->>'ID Outlet'
+          HAVING SUM((row_data->>'Jumlah Transaksi')::numeric) > 0
+        ) x
+      `, [b1]),
+
+      pool.query(`
+        SELECT bulan,
+          row_data->>'Tanggal'                                       AS tanggal,
+          COALESCE(SUM((row_data->>'Jumlah Transaksi')::numeric), 0) AS trx,
+          COALESCE(SUM((row_data->>'Jumlah Omzet')::numeric), 0)     AS omzet,
+          COALESCE(SUM((row_data->>'Margin')::numeric), 0)           AS margin,
+          COUNT(DISTINCT row_data->>'ID Outlet')                     AS active_outlets
+        FROM iq_raw_trx
+        WHERE bulan = ANY($1::text[]) AND row_data->>'Tanggal' IS NOT NULL
+        GROUP BY bulan, row_data->>'Tanggal'
+        ORDER BY bulan, tanggal
+      `, [[b1, b2]]),
+    ]);
+
+    const p = percRes.rows[0] || {};
+    const trxP25 = +p.trx_p25 || 2, trxP50 = +p.trx_p50 || 10;
+    const trxP75 = +p.trx_p75 || 34, trxP90 = +p.trx_p90 || 89;
+    const marginP75 = +p.margin_p75 || 0, avgMpt = +p.avg_mpt || 0;
+
+    const allIds = new Set([...junMap.keys(), ...meiMap.keys(), ...aprMap.keys()]);
+    const outlets = [];
+
+    for (const id of allIds) {
+      const j = junMap.get(id), m = meiMap.get(id), a = aprMap.get(id);
+      const info = catalog.get(id);
+      const jun_trx = j ? +j.total_trx : 0, jun_omzet = j ? +j.total_omzet : 0;
+      const jun_margin = j ? +j.total_margin : 0, days_active = j ? +j.days_active : 0;
+      const mei_trx = m ? +m.total_trx : 0, mei_margin = m ? +m.total_margin : 0;
+      const apr_trx = a ? +a.total_trx : 0;
+      if (jun_trx === 0 && mei_trx === 0 && apr_trx === 0) continue;
+
+      const dev_trx = jun_trx - mei_trx, dev_margin = jun_margin - mei_margin;
+      const growth_pct = mei_trx > 0 ? ((jun_trx - mei_trx) / mei_trx) * 100 : null;
+      const avg_daily = days_active > 0 ? jun_trx / days_active : 0;
+      const mpt = jun_trx > 0 ? jun_margin / jun_trx : 0;
+
+      let seg;
+      if      (jun_trx === 0 && mei_trx > 0)                     seg = 'churn';
+      else if (jun_trx > 0 && mei_trx === 0 && apr_trx > 0)      seg = 'reaktivasi';
+      else if (jun_trx > 0 && mei_trx === 0)                     seg = 'baru_aktif';
+      else if (jun_trx >= trxP75 && jun_margin >= marginP75)      seg = 'superstar';
+      else if (growth_pct !== null && growth_pct >= 20)           seg = 'tumbuh';
+      else if (growth_pct !== null && growth_pct <= -25)          seg = 'at_risk';
+      else if (growth_pct !== null && growth_pct <  -10)          seg = 'turun';
+      else                                                        seg = 'stabil';
+
+      outlets.push({
+        id_outlet: id,
+        nama_merchant: info?.nama_merchant || '-',
+        kategori:      info?.kategori      || 'Lainnya',
+        kota:          info?.kota          || '-',
+        provinsi:      info?.provinsi      || '-',
+        id_upline:     info?.id_upline     || '-',
+        tgl_aktivasi:  info?.tgl_aktivasi  || null,
+        jun_trx, jun_omzet, jun_margin, days_active,
+        mei_trx, mei_margin, apr_trx,
+        dev_trx, dev_margin,
+        growth_pct:  growth_pct !== null ? Math.round(growth_pct * 10) / 10 : null,
+        avg_daily:   Math.round(avg_daily * 10) / 10,
+        mpt:         Math.round(mpt * 100) / 100,
+        segment:     seg,
+      });
+    }
+
+    const sc = {};
+    for (const o of outlets) sc[o.segment] = (sc[o.segment] || 0) + 1;
+
+    const junAct = outlets.filter(o => o.jun_trx > 0);
+    const meiAct = outlets.filter(o => o.mei_trx > 0);
+    const totTJ = junAct.reduce((s, o) => s + o.jun_trx, 0);
+    const totTM = meiAct.reduce((s, o) => s + o.mei_trx, 0);
+    const totMJ = junAct.reduce((s, o) => s + o.jun_margin, 0);
+    const totMM = meiAct.reduce((s, o) => s + o.mei_margin, 0);
+
+    const byTrx    = [...outlets].filter(o => o.jun_trx > 0).sort((a,b) => b.jun_trx    - a.jun_trx);
+    const byMargin = [...outlets].filter(o => o.jun_margin > 0).sort((a,b) => b.jun_margin - a.jun_margin);
+    const bothAct  = outlets.filter(o => o.jun_trx > 0 && o.mei_trx > 0 && o.growth_pct !== null);
+    const byGrow   = [...bothAct].sort((a,b) => b.growth_pct - a.growth_pct);
+    const byDrop   = [...bothAct].sort((a,b) => a.growth_pct - b.growth_pct);
+    const churnL   = outlets.filter(o => o.segment === 'churn').sort((a,b) => b.mei_trx - a.mei_trx);
+
+    // Daily trend: align by day number
+    const junDay = {}, meiDay = {};
+    for (const r of dailyRes.rows) {
+      const tgl = String(r.tanggal).slice(0, 10);
+      const dn  = tgl.slice(8, 10);
+      if (r.bulan === b1) junDay[tgl] = { tanggal: tgl, day: dn, trx: +r.trx, omzet: +r.omzet, margin: +r.margin, outlets: +r.active_outlets };
+      else if (r.bulan === b2) meiDay[dn] = { trx: +r.trx, margin: +r.margin, outlets: +r.active_outlets };
+    }
+    const daily_trend = Object.values(junDay).sort((a,b) => a.tanggal.localeCompare(b.tanggal)).map(d => ({
+      ...d,
+      mei_trx:     meiDay[d.day]?.trx     || 0,
+      mei_margin:  meiDay[d.day]?.margin  || 0,
+      mei_outlets: meiDay[d.day]?.outlets || 0,
+    }));
+
+    res.json({
+      bulan, b1, b2, b3, bulan_list: bulanList,
+      mtd_info: {
+        max_tgl: maxTgl, max_day: maxDay,
+        b1_label: maxDay ? `${b1} (1-${maxDay})` : b1,
+        b2_label: maxDay ? `${b2} (1-${maxDay})` : b2,
+        is_mtd:   maxDay !== null && maxDay < 28,
+      },
+      summary: {
+        outlet_aktif_jun:  junAct.length,
+        outlet_aktif_mei:  meiAct.length,
+        dev_outlet:        junAct.length - meiAct.length,
+        churn_count:       sc.churn      || 0,
+        baru_count:        sc.baru_aktif || 0,
+        reaktivasi_count:  sc.reaktivasi || 0,
+        superstar_count:   sc.superstar  || 0,
+        tumbuh_count:      sc.tumbuh     || 0,
+        stabil_count:      sc.stabil     || 0,
+        at_risk_count:     sc.at_risk    || 0,
+        turun_count:       sc.turun      || 0,
+        total_trx_jun:     totTJ, total_trx_mei: totTM,
+        total_margin_jun:  totMJ, total_margin_mei: totMM,
+        dev_trx:           totTJ - totTM,
+        dev_margin:        totMJ - totMM,
+        avg_trx_per_outlet:    junAct.length ? Math.round(totTJ / junAct.length) : 0,
+        avg_margin_per_outlet: junAct.length ? Math.round(totMJ / junAct.length) : 0,
+      },
+      thresholds: { trx_p25: trxP25, trx_p50: trxP50, trx_p75: trxP75, trx_p90: trxP90, margin_p75: marginP75, avg_mpt: avgMpt },
+      segment_dist: [
+        { key: 'superstar',  label: 'Superstar',  count: sc.superstar  || 0, color: '#7C3AED' },
+        { key: 'tumbuh',     label: 'Tumbuh',     count: sc.tumbuh     || 0, color: '#059669' },
+        { key: 'stabil',     label: 'Stabil',     count: sc.stabil     || 0, color: '#3B82F6' },
+        { key: 'turun',      label: 'Turun',      count: sc.turun      || 0, color: '#F59E0B' },
+        { key: 'at_risk',    label: 'At Risk',    count: sc.at_risk    || 0, color: '#EF4444' },
+        { key: 'churn',      label: 'Churn',      count: sc.churn      || 0, color: '#DC2626' },
+        { key: 'baru_aktif', label: 'Baru Aktif', count: sc.baru_aktif || 0, color: '#10B981' },
+        { key: 'reaktivasi', label: 'Reaktivasi', count: sc.reaktivasi || 0, color: '#F97316' },
+      ],
+      top20_trx:     byTrx.slice(0, 20),
+      top20_margin:  byMargin.slice(0, 20),
+      top20_growth:  byGrow.slice(0, 20),
+      top20_decline: byDrop.slice(0, 20),
+      churn_list:    churnL.slice(0, 100),
+      new_active:    outlets.filter(o => o.segment === 'baru_aktif').sort((a,b) => b.jun_trx - a.jun_trx).slice(0, 50),
+      daily_trend,
+      action: {
+        selamatkan: churnL.slice(0, 50),
+        hubungi:    byGrow.filter(o => o.jun_trx >= trxP50).slice(0, 50),
+        reward:     byTrx.filter(o => o.segment === 'superstar').slice(0, 30),
+        reaktivasi: outlets.filter(o => o.jun_trx === 0 && o.mei_trx === 0 && o.apr_trx > 0).sort((a,b) => b.apr_trx - a.apr_trx).slice(0, 50),
+        optimasi:   byTrx.filter(o => o.jun_trx >= trxP75 && o.mpt < avgMpt).slice(0, 50),
+      },
+    });
+  } catch (e) {
+    console.error('[outlet-analytics]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+}
+
 // ── GET routes ────────────────────────────────────────────────────────────
-router.get('/analytics',      analyticsRawHandler);
-router.get('/trendline',      trendlineRawHandler);
-router.get('/qris-analytics', qrisAnalyticsHandler);
+router.get('/analytics',         analyticsRawHandler);
+router.get('/trendline',         trendlineRawHandler);
+router.get('/qris-analytics',    qrisAnalyticsHandler);
+router.get('/outlet-analytics',  outletAnalyticsHandler);
 router.get('/outlet',    makeListHandler(TABLES.outlet));
 router.get('/affiliate', makeListHandler(TABLES.affiliate));
 router.get('/qris',      makeListHandler(TABLES.qris));

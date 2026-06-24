@@ -156,6 +156,7 @@ export default function Sidebar({ onClose }) {
   const isWRIQTRXPath  = location.pathname === '/war-room/instaqris-trx';
   const isWRIQRawPath  = location.pathname === '/war-room/iq-raw';
   const isWRQrisPath   = location.pathname === '/war-room/penerbitan-qris';
+  const isWRTrxOutPath = location.pathname === '/war-room/trx-outlet';
   const isDataRawPath  = location.pathname.startsWith('/data-raw');
   const isPABasePath   = location.pathname === '/payment-agent';
   const isPATimPath    = location.pathname === '/scoreboard-tim-pa' || isPAMember;
@@ -173,7 +174,7 @@ export default function Sidebar({ onClose }) {
   const isWRMgmPath    = location.pathname === '/war-room/mgm-pa';
   const isWRHunterPath = location.pathname === '/war-room/hunter';
 
-  const [winmeOpen, setWinmeOpen] = useState(isWinmePath || isWinmeTimPath || isWRIQPath || isWRIQTRXPath || isWRIQRawPath || isWRQrisPath || isDataRawPath);
+  const [winmeOpen, setWinmeOpen] = useState(isWinmePath || isWinmeTimPath || isWRIQPath || isWRIQTRXPath || isWRIQRawPath || isWRQrisPath || isWRTrxOutPath || isDataRawPath);
   const [timOpen,   setTimOpen]   = useState(isWinmeTimPath);
   const [paOpen,    setPAOpen]    = useState(isPABasePath || isPATimPath || isWREkspPath || isWRFPPath || isWRFarmPath || isWRPAProduk || isWRDMFPPath || isWRAsdpPath || isWRBumdesPath || isWRLpdPath || isWRMgmPath || isWRHunterPath);
   const [paTimOpen, setPATimOpen] = useState(isPATimPath);
@@ -181,7 +182,7 @@ export default function Sidebar({ onClose }) {
   const [scTimOpen, setSCTimOpen] = useState(isSCTimPath);
 
   useEffect(() => {
-    if (isWinmePath || isWinmeTimPath || isWRIQPath || isWRIQTRXPath || isDataRawPath) setWinmeOpen(true);
+    if (isWinmePath || isWinmeTimPath || isWRIQPath || isWRIQTRXPath || isDataRawPath || isWRTrxOutPath) setWinmeOpen(true);
     if (isWinmeTimPath) setTimOpen(true);
     if (isPABasePath || isPATimPath || isWREkspPath || isWRFPPath || isWRFarmPath || isWRPAProduk || isWRDMFPPath || isWRAsdpPath || isWRBumdesPath || isWRLpdPath || isWRMgmPath || isWRHunterPath) setPAOpen(true);
     if (isPATimPath) setPATimOpen(true);
@@ -374,6 +375,17 @@ export default function Sidebar({ onClose }) {
                 <i className="ti ti-qrcode" style={{ color: '#EC4899' }} aria-hidden="true" />
                 <span>Penerbitan QRIS</span>
                 <span className="sidebar-warroom-badge" style={{ background: '#EC4899' }}>QRIS</span>
+              </NavLink>
+              <NavLink
+                to="/war-room/trx-outlet"
+                onClick={onClose}
+                className={({ isActive }) =>
+                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                }
+              >
+                <i className="ti ti-building-store" style={{ color: '#2563EB' }} aria-hidden="true" />
+                <span>Transaksi by Outlet</span>
+                <span className="sidebar-warroom-badge" style={{ background: '#2563EB' }}>OUT</span>
               </NavLink>
 
               {/* ── Data Raw ── */}
