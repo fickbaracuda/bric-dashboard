@@ -142,15 +142,15 @@ function shiftMonthDate(dateStr, months) {
 
 async function getOutletCatalog() {
   const res = await pool.query(`
-    SELECT DISTINCT ON (row_data->>'ID Outlet')
-      row_data->>'ID Outlet'                                    AS id_outlet,
+    SELECT DISTINCT ON (COALESCE(NULLIF(row_data->>'ID Outlet',''), NULLIF(row_data->>'D Outlet','')))
+      COALESCE(NULLIF(row_data->>'ID Outlet',''), NULLIF(row_data->>'D Outlet','')) AS id_outlet,
       COALESCE(NULLIF(row_data->>'Nama Kategori', ''), 'Lainnya') AS kategori,
       COALESCE(NULLIF(row_data->>'Nama Paket',    ''), '-')       AS paket,
       COALESCE(NULLIF(row_data->>'Provinsi',      ''), '-')       AS provinsi,
       COALESCE(NULLIF(row_data->>'Kota',          ''), '-')       AS kota
     FROM iq_raw_outlet
-    WHERE row_data->>'ID Outlet' IS NOT NULL AND row_data->>'ID Outlet' <> ''
-    ORDER BY row_data->>'ID Outlet', bulan DESC
+    WHERE COALESCE(NULLIF(row_data->>'ID Outlet',''), NULLIF(row_data->>'D Outlet','')) IS NOT NULL
+    ORDER BY COALESCE(NULLIF(row_data->>'ID Outlet',''), NULLIF(row_data->>'D Outlet','')), bulan DESC
   `);
   return new Map(res.rows.map(r => [r.id_outlet, r]));
 }
@@ -579,8 +579,8 @@ async function qrisAnalyticsHandler(req, res) {
 // ── Outlet-level analytics ────────────────────────────────────────────────
 async function getFullOutletCatalog() {
   const res = await pool.query(`
-    SELECT DISTINCT ON (row_data->>'ID Outlet')
-      row_data->>'ID Outlet'                                      AS id_outlet,
+    SELECT DISTINCT ON (COALESCE(NULLIF(row_data->>'ID Outlet',''), NULLIF(row_data->>'D Outlet','')))
+      COALESCE(NULLIF(row_data->>'ID Outlet',''), NULLIF(row_data->>'D Outlet','')) AS id_outlet,
       COALESCE(NULLIF(row_data->>'Nama Merchant',    ''), '-')    AS nama_merchant,
       COALESCE(NULLIF(row_data->>'Nama Kategori',    ''), 'Lainnya') AS kategori,
       COALESCE(NULLIF(row_data->>'Kota',             ''), '-')    AS kota,
@@ -589,8 +589,8 @@ async function getFullOutletCatalog() {
       COALESCE(NULLIF(row_data->>'Nama Paket',       ''), '-')    AS nama_paket,
       NULLIF(row_data->>'Tanggal Aktivasi',          '')          AS tgl_aktivasi
     FROM iq_raw_outlet
-    WHERE row_data->>'ID Outlet' IS NOT NULL AND row_data->>'ID Outlet' <> ''
-    ORDER BY row_data->>'ID Outlet', bulan DESC
+    WHERE COALESCE(NULLIF(row_data->>'ID Outlet',''), NULLIF(row_data->>'D Outlet','')) IS NOT NULL
+    ORDER BY COALESCE(NULLIF(row_data->>'ID Outlet',''), NULLIF(row_data->>'D Outlet','')), bulan DESC
   `);
   return new Map(res.rows.map(r => [r.id_outlet, r]));
 }
