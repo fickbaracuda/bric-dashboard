@@ -117,8 +117,14 @@ async function getOutletCatalog() {
   return new Map(res.rows.map(r => [r.id_outlet, r]));
 }
 
-async function aggTrxByOutlet(bulan) {
+async function aggTrxByOutlet(bulan, maxDay = null) {
   if (!bulan) return new Map();
+  const params = [bulan];
+  const dayFilter = maxDay
+    ? `AND row_data->>'tanggal' IS NOT NULL
+       AND EXTRACT(DAY FROM (row_data->>'tanggal')::date) <= $2`
+    : '';
+  if (maxDay) params.push(maxDay);
   const res = await pool.query(`
     SELECT
       row_data->>'ID Outlet' AS id_outlet,
@@ -129,8 +135,9 @@ async function aggTrxByOutlet(bulan) {
     WHERE bulan=$1
       AND row_data->>'ID Outlet' IS NOT NULL
       AND row_data->>'ID Outlet' <> ''
+      ${dayFilter}
     GROUP BY row_data->>'ID Outlet'
-  `, [bulan]);
+  `, params);
   return new Map(res.rows.map(r => [r.id_outlet, r]));
 }
 
@@ -149,11 +156,22 @@ async function analyticsRawHandler(req, res) {
     const b2 = prevBulanStr(b1);
     const b3 = prevBulanStr(b2);
 
+    // MTD alignment: temukan tanggal terakhir di b1, lalu filter b2 & b3 sampai hari yang sama
+    // sehingga perbandingan head-to-head (misal Jun 1-24 vs Mei 1-24 vs Apr 1-24)
+    const maxTglRes = await pool.query(
+      `SELECT MAX(row_data->>'tanggal') AS max_tgl
+       FROM iq_raw_trx
+       WHERE bulan=$1 AND row_data->>'tanggal' IS NOT NULL`,
+      [b1]
+    );
+    const maxTgl = maxTglRes.rows[0]?.max_tgl;
+    const maxDay = maxTgl ? parseInt(String(maxTgl).slice(8, 10), 10) : null;
+
     const [catalog, trxCur, trxPrev, trxPrev2] = await Promise.all([
       getOutletCatalog(),
-      aggTrxByOutlet(b1),
-      aggTrxByOutlet(b2),
-      aggTrxByOutlet(b3),
+      aggTrxByOutlet(b1),             // b1 current month — ambil semua data ada (sudah MTD by nature)
+      aggTrxByOutlet(b2, maxDay),     // b2 bulan lalu — filter sampai hari yang sama
+      aggTrxByOutlet(b3, maxDay),     // b3 2 bulan lalu — filter sampai hari yang sama
     ]);
 
     const katMap = new Map();
@@ -203,6 +221,14 @@ async function analyticsRawHandler(req, res) {
     const totRevM = tabel.reduce((s, r) => s + r.mei_rev, 0);
     res.json({
       bulan, bulan_list: bulanList, b1, b2, b3,
+      mtd_info: {
+        max_tgl:  maxTgl  || null,
+        max_day:  maxDay  || null,
+        b1_label: maxDay ? `${b1} (1-${maxDay})` : b1,
+        b2_label: maxDay ? `${b2} (1-${maxDay})` : b2,
+        b3_label: maxDay ? `${b3} (1-${maxDay})` : b3,
+        is_mtd:   maxDay !== null && maxDay < 28,
+      },
       summary: {
         total_merchant:  tabel.reduce((s, r) => s + r.jun_merchant, 0),
         total_trx:       tabel.reduce((s, r) => s + r.jun_trx, 0),

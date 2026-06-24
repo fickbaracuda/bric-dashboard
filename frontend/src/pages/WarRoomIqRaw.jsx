@@ -336,21 +336,27 @@ function Recommendations({ data }) {
   );
 }
 
-function KatModal({ row, onClose, b1, b2, b3 }) {
+function KatModal({ row, onClose, b1, b2, b3, mtd_info }) {
   if (!row) return null;
+  const mtd     = mtd_info;
+  const isMtd   = mtd?.is_mtd;
+  const mdSufx  = isMtd ? ` (MTD 1-${mtd.max_day})` : '';
+  const lb1m    = bulanLabel(b1);
+  const lb2m    = bulanLabel(b2) + mdSufx;
+  const lb3m    = bulanLabel(b3) + mdSufx;
   return (
     <div className="wr-modal-overlay" onClick={onClose}>
       <div className="wr-modal" onClick={e => e.stopPropagation()}>
         <div className="wr-modal-header">
           <div>
             <div className="wr-modal-title">{row.kategori}</div>
-            <div className="wr-modal-sub">Kategori outlet InstaQris</div>
+            <div className="wr-modal-sub">Kategori outlet InstaQris{isMtd ? ` · Perbandingan MTD hari 1–${mtd.max_day}` : ''}</div>
           </div>
           <button className="wr-modal-close" onClick={onClose}>✕</button>
         </div>
         {row.is_anomali && <div className="wr-anomali-banner">⚠ Merchant bertambah namun omzet turun — perlu investigasi</div>}
         <table className="wr-modal-table">
-          <thead><tr><th></th><th>{bulanLabel(b3)}</th><th>{bulanLabel(b2)}</th><th>{bulanLabel(b1)}</th></tr></thead>
+          <thead><tr><th></th><th>{lb3m}</th><th>{lb2m}</th><th>{lb1m}</th></tr></thead>
           <tbody>
             <tr><td>Merchant</td><td>{fmtNum(row.apr_merchant)}</td><td>{fmtNum(row.mei_merchant)}</td><td><strong>{fmtNum(row.jun_merchant)}</strong></td></tr>
             <tr><td>TRX</td><td>{fmtNum(row.apr_trx)}</td><td>{fmtNum(row.mei_trx)}</td><td><strong>{fmtNum(row.jun_trx)}</strong></td></tr>
@@ -359,8 +365,8 @@ function KatModal({ row, onClose, b1, b2, b3 }) {
         </table>
         <div className="wr-dev-boxes">
           {[
-            { label: `DEV ${bulanLabel(b3)}→${bulanLabel(b1)}`, rev: row.dev_apr_jun_rev, m: row.dev_apr_jun_merchant, t: row.dev_apr_jun_trx },
-            { label: `DEV ${bulanLabel(b2)}→${bulanLabel(b1)}`, rev: row.dev_mei_jun_rev, m: row.dev_mei_jun_merchant, t: row.dev_mei_jun_trx },
+            { label: `DEV ${lb3m}→${lb1m}`, rev: row.dev_apr_jun_rev, m: row.dev_apr_jun_merchant, t: row.dev_apr_jun_trx },
+            { label: `DEV ${lb2m}→${lb1m}`, rev: row.dev_mei_jun_rev, m: row.dev_mei_jun_merchant, t: row.dev_mei_jun_trx },
           ].map(d => (
             <div key={d.label} className={`wr-dev-box ${n(d.rev) >= 0 ? 'wr-dev-pos' : 'wr-dev-neg'}`}>
               <div className="wr-dev-label">{d.label}</div>
@@ -399,10 +405,24 @@ function ExecutiveSummaryTab({ data, loading, onClickRow, b1, b2, b3 }) {
   const maxGrowth  = n(data?.top_growth?.[0]?.dev_mei_jun_rev);
   const maxMasalah = Math.abs(n(data?.segmen_masalah?.[0]?.dev_mei_jun_rev));
   const tid        = b1 || 'x';
-  const lb1        = bulanLabel(b1), lb2 = bulanLabel(b2), lb3 = bulanLabel(b3);
+  const lb1        = bulanLabel(b1);
+  const mtd        = data?.mtd_info;
+  const isMtd      = mtd?.is_mtd;
+  const mdSufx     = isMtd ? ` MTD-${mtd.max_day}` : '';
+  const lb2        = bulanLabel(b2) + mdSufx;
+  const lb3        = bulanLabel(b3) + mdSufx;
 
   return (
     <div>
+      {!loading && isMtd && (
+        <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 8, padding: '8px 14px', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#1D4ED8' }}>
+          <i className="ti ti-calendar-stats" />
+          <span>
+            <strong>Perbandingan MTD (Month-to-Date)</strong> — {bulanLabel(b2)} & {bulanLabel(b3)} hanya dihitung s/d hari ke-{mtd.max_day}
+            agar head-to-head dengan {lb1} yang baru tersedia sampai <strong>{mtd.max_tgl}</strong>
+          </span>
+        </div>
+      )}
       {loading ? <SkeletonCards /> : <SummaryCards s={data?.summary} bulanLabel={lb1} />}
       {!loading && data && (
         <>
@@ -973,7 +993,7 @@ export default function WarRoomIqRaw() {
         </div>
 
       </div>
-      <KatModal row={modalRow} onClose={() => setModalRow(null)} b1={b1} b2={b2} b3={b3} />
+      <KatModal row={modalRow} onClose={() => setModalRow(null)} b1={b1} b2={b2} b3={b3} mtd_info={data?.mtd_info} />
     </Layout>
   );
 }
