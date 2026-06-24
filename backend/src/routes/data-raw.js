@@ -64,11 +64,13 @@ function makeListHandler(table) {
 
     const params = [];
     const conditions = [];
+    // Kolom tanggal bisa 'Tanggal' (kapital, di iq_raw_trx) atau 'tanggal' (lowercase)
+    const TGL = `COALESCE(row_data->>'Tanggal', row_data->>'tanggal')`;
     if (bulan) { params.push(bulan); conditions.push(`bulan=$${params.length}`); }
     if (q)     { params.push(`%${q.toUpperCase()}%`); conditions.push(`UPPER(row_data::text) LIKE $${params.length}`); }
     if (tgl_dari && tgl_sampai && tgl_dari <= tgl_sampai) {
-      params.push(tgl_dari); conditions.push(`row_data->>'tanggal' IS NOT NULL AND (row_data->>'tanggal')::date >= $${params.length}::date`);
-      params.push(tgl_sampai); conditions.push(`(row_data->>'tanggal')::date <= $${params.length}::date`);
+      params.push(tgl_dari); conditions.push(`${TGL} IS NOT NULL AND (${TGL})::date >= $${params.length}::date`);
+      params.push(tgl_sampai); conditions.push(`(${TGL})::date <= $${params.length}::date`);
     }
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
 
@@ -79,7 +81,7 @@ function makeListHandler(table) {
       params.push(sort_col);
       orderBy = `(row_data->>$${params.length}) ${safeDir} NULLS LAST`;
     } else if (tgl_dari || tgl_sampai) {
-      orderBy = `(row_data->>'tanggal') ASC NULLS LAST`;
+      orderBy = `(${TGL}) ASC NULLS LAST`;
     } else {
       orderBy = 'bulan DESC, id ASC';
     }
@@ -97,7 +99,7 @@ function makeListHandler(table) {
            FROM ${table} GROUP BY bulan, sheet_name ORDER BY bulan DESC`
         ),
         pool.query(
-          `SELECT MIN(row_data->>'tanggal') AS tgl_min, MAX(row_data->>'tanggal') AS tgl_max
+          `SELECT MIN(${TGL}) AS tgl_min, MAX(${TGL}) AS tgl_max
            FROM ${table} ${where}`,
           params
         ),
@@ -159,12 +161,12 @@ async function aggTrxByOutlet(bulan, maxDay = null, tglDari = null, tglSampai = 
   let dateFilter = '';
   if (tglDari && tglSampai) {
     params.push(tglDari, tglSampai);
-    dateFilter = `AND row_data->>'tanggal' IS NOT NULL
-                  AND (row_data->>'tanggal')::date BETWEEN $2::date AND $3::date`;
+    dateFilter = `AND row_data->>'Tanggal' IS NOT NULL
+                  AND (row_data->>'Tanggal')::date BETWEEN $2::date AND $3::date`;
   } else if (maxDay) {
     params.push(maxDay);
-    dateFilter = `AND row_data->>'tanggal' IS NOT NULL
-                  AND EXTRACT(DAY FROM (row_data->>'tanggal')::date) <= $2`;
+    dateFilter = `AND row_data->>'Tanggal' IS NOT NULL
+                  AND EXTRACT(DAY FROM (row_data->>'Tanggal')::date) <= $2`;
   }
   const res = await pool.query(`
     SELECT
@@ -210,9 +212,9 @@ async function analyticsRawHandler(req, res) {
     } else {
       // MTD alignment: temukan tanggal terakhir di b1, lalu filter b2 & b3 sampai hari yang sama
       const maxTglRes = await pool.query(
-        `SELECT MAX(row_data->>'tanggal') AS max_tgl
+        `SELECT MAX(row_data->>'Tanggal') AS max_tgl
          FROM iq_raw_trx
-         WHERE bulan=$1 AND row_data->>'tanggal' IS NOT NULL`,
+         WHERE bulan=$1 AND row_data->>'Tanggal' IS NOT NULL`,
         [b1]
       );
       maxTgl = maxTglRes.rows[0]?.max_tgl;
