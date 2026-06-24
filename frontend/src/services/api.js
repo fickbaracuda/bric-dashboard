@@ -206,6 +206,8 @@ export const getDataRawTrendline = async (days = 30, bulan) => {
   const res = await axios.get(`${API_URL}/api/data-raw/trendline`, { params: p, headers: authHeaders() });
   return res.data;
 };
+export const getDataRawQrisAnalytics = (params = {}) =>
+  axios.get(`${API_URL}/api/data-raw/qris-analytics`, { params, headers: authHeaders() }).then(r => r.data);
 
 /* WAR-ROOM — Speedcash */
 export const getSpeedcashData = async (params = {}) => {

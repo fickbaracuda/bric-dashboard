@@ -285,9 +285,198 @@ async function trendlineRawHandler(req, res) {
   }
 }
 
+// ── WAR-ROOM Penerbitan QRIS ──────────────────────────────────────────────
+const STATUS_COLOR = {
+  'Terbit':         '#10B981',
+  'Belum Terbit':   '#3B82F6',
+  'Perbaikan Data': '#F59E0B',
+  'Rejected':       '#EF4444',
+};
+
+async function qrisAnalyticsHandler(req, res) {
+  let { bulan } = req.query;
+  try {
+    const blRes = await pool.query(
+      `SELECT DISTINCT bulan FROM iq_raw_qris ORDER BY bulan DESC`
+    );
+    const bulanList = blRes.rows.map(r => r.bulan);
+    if (!bulanList.length) return res.json({ empty: true, bulan_list: [] });
+    if (!bulan || !bulanList.includes(bulan)) bulan = bulanList[0];
+
+    const [statusRes, byOutletRes, dailyRes, catalog, trxRes] = await Promise.all([
+      // Status distribution
+      pool.query(`
+        SELECT COALESCE(NULLIF(row_data->>'status',''), 'Tidak Diketahui') AS status,
+               COUNT(*) AS cnt
+        FROM iq_raw_qris WHERE bulan=$1
+        GROUP BY status ORDER BY cnt DESC
+      `, [bulan]),
+
+      // Per outlet + status (for segmentation)
+      pool.query(`
+        SELECT row_data->>'id_outlet' AS id_outlet,
+               COALESCE(NULLIF(row_data->>'status',''), 'Tidak Diketahui') AS status,
+               COUNT(*) AS cnt
+        FROM iq_raw_qris
+        WHERE bulan=$1 AND row_data->>'id_outlet' IS NOT NULL
+        GROUP BY row_data->>'id_outlet', status
+      `, [bulan]),
+
+      // Daily trend
+      pool.query(`
+        SELECT row_data->>'tanggal' AS tanggal,
+               COALESCE(NULLIF(row_data->>'status',''), 'Tidak Diketahui') AS status,
+               COUNT(*) AS cnt
+        FROM iq_raw_qris
+        WHERE bulan=$1 AND row_data->>'tanggal' IS NOT NULL
+        GROUP BY row_data->>'tanggal', status
+        ORDER BY tanggal
+      `, [bulan]),
+
+      // Outlet catalog (all months, most recent per outlet)
+      getOutletCatalog(),
+
+      // Outlets with TRX this bulan
+      pool.query(`
+        SELECT DISTINCT row_data->>'ID Outlet' AS id_outlet
+        FROM iq_raw_trx WHERE bulan=$1 AND row_data->>'ID Outlet' IS NOT NULL
+      `, [bulan]),
+    ]);
+
+    // ── Status totals ───────────────────────────────────────────────────────
+    const statusMap = {};
+    let total = 0;
+    for (const r of statusRes.rows) { statusMap[r.status] = +r.cnt; total += +r.cnt; }
+    const terbit    = statusMap['Terbit']         || 0;
+    const perbaikan = statusMap['Perbaikan Data'] || 0;
+    const belum     = statusMap['Belum Terbit']   || 0;
+    const rejected  = statusMap['Rejected']       || 0;
+
+    const by_status = statusRes.rows.map(r => ({
+      status: r.status, count: +r.cnt,
+      rate: total > 0 ? +((+r.cnt / total) * 100).toFixed(1) : 0,
+      color: STATUS_COLOR[r.status] || '#9CA3AF',
+    }));
+
+    // ── Outlet sets ─────────────────────────────────────────────────────────
+    const trxSet        = new Set(trxRes.rows.map(r => r.id_outlet));
+    const terbitSet     = new Set();
+    const perbaikanSet  = new Set();
+    const belumSet      = new Set();
+    for (const r of byOutletRes.rows) {
+      if (r.status === 'Terbit')         terbitSet.add(r.id_outlet);
+      if (r.status === 'Perbaikan Data') perbaikanSet.add(r.id_outlet);
+      if (r.status === 'Belum Terbit')   belumSet.add(r.id_outlet);
+    }
+    const terbitWithTrx  = [...terbitSet].filter(id => trxSet.has(id)).length;
+    const activationRate = terbitSet.size > 0 ? +((terbitWithTrx / terbitSet.size) * 100).toFixed(1) : 0;
+
+    // ── Segmentation by Kategori & Provinsi ─────────────────────────────────
+    const katMap  = new Map();
+    const provMap = new Map();
+    const ensureKat = (k) => {
+      if (!katMap.has(k)) katMap.set(k, { kategori:k, terbit:0, perbaikan:0, belum:0, rejected:0, outlets:new Set(), with_trx:0 });
+      return katMap.get(k);
+    };
+    const ensureProv = (p) => {
+      if (!provMap.has(p)) provMap.set(p, { provinsi:p, terbit:0, perbaikan:0, belum:0, rejected:0, outlets:new Set() });
+      return provMap.get(p);
+    };
+
+    for (const r of byOutletRes.rows) {
+      const info = catalog.get(r.id_outlet);
+      const kat  = info?.kategori || 'Tidak Diketahui';
+      const prov = info?.provinsi || 'Tidak Diketahui';
+      const cnt  = +r.cnt;
+      const k = ensureKat(kat);
+      const p = ensureProv(prov);
+      k.outlets.add(r.id_outlet); p.outlets.add(r.id_outlet);
+      if (r.status === 'Terbit')         { k.terbit    += cnt; p.terbit    += cnt; if (trxSet.has(r.id_outlet)) k.with_trx++; }
+      if (r.status === 'Perbaikan Data') { k.perbaikan += cnt; p.perbaikan += cnt; }
+      if (r.status === 'Belum Terbit')   { k.belum     += cnt; p.belum     += cnt; }
+      if (r.status === 'Rejected')       { k.rejected  += cnt; p.rejected  += cnt; }
+    }
+
+    const buildKat = (k) => {
+      const tot = k.terbit + k.perbaikan + k.belum + k.rejected;
+      return {
+        kategori: k.kategori,
+        terbit: k.terbit, perbaikan: k.perbaikan, belum: k.belum, rejected: k.rejected,
+        total: tot, outlets: k.outlets.size, with_trx: k.with_trx,
+        terbit_rate:     tot > 0        ? +((k.terbit    / tot)            * 100).toFixed(1) : 0,
+        activation_rate: k.terbit > 0   ? +((k.with_trx  / k.terbit)      * 100).toFixed(1) : 0,
+        perbaikan_rate:  tot > 0        ? +((k.perbaikan / tot)            * 100).toFixed(1) : 0,
+      };
+    };
+    const buildProv = (p) => {
+      const tot = p.terbit + p.perbaikan + p.belum + p.rejected;
+      return {
+        provinsi: p.provinsi,
+        terbit: p.terbit, perbaikan: p.perbaikan, belum: p.belum, rejected: p.rejected,
+        total: tot, outlets: p.outlets.size,
+        terbit_rate:    tot > 0 ? +((p.terbit    / tot) * 100).toFixed(1) : 0,
+        perbaikan_rate: tot > 0 ? +((p.perbaikan / tot) * 100).toFixed(1) : 0,
+      };
+    };
+
+    const by_kategori = Array.from(katMap.values()).map(buildKat).sort((a,b) => b.total - a.total);
+    const by_provinsi = Array.from(provMap.values()).map(buildProv).sort((a,b) => b.total - a.total);
+
+    // ── Daily trend ─────────────────────────────────────────────────────────
+    const dayMap = new Map();
+    for (const r of dailyRes.rows) {
+      if (!r.tanggal) continue;
+      const d = String(r.tanggal).slice(0, 10);
+      if (!dayMap.has(d)) dayMap.set(d, { tanggal:d, terbit:0, perbaikan:0, belum:0, rejected:0 });
+      const e = dayMap.get(d); const cnt = +r.cnt;
+      if (r.status === 'Terbit')         e.terbit    += cnt;
+      if (r.status === 'Perbaikan Data') e.perbaikan += cnt;
+      if (r.status === 'Belum Terbit')   e.belum     += cnt;
+      if (r.status === 'Rejected')       e.rejected  += cnt;
+    }
+    const daily = [...dayMap.values()].sort((a,b) => a.tanggal.localeCompare(b.tanggal));
+
+    const terbitDays  = daily.filter(d => d.terbit > 0);
+    const avgTerbit   = terbitDays.length > 0 ? Math.round(terbitDays.reduce((s,d) => s+d.terbit,0) / terbitDays.length) : 0;
+    const peakTerbit  = Math.max(...daily.map(d => d.terbit), 0);
+    const peakDate    = daily.find(d => d.terbit === peakTerbit)?.tanggal || '';
+
+    // ── Response ─────────────────────────────────────────────────────────────
+    res.json({
+      bulan, bulan_list: bulanList,
+      summary: {
+        total, terbit, perbaikan, belum, rejected,
+        terbit_rate:    total > 0 ? +((terbit    / total) * 100).toFixed(1) : 0,
+        perbaikan_rate: total > 0 ? +((perbaikan / total) * 100).toFixed(1) : 0,
+        belum_rate:     total > 0 ? +((belum     / total) * 100).toFixed(1) : 0,
+        terbit_outlets:    terbitSet.size,
+        perbaikan_outlets: perbaikanSet.size,
+        belum_outlets:     belumSet.size,
+        terbit_with_trx:   terbitWithTrx,
+        activation_rate:   activationRate,
+        avg_daily_terbit:  avgTerbit,
+        peak_daily_terbit: peakTerbit,
+        peak_date:         peakDate,
+      },
+      by_status,
+      by_kategori:  by_kategori.slice(0, 30),
+      by_provinsi:  by_provinsi.slice(0, 20),
+      top_terbit:   [...by_kategori].sort((a,b) => b.terbit_rate    - a.terbit_rate).filter(k => k.total >= 50).slice(0, 10),
+      top_perbaikan:[...by_kategori].sort((a,b) => b.perbaikan     - a.perbaikan).slice(0, 10),
+      top_activation:[...by_kategori].filter(k => k.terbit >= 10).sort((a,b) => b.activation_rate - a.activation_rate).slice(0, 10),
+      bot_activation:[...by_kategori].filter(k => k.terbit >= 10).sort((a,b) => a.activation_rate - b.activation_rate).slice(0, 10),
+      daily,
+    });
+  } catch (e) {
+    console.error('[data-raw qris-analytics]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+}
+
 // ── GET routes ────────────────────────────────────────────────────────────
-router.get('/analytics', analyticsRawHandler);
-router.get('/trendline', trendlineRawHandler);
+router.get('/analytics',      analyticsRawHandler);
+router.get('/trendline',      trendlineRawHandler);
+router.get('/qris-analytics', qrisAnalyticsHandler);
 router.get('/outlet',    makeListHandler(TABLES.outlet));
 router.get('/affiliate', makeListHandler(TABLES.affiliate));
 router.get('/qris',      makeListHandler(TABLES.qris));

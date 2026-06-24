@@ -155,6 +155,7 @@ export default function Sidebar({ onClose }) {
   const isWRIQPath     = location.pathname === '/war-room/instaqris';
   const isWRIQTRXPath  = location.pathname === '/war-room/instaqris-trx';
   const isWRIQRawPath  = location.pathname === '/war-room/iq-raw';
+  const isWRQrisPath   = location.pathname === '/war-room/penerbitan-qris';
   const isDataRawPath  = location.pathname.startsWith('/data-raw');
   const isPABasePath   = location.pathname === '/payment-agent';
   const isPATimPath    = location.pathname === '/scoreboard-tim-pa' || isPAMember;
@@ -172,7 +173,7 @@ export default function Sidebar({ onClose }) {
   const isWRMgmPath    = location.pathname === '/war-room/mgm-pa';
   const isWRHunterPath = location.pathname === '/war-room/hunter';
 
-  const [winmeOpen, setWinmeOpen] = useState(isWinmePath || isWinmeTimPath || isWRIQPath || isWRIQTRXPath || isWRIQRawPath || isDataRawPath);
+  const [winmeOpen, setWinmeOpen] = useState(isWinmePath || isWinmeTimPath || isWRIQPath || isWRIQTRXPath || isWRIQRawPath || isWRQrisPath || isDataRawPath);
   const [timOpen,   setTimOpen]   = useState(isWinmeTimPath);
   const [paOpen,    setPAOpen]    = useState(isPABasePath || isPATimPath || isWREkspPath || isWRFPPath || isWRFarmPath || isWRPAProduk || isWRDMFPPath || isWRAsdpPath || isWRBumdesPath || isWRLpdPath || isWRMgmPath || isWRHunterPath);
   const [paTimOpen, setPATimOpen] = useState(isPATimPath);
@@ -362,6 +363,17 @@ export default function Sidebar({ onClose }) {
                 <i className="ti ti-chart-dots" style={{ color: '#0EA5E9' }} aria-hidden="true" />
                 <span>Instaqris - Analitik</span>
                 <span className="sidebar-warroom-badge" style={{ background: '#0EA5E9' }}>IQ</span>
+              </NavLink>
+              <NavLink
+                to="/war-room/penerbitan-qris"
+                onClick={onClose}
+                className={({ isActive }) =>
+                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                }
+              >
+                <i className="ti ti-qrcode" style={{ color: '#EC4899' }} aria-hidden="true" />
+                <span>Penerbitan QRIS</span>
+                <span className="sidebar-warroom-badge" style={{ background: '#EC4899' }}>QRIS</span>
               </NavLink>
 
               {/* ── Data Raw ── */}
