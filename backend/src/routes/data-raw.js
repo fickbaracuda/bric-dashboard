@@ -620,6 +620,18 @@ async function aggOutletPerf(bulan, maxDay = null) {
   return new Map(res.rows.map(r => [r.id_outlet, r]));
 }
 
+function territoryCluster(provinsi) {
+  const p = (provinsi || '').toLowerCase();
+  if (/jawa|jakarta|banten|yogyakarta/.test(p))                                         return 'Jawa';
+  if (/sumatera|sumatra|aceh|riau|jambi|bengkulu|lampung|bangka|kepulauan riau/.test(p))return 'Sumatera';
+  if (/kalimantan/.test(p))                                                             return 'Kalimantan';
+  if (/sulawesi|gorontalo/.test(p))                                                     return 'Sulawesi';
+  if (/bali|nusa tenggara/.test(p))                                                     return 'Bali & Nusa Tenggara';
+  if (/maluku/.test(p))                                                                 return 'Maluku';
+  if (/papua/.test(p))                                                                  return 'Papua';
+  return 'Lainnya';
+}
+
 // GET /api/data-raw/outlet-analytics?bulan=2026-06
 async function outletAnalyticsHandler(req, res) {
   let { bulan } = req.query;
@@ -716,13 +728,15 @@ async function outletAnalyticsHandler(req, res) {
         provinsi:      info?.provinsi      || '-',
         id_upline:     info?.id_upline     || '-',
         tgl_aktivasi:  info?.tgl_aktivasi  || null,
-        jun_trx, jun_omzet, jun_margin, days_active,
+        territory_cluster: territoryCluster(info?.provinsi || ''),
+        jun_trx, jun_margin, days_active,
         mei_trx, mei_margin, apr_trx,
         dev_trx, dev_margin,
-        growth_pct:  growth_pct !== null ? Math.round(growth_pct * 10) / 10 : null,
-        avg_daily:   Math.round(avg_daily * 10) / 10,
-        mpt:         Math.round(mpt * 100) / 100,
-        segment:     seg,
+        growth_pct:      growth_pct !== null ? Math.round(growth_pct * 10) / 10 : null,
+        avg_daily:       Math.round(avg_daily * 10) / 10,
+        mpt:             Math.round(mpt * 100) / 100,
+        consistency_pct: maxDay ? Math.round(days_active / maxDay * 100) : null,
+        segment:         seg,
       });
     }
 
@@ -796,12 +810,7 @@ async function outletAnalyticsHandler(req, res) {
         { key: 'baru_aktif', label: 'Baru Aktif', count: sc.baru_aktif || 0, color: '#10B981' },
         { key: 'reaktivasi', label: 'Reaktivasi', count: sc.reaktivasi || 0, color: '#F97316' },
       ],
-      top20_trx:     byTrx.slice(0, 20),
-      top20_margin:  byMargin.slice(0, 20),
-      top20_growth:  byGrow.slice(0, 20),
-      top20_decline: byDrop.slice(0, 20),
-      churn_list:    churnL.slice(0, 100),
-      new_active:    outlets.filter(o => o.segment === 'baru_aktif').sort((a,b) => b.jun_trx - a.jun_trx).slice(0, 50),
+      outlets,
       daily_trend,
       action: {
         selamatkan: churnL.slice(0, 50),
