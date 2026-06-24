@@ -444,17 +444,31 @@ function KatModal({ row, onClose, b1, b2, b3, mtd_info }) {
 function ExecutiveSummaryTab({ data, loading, onClickRow, b1, b2, b3 }) {
   const [filter, setFilter] = useState('semua');
   const [sort, setSort]     = useState('trx');
+  const [search, setSearch] = useState('');
 
   const displayRows = (() => {
     if (!data?.tabel) return [];
     let rows = [...data.tabel];
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      rows = rows.filter(r => r.kategori.toLowerCase().includes(q));
+    }
     if (filter === 'tumbuh')  rows = rows.filter(r => n(r.dev_mei_jun_trx) > 0);
     if (filter === 'turun')   rows = rows.filter(r => n(r.dev_mei_jun_trx) < 0);
     if (filter === 'anomali') rows = rows.filter(r => r.is_anomali);
+    if (filter === 'pos_all') rows = rows.filter(r => n(r.dev_mei_jun_trx) > 0 && n(r.dev_mei_jun_margin) > 0);
     if (filter === 'top10')   rows = rows.slice(0, 10);
+    if (sort === 'efficiency') {
+      return [...rows].sort((a, b) => {
+        const ea = n(a.jun_trx) > 0 ? n(a.jun_margin) / n(a.jun_trx) : 0;
+        const eb = n(b.jun_trx) > 0 ? n(b.jun_margin) / n(b.jun_trx) : 0;
+        return eb - ea;
+      });
+    }
     const sk = {
       trx:        'jun_trx',
       margin:     'jun_margin',
+      rev:        'jun_rev',
       dev_trx:    'dev_mei_jun_trx',
       dev_margin: 'dev_mei_jun_margin',
       merchant:   'jun_merchant',
@@ -505,19 +519,33 @@ function ExecutiveSummaryTab({ data, loading, onClickRow, b1, b2, b3 }) {
           </div>
 
           <div className="wr-table-section">
-            <div className="wr-table-controls">
-              <div className="wr-table-left">
+            <div className="wr-table-controls" style={{ flexWrap: 'wrap', gap: 8 }}>
+              <div className="wr-table-left" style={{ flexWrap: 'wrap', gap: 6 }}>
+                <input
+                  type="text" className="wri-tbl-search"
+                  placeholder="🔍 Cari kategori..."
+                  value={search} onChange={e => setSearch(e.target.value)}
+                />
                 <select className="wr-select" value={sort} onChange={e => setSort(e.target.value)}>
-                  <option value="trx">TRX ↓</option>
-                  <option value="margin">Margin ↓</option>
-                  <option value="dev_trx">DEV TRX ↓</option>
-                  <option value="dev_margin">DEV Margin ↓</option>
-                  <option value="merchant">Merchant ↓</option>
+                  <option value="trx">Sort: TRX ↓</option>
+                  <option value="margin">Sort: Margin ↓</option>
+                  <option value="dev_trx">Sort: DEV TRX ↓</option>
+                  <option value="dev_margin">Sort: DEV Margin ↓</option>
+                  <option value="efficiency">Sort: Margin/TRX ↓</option>
+                  <option value="rev">Sort: Omzet ↓</option>
+                  <option value="merchant">Sort: Merchant ↓</option>
                 </select>
-                <span className="wr-count">{displayRows.length} kategori</span>
+                <span className="wr-count">{displayRows.length} kategori{search ? ` (filter "${search}")` : ''}</span>
               </div>
               <div className="wr-filter-tabs">
-                {[['semua','Semua'],['tumbuh','TRX Naik'],['turun','TRX Turun'],['anomali','⚠ Anomali'],['top10','Top 10']].map(([k,l]) => (
+                {[
+                  ['semua','Semua'],
+                  ['tumbuh','TRX Naik'],
+                  ['turun','TRX Turun'],
+                  ['pos_all','TRX+Margin Naik'],
+                  ['anomali','⚠ Anomali'],
+                  ['top10','Top 10'],
+                ].map(([k,l]) => (
                   <button key={k} className={`wr-filter-tab${filter===k?' active':''}`} onClick={() => setFilter(k)}>{l}</button>
                 ))}
               </div>
@@ -990,6 +1018,45 @@ function ActionCenterTab({ data }) {
   );
 }
 
+/* ─── Persistent Summary Cards (always above tabs) ─── */
+function TopSummaryCards({ summary, loading }) {
+  if (loading && !summary) return (
+    <div className="wri-top-cards">
+      {[...Array(6)].map((_, i) => (
+        <div key={i} className="wri-tc wr-skeleton"><div className="wr-sk-line wr-sk-short" /><div className="wr-sk-line wr-sk-long" /></div>
+      ))}
+    </div>
+  );
+  if (!summary) return null;
+  const s = summary;
+  const devTrx    = n(s.dev_trx_mei_jun);
+  const devMargin = n(s.dev_margin_mei_jun);
+  const cards = [
+    { label: 'Total TRX', val: fmtNum(s.total_trx), color: ACCENT,
+      dev: <span style={{ color: devTrx >= 0 ? GREEN : RED }}>{fmtDevNum(devTrx)} TRX vs bln lalu</span> },
+    { label: 'Total Margin', val: fmtRp(s.total_margin), color: GREEN,
+      dev: <span style={{ color: devMargin >= 0 ? GREEN : RED }}>{fmtDev(devMargin)} vs bln lalu</span> },
+    { label: 'Total Omzet', val: fmtRp(s.total_rev), color: BLUE },
+    { label: 'Merchant Aktif', val: fmtNum(s.total_merchant), color: 'var(--text-1)',
+      dev: <span style={{ color: 'var(--text-3)' }}>{s.segmen_aktif} kategori aktif</span> },
+    { label: 'TRX Tumbuh', val: fmtNum(s.segmen_tumbuh), color: GREEN,
+      dev: <span style={{ color: 'var(--text-3)' }}>kategori vs bln lalu</span> },
+    { label: 'TRX Turun', val: fmtNum(s.segmen_turun), color: RED,
+      dev: <span style={{ color: 'var(--text-3)' }}>kategori vs bln lalu</span> },
+  ];
+  return (
+    <div className="wri-top-cards">
+      {cards.map((c, i) => (
+        <div key={i} className="wri-tc" style={{ borderTopColor: c.color }}>
+          <div className="wri-tc-label">{c.label}</div>
+          <div className="wri-tc-val" style={{ color: c.color }}>{c.val}</div>
+          {c.dev && <div className="wri-tc-dev">{c.dev}</div>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /* ─── Main Page ─── */
 export default function WarRoomIqRaw() {
   const [tab,         setTab]     = useState(0);
@@ -1000,14 +1067,25 @@ export default function WarRoomIqRaw() {
   const [bulanList,   setBulanList] = useState([]);
   const [modalRow,    setModalRow]  = useState(null);
   const [lastUpdated, setLastUpd]   = useState(null);
+  const [tglDari,     setTglDari]   = useState('');
+  const [tglSampai,   setTglSampai] = useState('');
+  // Refs untuk dipakai di fetchData tanpa jadi dep (hindari re-fetch saat input berubah)
+  const tglDariRef   = useRef('');
+  const tglSampaiRef = useRef('');
+
+  const handleSetTglDari = (v) => { tglDariRef.current = v; setTglDari(v); };
+  const handleSetTglSampai = (v) => { tglSampaiRef.current = v; setTglSampai(v); };
+  const resetDateRange = () => { handleSetTglDari(''); handleSetTglSampai(''); };
 
   const fetchData = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const res = await getDataRawAnalytics({ bulan: bulan || undefined });
+      const params = { bulan: bulan || undefined };
+      const d = tglDariRef.current, s = tglSampaiRef.current;
+      if (d && s && d <= s) { params.tgl_dari = d; params.tgl_sampai = s; }
+      const res = await getDataRawAnalytics(params);
       setData(res);
-      if (res.bulan_list?.length && !bulan) setBulanList(res.bulan_list);
-      else if (res.bulan_list?.length) setBulanList(res.bulan_list);
+      if (res.bulan_list?.length) setBulanList(res.bulan_list);
     } catch (err) {
       setError(err.response?.data?.error || err.message || 'Gagal memuat data');
     } finally { setLoading(false); setLastUpd(new Date()); }
@@ -1015,6 +1093,7 @@ export default function WarRoomIqRaw() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
+  const isDateRange = !!(tglDari && tglSampai && tglDari <= tglSampai);
   const TABS = ['Executive Summary', 'Trendline Harian', 'Trend & Growth', 'Unit Ekonomi', 'Action Center'];
   const activeBulan = data?.b1 || bulan || '';
   const b1 = data?.b1 || '', b2 = data?.b2 || '', b3 = data?.b3 || '';
@@ -1030,13 +1109,27 @@ export default function WarRoomIqRaw() {
               <span className="wr-icon" style={{ color: ACCENT }}>📊</span>
               <h1 className="wr-title">WAR-ROOM Analitik</h1>
               <span className="war-badge" style={{ background: ACCENT }}>IQ RAW</span>
+              {isDateRange && <span className="wri-range-badge">📅 Range Aktif</span>}
             </div>
             <p className="wr-sub">
-              Segmentasi kategori outlet InstaQris dari Data RAW · Bulan: {bulanLabel(activeBulan) || '–'}
-              {lastUpdated && <span style={{ marginLeft: 8, color: 'var(--text-4)' }}>· Terakhir dimuat {lastUpdated.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>}
+              {isDateRange
+                ? <>Filter: <strong>{tglDari}</strong> s/d <strong>{tglSampai}</strong> · Bandingkan dengan periode sama bulan sebelumnya</>
+                : <>Segmentasi kategori outlet InstaQris · Bulan: {bulanLabel(activeBulan) || '–'}</>}
+              {lastUpdated && <span style={{ marginLeft: 8, color: 'var(--text-4)' }}>· {lastUpdated.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>}
             </p>
           </div>
           <div className="wr-header-right">
+            <div className="wri-date-range">
+              <span className="wri-dr-label">Dari</span>
+              <input type="date" className="wr-select wri-date-input" value={tglDari}
+                onChange={e => handleSetTglDari(e.target.value)} />
+              <span className="wri-dr-label">–</span>
+              <input type="date" className="wr-select wri-date-input" value={tglSampai}
+                onChange={e => handleSetTglSampai(e.target.value)} />
+              {(tglDari || tglSampai) && (
+                <button className="wri-dr-reset" onClick={resetDateRange} title="Reset filter tanggal">✕</button>
+              )}
+            </div>
             <select className="wr-select" value={bulan} onChange={e => setBulan(e.target.value)}>
               <option value="">Terkini</option>
               {bulanList.map(b => <option key={b} value={b}>{bulanLabel(b)}</option>)}
@@ -1049,6 +1142,8 @@ export default function WarRoomIqRaw() {
             </button>
           </div>
         </div>
+
+        <TopSummaryCards summary={data?.summary} loading={loading} />
 
         <div className="war-tabs">
           {TABS.map((t, i) => (

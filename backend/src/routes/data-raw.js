@@ -102,6 +102,15 @@ function prevBulanStr(bulan) {
   return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
 }
 
+// Geser tanggal YYYY-MM-DD sebanyak N bulan (cap ke hari terakhir bulan tujuan)
+function shiftMonthDate(dateStr, months) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const target  = new Date(Date.UTC(y, m - 1 + months, 1));
+  const tY = target.getUTCFullYear(), tM = target.getUTCMonth() + 1;
+  const lastDay = new Date(Date.UTC(tY, tM, 0)).getUTCDate();
+  return `${tY}-${String(tM).padStart(2,'0')}-${String(Math.min(d, lastDay)).padStart(2,'0')}`;
+}
+
 async function getOutletCatalog() {
   const res = await pool.query(`
     SELECT DISTINCT ON (row_data->>'ID Outlet')
@@ -117,14 +126,19 @@ async function getOutletCatalog() {
   return new Map(res.rows.map(r => [r.id_outlet, r]));
 }
 
-async function aggTrxByOutlet(bulan, maxDay = null) {
+async function aggTrxByOutlet(bulan, maxDay = null, tglDari = null, tglSampai = null) {
   if (!bulan) return new Map();
   const params = [bulan];
-  const dayFilter = maxDay
-    ? `AND row_data->>'tanggal' IS NOT NULL
-       AND EXTRACT(DAY FROM (row_data->>'tanggal')::date) <= $2`
-    : '';
-  if (maxDay) params.push(maxDay);
+  let dateFilter = '';
+  if (tglDari && tglSampai) {
+    params.push(tglDari, tglSampai);
+    dateFilter = `AND row_data->>'tanggal' IS NOT NULL
+                  AND (row_data->>'tanggal')::date BETWEEN $2::date AND $3::date`;
+  } else if (maxDay) {
+    params.push(maxDay);
+    dateFilter = `AND row_data->>'tanggal' IS NOT NULL
+                  AND EXTRACT(DAY FROM (row_data->>'tanggal')::date) <= $2`;
+  }
   const res = await pool.query(`
     SELECT
       row_data->>'ID Outlet' AS id_outlet,
@@ -135,15 +149,15 @@ async function aggTrxByOutlet(bulan, maxDay = null) {
     WHERE bulan=$1
       AND row_data->>'ID Outlet' IS NOT NULL
       AND row_data->>'ID Outlet' <> ''
-      ${dayFilter}
+      ${dateFilter}
     GROUP BY row_data->>'ID Outlet'
   `, params);
   return new Map(res.rows.map(r => [r.id_outlet, r]));
 }
 
-// GET /api/data-raw/analytics?bulan=2026-06
+// GET /api/data-raw/analytics?bulan=2026-06&tgl_dari=2026-06-01&tgl_sampai=2026-06-15
 async function analyticsRawHandler(req, res) {
-  let { bulan } = req.query;
+  let { bulan, tgl_dari, tgl_sampai } = req.query;
   try {
     const blRes = await pool.query(
       `SELECT DISTINCT bulan FROM iq_raw_trx ORDER BY bulan DESC`
@@ -156,22 +170,33 @@ async function analyticsRawHandler(req, res) {
     const b2 = prevBulanStr(b1);
     const b3 = prevBulanStr(b2);
 
-    // MTD alignment: temukan tanggal terakhir di b1, lalu filter b2 & b3 sampai hari yang sama
-    // sehingga perbandingan head-to-head (misal Jun 1-24 vs Mei 1-24 vs Apr 1-24)
-    const maxTglRes = await pool.query(
-      `SELECT MAX(row_data->>'tanggal') AS max_tgl
-       FROM iq_raw_trx
-       WHERE bulan=$1 AND row_data->>'tanggal' IS NOT NULL`,
-      [b1]
-    );
-    const maxTgl = maxTglRes.rows[0]?.max_tgl;
-    const maxDay = maxTgl ? parseInt(String(maxTgl).slice(8, 10), 10) : null;
+    const dateRangeMode = !!(tgl_dari && tgl_sampai && tgl_dari <= tgl_sampai);
+    let maxDay = null, maxTgl = null;
+    let b2TglDari = null, b2TglSampai = null, b3TglDari = null, b3TglSampai = null;
+
+    if (dateRangeMode) {
+      // Geser range ke bulan sebelumnya untuk perbandingan head-to-head
+      b2TglDari   = shiftMonthDate(tgl_dari,  -1);
+      b2TglSampai = shiftMonthDate(tgl_sampai, -1);
+      b3TglDari   = shiftMonthDate(tgl_dari,  -2);
+      b3TglSampai = shiftMonthDate(tgl_sampai, -2);
+    } else {
+      // MTD alignment: temukan tanggal terakhir di b1, lalu filter b2 & b3 sampai hari yang sama
+      const maxTglRes = await pool.query(
+        `SELECT MAX(row_data->>'tanggal') AS max_tgl
+         FROM iq_raw_trx
+         WHERE bulan=$1 AND row_data->>'tanggal' IS NOT NULL`,
+        [b1]
+      );
+      maxTgl = maxTglRes.rows[0]?.max_tgl;
+      maxDay = maxTgl ? parseInt(String(maxTgl).slice(8, 10), 10) : null;
+    }
 
     const [catalog, trxCur, trxPrev, trxPrev2] = await Promise.all([
       getOutletCatalog(),
-      aggTrxByOutlet(b1),             // b1 current month — ambil semua data ada (sudah MTD by nature)
-      aggTrxByOutlet(b2, maxDay),     // b2 bulan lalu — filter sampai hari yang sama
-      aggTrxByOutlet(b3, maxDay),     // b3 2 bulan lalu — filter sampai hari yang sama
+      aggTrxByOutlet(b1, null, dateRangeMode ? tgl_dari : null, dateRangeMode ? tgl_sampai : null),
+      aggTrxByOutlet(b2, dateRangeMode ? null : maxDay, b2TglDari, b2TglSampai),
+      aggTrxByOutlet(b3, dateRangeMode ? null : maxDay, b3TglDari, b3TglSampai),
     ]);
 
     const katMap = new Map();
@@ -228,13 +253,23 @@ async function analyticsRawHandler(req, res) {
     const totRev     = tabel.reduce((s, r) => s + r.jun_rev, 0);
     res.json({
       bulan, bulan_list: bulanList, b1, b2, b3,
-      mtd_info: {
-        max_tgl:  maxTgl  || null,
-        max_day:  maxDay  || null,
-        b1_label: maxDay ? `${b1} (1-${maxDay})` : b1,
-        b2_label: maxDay ? `${b2} (1-${maxDay})` : b2,
-        b3_label: maxDay ? `${b3} (1-${maxDay})` : b3,
-        is_mtd:   maxDay !== null && maxDay < 28,
+      mtd_info: dateRangeMode ? {
+        max_tgl:       tgl_sampai,
+        max_day:       parseInt(tgl_sampai.slice(8, 10), 10),
+        b1_label:      `${tgl_dari.slice(8)}/${tgl_dari.slice(5,7)} – ${tgl_sampai.slice(8)}/${tgl_sampai.slice(5,7)}`,
+        b2_label:      `${b2TglDari.slice(8)}/${b2TglDari.slice(5,7)} – ${b2TglSampai.slice(8)}/${b2TglSampai.slice(5,7)}`,
+        b3_label:      `${b3TglDari.slice(8)}/${b3TglDari.slice(5,7)} – ${b3TglSampai.slice(8)}/${b3TglSampai.slice(5,7)}`,
+        is_mtd:        false,
+        is_date_range: true,
+        tgl_dari, tgl_sampai,
+      } : {
+        max_tgl:       maxTgl  || null,
+        max_day:       maxDay  || null,
+        b1_label:      maxDay ? `${b1} (1-${maxDay})` : b1,
+        b2_label:      maxDay ? `${b2} (1-${maxDay})` : b2,
+        b3_label:      maxDay ? `${b3} (1-${maxDay})` : b3,
+        is_mtd:        maxDay !== null && maxDay < 28,
+        is_date_range: false,
       },
       summary: {
         total_merchant:    tabel.reduce((s, r) => s + r.jun_merchant, 0),

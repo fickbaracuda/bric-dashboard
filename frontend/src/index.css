@@ -2787,6 +2787,32 @@ body {
   .wr-summary-grid { grid-template-columns: repeat(2, 1fr); }
 }
 
+/* IQ Raw — persistent top summary cards */
+.wri-top-cards { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; margin-bottom: 14px; }
+@media (max-width: 1200px) { .wri-top-cards { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 700px)  { .wri-top-cards { grid-template-columns: repeat(2, 1fr); } }
+.wri-tc       { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px;
+                border-top: 3px solid var(--border); padding: 10px 14px; }
+.wri-tc-label { font-size: 10px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+.wri-tc-val   { font-size: 18px; font-weight: 700; line-height: 1.2; }
+.wri-tc-dev   { font-size: 11px; margin-top: 3px; font-weight: 500; }
+
+/* IQ Raw — date range filter */
+.wri-date-range { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.wri-dr-label   { font-size: 11px; color: var(--text-3); white-space: nowrap; }
+.wri-date-input { padding: 5px 8px !important; font-size: 12px !important; min-width: 120px; max-width: 140px; }
+.wri-dr-reset   { background: #FEE2E2; border: none; color: #DC2626; border-radius: 6px; padding: 4px 8px;
+                  cursor: pointer; font-size: 13px; font-weight: 700; line-height: 1; }
+.wri-dr-reset:hover { background: #FECACA; }
+.wri-range-badge { font-size: 11px; padding: 2px 8px; border-radius: 99px; background: #EFF6FF; color: #1D4ED8;
+                   font-weight: 600; border: 1px solid #BFDBFE; }
+
+/* IQ Raw — table search */
+.wri-tbl-search { padding: 5px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px;
+                  background: var(--bg-page); color: var(--text-1); font-family: inherit; outline: none;
+                  min-width: 160px; max-width: 220px; }
+.wri-tbl-search:focus { border-color: #0EA5E966; }
+
 /* ─── WAR-ROOM SPEEDCASH ─────────────────────────────────── */
 .war-badge-sc { font-size: 11px; padding: 3px 10px; border-radius: 99px; background: #FFF0E0; color: #92400E; font-weight: 500; }
 
