@@ -198,6 +198,15 @@ export const getSegmenTanggalList = async () => {
   return res.data;
 };
 
+/* WAR-ROOM — Data RAW Analitik */
+export const getDataRawAnalytics = (params = {}) =>
+  axios.get(`${API_URL}/api/data-raw/analytics`, { params, headers: authHeaders() }).then(r => r.data);
+export const getDataRawTrendline = async (days = 30, bulan) => {
+  const p = { days }; if (bulan) p.bulan = bulan;
+  const res = await axios.get(`${API_URL}/api/data-raw/trendline`, { params: p, headers: authHeaders() });
+  return res.data;
+};
+
 /* WAR-ROOM — Speedcash */
 export const getSpeedcashData = async (params = {}) => {
   const res = await axios.get(`${API_URL}/api/warroom/speedcash`, { params, headers: authHeaders() });
