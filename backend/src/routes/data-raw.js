@@ -179,8 +179,8 @@ async function analyticsRawHandler(req, res) {
       if (!katMap.has(kat)) katMap.set(kat, {
         kategori: kat, mcc: kat,
         j_set: new Set(), j_trx: 0, j_rev: 0, j_margin: 0,
-        m_set: new Set(), m_trx: 0, m_rev: 0,
-        a_set: new Set(), a_trx: 0, a_rev: 0,
+        m_set: new Set(), m_trx: 0, m_rev: 0, m_margin: 0,
+        a_set: new Set(), a_trx: 0, a_rev: 0, a_margin: 0,
       });
       return katMap.get(kat);
     };
@@ -191,34 +191,41 @@ async function analyticsRawHandler(req, res) {
     }
     for (const [id, t] of trxPrev) {
       const k = ensure(catalog.get(id)?.kategori || 'Lainnya');
-      k.m_set.add(id); k.m_trx += +t.total_trx; k.m_rev += +t.total_omzet;
+      k.m_set.add(id); k.m_trx += +t.total_trx; k.m_rev += +t.total_omzet; k.m_margin += +t.total_margin;
     }
     for (const [id, t] of trxPrev2) {
       const k = ensure(catalog.get(id)?.kategori || 'Lainnya');
-      k.a_set.add(id); k.a_trx += +t.total_trx; k.a_rev += +t.total_omzet;
+      k.a_set.add(id); k.a_trx += +t.total_trx; k.a_rev += +t.total_omzet; k.a_margin += +t.total_margin;
     }
 
     const tabel = Array.from(katMap.values()).map(k => {
       const jun_merchant = k.j_set.size, mei_merchant = k.m_set.size, apr_merchant = k.a_set.size;
-      const dev_mei_jun_rev      = k.j_rev - k.m_rev;
+      const dev_mei_jun_trx      = k.j_trx    - k.m_trx;
+      const dev_mei_jun_margin   = k.j_margin  - k.m_margin;
+      const dev_mei_jun_rev      = k.j_rev     - k.m_rev;
       const dev_mei_jun_merchant = jun_merchant - mei_merchant;
-      const dev_mei_jun_trx      = k.j_trx - k.m_trx;
-      const dev_apr_jun_rev      = k.j_rev - k.a_rev;
+      const dev_apr_jun_trx      = k.j_trx    - k.a_trx;
+      const dev_apr_jun_margin   = k.j_margin  - k.a_margin;
+      const dev_apr_jun_rev      = k.j_rev     - k.a_rev;
       const dev_apr_jun_merchant = jun_merchant - apr_merchant;
-      const dev_apr_jun_trx      = k.j_trx - k.a_trx;
+      // Anomali: TRX naik tapi margin turun — indikasi transaksi kecil/mix buruk
+      const is_anomali = dev_mei_jun_trx > 0 && dev_mei_jun_margin < 0;
       return {
         kategori: k.kategori, mcc: k.kategori,
         jun_merchant, jun_trx: k.j_trx, jun_rev: k.j_rev, jun_margin: k.j_margin,
-        mei_merchant, mei_trx: k.m_trx, mei_rev: k.m_rev,
-        apr_merchant, apr_trx: k.a_trx, apr_rev: k.a_rev,
-        dev_mei_jun_rev, dev_mei_jun_merchant, dev_mei_jun_trx,
-        dev_apr_jun_rev, dev_apr_jun_merchant, dev_apr_jun_trx,
-        is_anomali: dev_mei_jun_merchant > 0 && dev_mei_jun_rev < 0,
+        mei_merchant, mei_trx: k.m_trx, mei_rev: k.m_rev, mei_margin: k.m_margin,
+        apr_merchant, apr_trx: k.a_trx, apr_rev: k.a_rev, apr_margin: k.a_margin,
+        dev_mei_jun_trx, dev_mei_jun_margin, dev_mei_jun_rev, dev_mei_jun_merchant,
+        dev_apr_jun_trx, dev_apr_jun_margin, dev_apr_jun_rev, dev_apr_jun_merchant,
+        is_anomali,
       };
-    }).sort((a, b) => b.jun_rev - a.jun_rev);
+    }).sort((a, b) => b.jun_trx - a.jun_trx);  // default sort: TRX tertinggi
 
-    const totRev  = tabel.reduce((s, r) => s + r.jun_rev, 0);
-    const totRevM = tabel.reduce((s, r) => s + r.mei_rev, 0);
+    const totMargin  = tabel.reduce((s, r) => s + r.jun_margin, 0);
+    const totMarginM = tabel.reduce((s, r) => s + r.mei_margin, 0);
+    const totTrx     = tabel.reduce((s, r) => s + r.jun_trx, 0);
+    const totTrxM    = tabel.reduce((s, r) => s + r.mei_trx, 0);
+    const totRev     = tabel.reduce((s, r) => s + r.jun_rev, 0);
     res.json({
       bulan, bulan_list: bulanList, b1, b2, b3,
       mtd_info: {
@@ -230,18 +237,21 @@ async function analyticsRawHandler(req, res) {
         is_mtd:   maxDay !== null && maxDay < 28,
       },
       summary: {
-        total_merchant:  tabel.reduce((s, r) => s + r.jun_merchant, 0),
-        total_trx:       tabel.reduce((s, r) => s + r.jun_trx, 0),
-        total_rev:       totRev,
-        segmen_aktif:    tabel.filter(r => r.jun_rev > 0).length,
-        segmen_tumbuh:   tabel.filter(r => r.dev_mei_jun_rev > 0).length,
-        segmen_turun:    tabel.filter(r => r.dev_mei_jun_rev < 0).length,
-        dev_rev_mei_jun: totRev - totRevM,
+        total_merchant:    tabel.reduce((s, r) => s + r.jun_merchant, 0),
+        total_trx:         totTrx,
+        total_margin:      totMargin,
+        total_rev:         totRev,
+        segmen_aktif:      tabel.filter(r => r.jun_trx > 0).length,
+        segmen_tumbuh:     tabel.filter(r => r.dev_mei_jun_trx > 0).length,
+        segmen_turun:      tabel.filter(r => r.dev_mei_jun_trx < 0).length,
+        dev_trx_mei_jun:   totTrx    - totTrxM,
+        dev_margin_mei_jun:totMargin - totMarginM,
       },
       tabel,
-      top_rev:        tabel.filter(r => r.jun_rev > 0).slice(0, 10),
-      top_growth:     [...tabel].filter(r => r.dev_mei_jun_rev > 0).sort((a,b) => b.dev_mei_jun_rev - a.dev_mei_jun_rev).slice(0, 10),
-      segmen_masalah: [...tabel].filter(r => r.dev_mei_jun_rev < 0).sort((a,b) => a.dev_mei_jun_rev - b.dev_mei_jun_rev).slice(0, 10),
+      top_trx:        [...tabel].filter(r => r.jun_trx > 0).sort((a,b) => b.jun_trx - a.jun_trx).slice(0, 10),
+      top_margin:     [...tabel].filter(r => r.jun_margin > 0).sort((a,b) => b.jun_margin - a.jun_margin).slice(0, 10),
+      top_growth:     [...tabel].filter(r => r.dev_mei_jun_trx > 0).sort((a,b) => b.dev_mei_jun_trx - a.dev_mei_jun_trx).slice(0, 10),
+      segmen_masalah: [...tabel].filter(r => r.dev_mei_jun_trx < 0).sort((a,b) => a.dev_mei_jun_trx - b.dev_mei_jun_trx).slice(0, 10),
       anomali:        tabel.filter(r => r.is_anomali),
     });
   } catch (e) {
@@ -267,7 +277,8 @@ async function trendlineRawHandler(req, res) {
         row_data->>'ID Outlet' AS id_outlet,
         row_data->>'Tanggal'   AS tanggal,
         COALESCE(SUM((row_data->>'Jumlah Omzet')::numeric), 0)      AS omzet,
-        COALESCE(SUM((row_data->>'Jumlah Transaksi')::numeric), 0)  AS trx
+        COALESCE(SUM((row_data->>'Jumlah Transaksi')::numeric), 0)  AS trx,
+        COALESCE(SUM((row_data->>'Margin')::numeric), 0)            AS margin
       FROM iq_raw_trx
       WHERE bulan = ANY($1::text[])
         AND row_data->>'ID Outlet' IS NOT NULL AND row_data->>'ID Outlet' <> ''
@@ -285,10 +296,11 @@ async function trendlineRawHandler(req, res) {
       dateSet.add(d);
       if (!katDayMap.has(kat)) katDayMap.set(kat, new Map());
       const dm = katDayMap.get(kat);
-      if (!dm.has(d)) dm.set(d, { jun_rev: 0, jun_trx: 0, jun_merchant: 0 });
+      if (!dm.has(d)) dm.set(d, { jun_rev: 0, jun_trx: 0, jun_margin: 0, jun_merchant: 0 });
       const e = dm.get(d);
       e.jun_rev      += Number(row.omzet);
       e.jun_trx      += Number(row.trx);
+      e.jun_margin   += Number(row.margin);
       e.jun_merchant += 1;
     }
 
@@ -297,13 +309,14 @@ async function trendlineRawHandler(req, res) {
     const segments   = [];
 
     for (const [kat, dm] of katDayMap) {
-      const rows     = dates.map(d => ({ tanggal: d, ...(dm.get(d) || { jun_rev:0, jun_trx:0, jun_merchant:0 }) }));
-      const totalRev = rows.reduce((s, r) => s + r.jun_rev, 0);
+      const rows       = dates.map(d => ({ tanggal: d, ...(dm.get(d) || { jun_rev:0, jun_trx:0, jun_margin:0, jun_merchant:0 }) }));
+      const totalTrx   = rows.reduce((s, r) => s + r.jun_trx, 0);
+      const totalMargin= rows.reduce((s, r) => s + r.jun_margin, 0);
       byKategori[kat] = rows;
-      segments.push({ kategori: kat, mcc: kat, total_rev: totalRev });
+      segments.push({ kategori: kat, mcc: kat, total_trx: totalTrx, total_margin: totalMargin });
     }
 
-    segments.sort((a, b) => b.total_rev - a.total_rev);
+    segments.sort((a, b) => b.total_trx - a.total_trx);  // default sort: TRX
     res.json({ dates, segments, byKategori });
   } catch (e) {
     console.error('[data-raw trendline]', e.message);

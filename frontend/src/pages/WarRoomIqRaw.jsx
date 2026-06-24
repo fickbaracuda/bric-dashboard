@@ -30,6 +30,10 @@ function fmtDev(v) {
   if (abs >= 1e3) return sign + 'Rp ' + (abs / 1e3).toFixed(0) + 'k';
   return (num >= 0 ? '+' : '') + 'Rp ' + Math.round(num).toLocaleString('id-ID');
 }
+function fmtDevNum(v) {
+  const num = n(v);
+  return (num >= 0 ? '+' : '') + num.toLocaleString('id-ID');
+}
 const fmtNum   = (v) => n(v).toLocaleString('id-ID');
 const calcArpt = (rev, trx) => n(trx) > 0 ? Math.round(n(rev) / n(trx)) : 0;
 const calcRpm  = (rev, m)   => n(m)   > 0 ? Math.round(n(rev) / n(m))   : 0;
@@ -117,24 +121,24 @@ function ScatterKat({ id, rows }) {
   const ref = useRef(null);
   useEffect(() => {
     if (!ref.current || !rows?.length) return;
-    const maxRev = Math.max(...rows.map(r => n(r.jun_rev)), 1);
+    const maxTrx = Math.max(...rows.map(r => n(r.jun_trx)), 1);
     const chart = new Chart(ref.current, {
       type: 'scatter',
       data: {
         datasets: [{
           data: rows.map(r => ({
-            x: n(r.jun_merchant) - n(r.mei_merchant),
-            y: n(r.jun_rev) - n(r.mei_rev),
+            x: n(r.dev_mei_jun_trx),
+            y: n(r.dev_mei_jun_margin) / 1e6,
           })),
           backgroundColor: rows.map(r => {
-            const dM = n(r.jun_merchant) - n(r.mei_merchant);
-            const dR = n(r.jun_rev) - n(r.mei_rev);
-            if (dM > 0 && dR < 0) return '#F59E0BAA';
-            if (dR > 0) return GREEN + 'AA';
-            if (dR < 0) return RED   + 'AA';
+            const dT = n(r.dev_mei_jun_trx);
+            const dM = n(r.dev_mei_jun_margin);
+            if (r.is_anomali)   return '#F59E0BAA';   // TRX naik, margin turun
+            if (dT > 0 && dM > 0) return GREEN + 'AA';
+            if (dT < 0 || dM < 0) return RED   + 'AA';
             return '#9CA3AFAA';
           }),
-          pointRadius: rows.map(r => Math.max(6, Math.min(20, (n(r.jun_rev) / maxRev) * 20))),
+          pointRadius: rows.map(r => Math.max(6, Math.min(20, (n(r.jun_trx) / maxTrx) * 20))),
           pointHoverRadius: 12,
         }],
       },
@@ -144,14 +148,17 @@ function ScatterKat({ id, rows }) {
           legend: { display: false },
           tooltip: { callbacks: { label: ctx => {
             const r = rows[ctx.dataIndex];
-            const dM = n(r.jun_merchant) - n(r.mei_merchant);
-            const dR = n(r.jun_rev) - n(r.mei_rev);
-            return [`${r.kategori}`, `Merchant: ${fmtDev(dM)}  Rev: ${fmtDev(dR)}`];
+            return [
+              `${r.kategori}`,
+              `DEV TRX: ${fmtDevNum(r.dev_mei_jun_trx)}`,
+              `DEV Margin: ${fmtDev(r.dev_mei_jun_margin)}`,
+              `TRX: ${fmtNum(r.jun_trx)} · Margin: ${fmtRp(r.jun_margin)}`,
+            ];
           }}},
         },
         scales: {
-          x: { title: { display: true, text: 'DEV Merchant (Prev→Cur)' }, grid: { color: '#f0f0f0' }, ticks: { callback: v => v > 0 ? '+' + v : v } },
-          y: { title: { display: true, text: 'DEV Revenue (Prev→Cur)' },  grid: { color: '#f0f0f0' }, ticks: { callback: v => fmtRp(v) } },
+          x: { title: { display: true, text: 'DEV TRX (Bulan Lalu→Sekarang)' }, grid: { color: '#f0f0f0' }, ticks: { callback: v => v > 0 ? '+' + fmtNum(v) : fmtNum(v) } },
+          y: { title: { display: true, text: 'DEV Margin (jt)' },               grid: { color: '#f0f0f0' }, ticks: { callback: v => 'Rp ' + v + 'jt' } },
         },
       },
     });
@@ -189,7 +196,8 @@ function MultiLineKat({ id, dates, byKategori, visibleKat, metric, segments }) {
       const r = rows.find(x => x.tanggal === d);
       if (!r) return null;
       if (metric === 'merchant') return n(r.jun_merchant);
-      if (metric === 'trx') return n(r.jun_trx);
+      if (metric === 'trx')     return n(r.jun_trx);
+      if (metric === 'margin')  return n(r.jun_margin) / 1e6;
       return n(r.jun_rev) / 1e6;
     };
     const datasets = segments
@@ -216,7 +224,7 @@ function MultiLineKat({ id, dates, byKategori, visibleKat, metric, segments }) {
             grid: { color: '#f0f0f0' },
             ticks: {
               font: { size: 11 },
-              callback: v => metric === 'rev' ? 'Rp ' + v + 'jt' : fmtNum(v),
+              callback: v => (metric === 'rev' || metric === 'margin') ? 'Rp ' + v + 'jt' : fmtNum(v),
             },
           },
         },
@@ -229,9 +237,11 @@ function MultiLineKat({ id, dates, byKategori, visibleKat, metric, segments }) {
 
 /* ─ Shared UI pieces ─ */
 function StatusPill({ row }) {
-  const dev = n(row.dev_mei_jun_rev);
-  if (dev > 0) return <span className="pill-naik">Naik</span>;
-  if (dev < 0) return <span className="pill-turun">Turun</span>;
+  const devTrx    = n(row.dev_mei_jun_trx);
+  const devMargin = n(row.dev_mei_jun_margin);
+  if (row.is_anomali) return <span className="pill-anomali" style={{ fontSize: 11 }}>⚠ Anomali</span>;
+  if (devTrx > 0 && devMargin > 0) return <span className="pill-naik">Naik</span>;
+  if (devTrx < 0 || devMargin < 0) return <span className="pill-turun">Turun</span>;
   return <span className="pill-stabil">Stabil</span>;
 }
 
@@ -249,15 +259,19 @@ function SkeletonCards() {
 
 function SummaryCards({ s, bulanLabel: bl }) {
   if (!s) return <SkeletonCards />;
-  const devRev = n(s.dev_rev_mei_jun);
+  const devTrx    = n(s.dev_trx_mei_jun);
+  const devMargin = n(s.dev_margin_mei_jun);
   const cards = [
-    { label: `Total Merchant ${bl}`,  value: fmtNum(s.total_merchant), color: ACCENT },
-    { label: 'Total Transaksi',        value: fmtNum(s.total_trx),      color: ACCENT },
-    { label: 'Total Omzet', value: fmtRp(s.total_rev), color: GREEN,
-      sub: <span style={{ color: devRev >= 0 ? GREEN : RED, fontSize: 11 }}>{fmtDev(devRev)} vs bulan lalu</span> },
-    { label: 'Kategori Aktif',  value: fmtNum(s.segmen_aktif),  color: BLUE },
-    { label: 'Kategori Tumbuh', value: fmtNum(s.segmen_tumbuh), color: GREEN, sub: <span style={{ color: GREEN, fontSize: 11 }}>↑ kategori positif</span> },
-    { label: 'Kategori Turun',  value: fmtNum(s.segmen_turun),  color: RED,   sub: <span style={{ color: RED,   fontSize: 11 }}>↓ butuh perhatian</span> },
+    { label: 'Total Transaksi', value: fmtNum(s.total_trx), color: ACCENT,
+      sub: <span style={{ color: devTrx >= 0 ? GREEN : RED, fontSize: 11, fontWeight: 600 }}>{fmtDevNum(devTrx)} TRX vs bulan lalu</span> },
+    { label: 'Total Margin', value: fmtRp(s.total_margin), color: GREEN,
+      sub: <span style={{ color: devMargin >= 0 ? GREEN : RED, fontSize: 11, fontWeight: 600 }}>{fmtDev(devMargin)} vs bulan lalu</span> },
+    { label: `Total Omzet ${bl}`, value: fmtRp(s.total_rev), color: BLUE },
+    { label: `Merchant ${bl}`,    value: fmtNum(s.total_merchant), color: BLUE },
+    { label: 'Kategori Tumbuh', value: fmtNum(s.segmen_tumbuh), color: GREEN,
+      sub: <span style={{ color: GREEN, fontSize: 11 }}>↑ TRX naik vs bulan lalu</span> },
+    { label: 'Kategori Turun',  value: fmtNum(s.segmen_turun),  color: RED,
+      sub: <span style={{ color: RED,   fontSize: 11 }}>↓ TRX turun vs bulan lalu</span> },
   ];
   return (
     <div className="wr-summary-grid">
@@ -272,10 +286,17 @@ function SummaryCards({ s, bulanLabel: bl }) {
   );
 }
 
-function RankRow({ item, idx, maxVal, color, showDev }) {
-  const val    = n(item.jun_rev);
-  const dev    = n(item.dev_mei_jun_rev);
-  const barPct = maxVal > 0 ? (Math.abs(showDev ? dev : val) / maxVal) * 100 : 0;
+function RankRow({ item, idx, maxVal, color, metric = 'trx' }) {
+  // metric: 'trx' | 'margin' | 'dev_trx' | 'dev_margin'
+  const val = metric === 'trx'        ? n(item.jun_trx)
+            : metric === 'margin'     ? n(item.jun_margin)
+            : metric === 'dev_trx'    ? n(item.dev_mei_jun_trx)
+            : metric === 'dev_margin' ? n(item.dev_mei_jun_margin)
+            : n(item.jun_trx);
+  const barPct = maxVal > 0 ? (Math.abs(val) / maxVal) * 100 : 0;
+  const isDev  = metric.startsWith('dev_');
+  const fmt    = metric === 'trx' || metric === 'dev_trx' ? fmtNum : fmtRp;
+  const devFmt = metric === 'dev_trx' ? fmtDevNum : fmtDev;
   return (
     <div className="rank-row">
       <span className="rnum">{idx + 1}</span>
@@ -284,23 +305,25 @@ function RankRow({ item, idx, maxVal, color, showDev }) {
         {item.is_anomali && <span className="pill-anomali" style={{ marginLeft: 4, fontSize: 9 }}>⚠</span>}
       </span>
       <div className="rbar-w"><div className="rbar" style={{ width: barPct + '%', background: color }} /></div>
-      <span className="rval" style={{ color }}>{showDev ? fmtDev(dev) : fmtRp(val)}</span>
+      <span className="rval" style={{ color }}>{isDev ? devFmt(val) : fmt(val)}</span>
     </div>
   );
 }
 
-function Top2BulanChart({ data, tid, b1, b2, b3 }) {
-  const top2 = data?.top_rev?.slice(0, 2) || [];
+function Top2BulanChart({ data, tid, b1, b2, b3, mtd }) {
+  const top2 = data?.top_trx?.slice(0, 3) || [];
   if (!top2.length) return null;
-  const labels   = [bulanLabel(b3), bulanLabel(b2), bulanLabel(b1)];
+  const sfx    = mtd?.is_mtd ? ` MTD-${mtd.max_day}` : '';
+  const labels = [bulanLabel(b3) + sfx, bulanLabel(b2) + sfx, bulanLabel(b1)];
+  const COLS   = [ACCENT, BLUE, GREEN];
   const datasets = top2.map((r, i) => ({
     label: r.kategori.length > 22 ? r.kategori.slice(0, 22) + '…' : r.kategori,
-    data: [n(r.apr_rev), n(r.mei_rev), n(r.jun_rev)],
-    backgroundColor: (i === 0 ? ACCENT : BLUE) + 'CC',
+    data: [n(r.apr_trx), n(r.mei_trx), n(r.jun_trx)],
+    backgroundColor: COLS[i % COLS.length] + 'CC',
     borderRadius: 4,
   }));
   return (
-    <ChartCard height="180px">
+    <ChartCard height="200px">
       <GroupedBarKat id={`iq-top2-3m-${tid}`} labels={labels} datasets={datasets} />
     </ChartCard>
   );
@@ -308,28 +331,39 @@ function Top2BulanChart({ data, tid, b1, b2, b3 }) {
 
 function Recommendations({ data }) {
   if (!data) return null;
-  const { top_rev = [], segmen_masalah = [], anomali = [], summary } = data;
-  const totalRev = n(summary?.total_rev);
-  const top2Rev  = n(top_rev[0]?.jun_rev) + n(top_rev[1]?.jun_rev);
-  const pct2     = totalRev > 0 ? ((top2Rev / totalRev) * 100).toFixed(1) : '—';
+  const { top_trx = [], top_margin = [], segmen_masalah = [], anomali = [], summary } = data;
+  const totTrx    = n(summary?.total_trx);
+  const top2Trx   = n(top_trx[0]?.jun_trx) + n(top_trx[1]?.jun_trx);
+  const pctTrx    = totTrx > 0 ? ((top2Trx / totTrx) * 100).toFixed(1) : '—';
   return (
     <div className="wr-reco-list">
-      {top_rev[0] && (
+      {top_trx[0] && (
         <div className="wr-reco-card wr-reco-hijau">
-          <div className="wr-reco-title">💡 Perkuat — {top_rev[0].kategori}</div>
-          <div className="wr-reco-body"><strong>{top_rev[0]?.kategori}</strong>{top_rev[1] ? <> dan <strong>{top_rev[1]?.kategori}</strong></> : ''} mendominasi <strong>{pct2}%</strong> total omzet. Akselerasi akuisisi merchant baru di segmen ini.</div>
-        </div>
-      )}
-      {segmen_masalah[0] && (
-        <div className="wr-reco-card wr-reco-merah">
-          <div className="wr-reco-title">🚨 Investigasi — {segmen_masalah[0].kategori}</div>
-          <div className="wr-reco-body">{segmen_masalah[0].is_anomali ? 'Merchant bertambah namun omzet menurun — indikasi potensi churn atau penurunan nilai transaksi per merchant.' : `Penurunan merchant aktif terdeteksi — risiko kehilangan basis pengguna. Gap bulan lalu→sekarang: ${fmtDev(segmen_masalah[0].dev_mei_jun_rev)}.`}</div>
+          <div className="wr-reco-title">💡 Fokus TRX — {top_trx[0].kategori}</div>
+          <div className="wr-reco-body">
+            <strong>{top_trx[0]?.kategori}</strong>{top_trx[1] ? <> dan <strong>{top_trx[1]?.kategori}</strong></> : ''}
+            {' '}mendominasi <strong>{pctTrx}%</strong> total transaksi.
+            Akselerasi akuisisi merchant baru di segmen ini untuk volume lebih tinggi.
+          </div>
         </div>
       )}
       {anomali.length > 0 && (
         <div className="wr-reco-card wr-reco-kuning">
-          <div className="wr-reco-title">⚠ Anomali — {anomali.length} kategori perlu investigasi</div>
-          <div className="wr-reco-body">{anomali.map(a => a.kategori).join(', ')}</div>
+          <div className="wr-reco-title">⚠ TRX Naik, Margin Turun — {anomali.length} kategori</div>
+          <div className="wr-reco-body">
+            {anomali.map(a => a.kategori).join(', ')} — TRX meningkat namun margin justru menurun.
+            Indikasi transaksi bernilai rendah mendominasi atau ada pergeseran mix produk.
+          </div>
+        </div>
+      )}
+      {segmen_masalah[0] && (
+        <div className="wr-reco-card wr-reco-merah">
+          <div className="wr-reco-title">🚨 TRX Turun — {segmen_masalah[0].kategori}</div>
+          <div className="wr-reco-body">
+            Penurunan transaksi signifikan terdeteksi.
+            Gap vs bulan lalu: <strong>{fmtDevNum(segmen_masalah[0].dev_mei_jun_trx)} TRX</strong>,
+            margin: {fmtDev(segmen_masalah[0].dev_mei_jun_margin)}.
+          </div>
         </div>
       )}
     </div>
@@ -354,24 +388,44 @@ function KatModal({ row, onClose, b1, b2, b3, mtd_info }) {
           </div>
           <button className="wr-modal-close" onClick={onClose}>✕</button>
         </div>
-        {row.is_anomali && <div className="wr-anomali-banner">⚠ Merchant bertambah namun omzet turun — perlu investigasi</div>}
+        {row.is_anomali && <div className="wr-anomali-banner">⚠ TRX naik namun margin turun — indikasi pergeseran mix transaksi bernilai rendah</div>}
         <table className="wr-modal-table">
           <thead><tr><th></th><th>{lb3m}</th><th>{lb2m}</th><th>{lb1m}</th></tr></thead>
           <tbody>
-            <tr><td>Merchant</td><td>{fmtNum(row.apr_merchant)}</td><td>{fmtNum(row.mei_merchant)}</td><td><strong>{fmtNum(row.jun_merchant)}</strong></td></tr>
-            <tr><td>TRX</td><td>{fmtNum(row.apr_trx)}</td><td>{fmtNum(row.mei_trx)}</td><td><strong>{fmtNum(row.jun_trx)}</strong></td></tr>
-            <tr><td>Omzet</td><td>{fmtRp(row.apr_rev)}</td><td>{fmtRp(row.mei_rev)}</td><td><strong style={{ color: GREEN }}>{fmtRp(row.jun_rev)}</strong></td></tr>
+            <tr>
+              <td>TRX</td>
+              <td>{fmtNum(row.apr_trx)}</td><td>{fmtNum(row.mei_trx)}</td>
+              <td><strong style={{ color: ACCENT }}>{fmtNum(row.jun_trx)}</strong></td>
+            </tr>
+            <tr>
+              <td>Margin</td>
+              <td>{fmtRp(row.apr_margin)}</td><td>{fmtRp(row.mei_margin)}</td>
+              <td><strong style={{ color: GREEN }}>{fmtRp(row.jun_margin)}</strong></td>
+            </tr>
+            <tr style={{ opacity: 0.7, fontSize: '0.92em' }}>
+              <td>Omzet</td>
+              <td>{fmtRp(row.apr_rev)}</td><td>{fmtRp(row.mei_rev)}</td>
+              <td>{fmtRp(row.jun_rev)}</td>
+            </tr>
+            <tr style={{ opacity: 0.7, fontSize: '0.92em' }}>
+              <td>Merchant</td>
+              <td>{fmtNum(row.apr_merchant)}</td><td>{fmtNum(row.mei_merchant)}</td>
+              <td>{fmtNum(row.jun_merchant)}</td>
+            </tr>
           </tbody>
         </table>
         <div className="wr-dev-boxes">
           {[
-            { label: `DEV ${lb3m}→${lb1m}`, rev: row.dev_apr_jun_rev, m: row.dev_apr_jun_merchant, t: row.dev_apr_jun_trx },
-            { label: `DEV ${lb2m}→${lb1m}`, rev: row.dev_mei_jun_rev, m: row.dev_mei_jun_merchant, t: row.dev_mei_jun_trx },
+            { label: `DEV ${lb3m}→${lb1m}`, trx: row.dev_apr_jun_trx, margin: row.dev_apr_jun_margin, m: row.dev_apr_jun_merchant },
+            { label: `DEV ${lb2m}→${lb1m}`, trx: row.dev_mei_jun_trx, margin: row.dev_mei_jun_margin, m: row.dev_mei_jun_merchant },
           ].map(d => (
-            <div key={d.label} className={`wr-dev-box ${n(d.rev) >= 0 ? 'wr-dev-pos' : 'wr-dev-neg'}`}>
+            <div key={d.label} className={`wr-dev-box ${n(d.trx) >= 0 && n(d.margin) >= 0 ? 'wr-dev-pos' : 'wr-dev-neg'}`}>
               <div className="wr-dev-label">{d.label}</div>
-              <div className="wr-dev-rev">{fmtDev(d.rev)}</div>
-              <div className="wr-dev-detail">{fmtDev(d.m)} merchant · {fmtDev(d.t)} TRX</div>
+              <div className="wr-dev-rev" style={{ fontSize: 13 }}>
+                TRX: <span style={{ color: n(d.trx) >= 0 ? GREEN : RED }}>{fmtDevNum(d.trx)}</span>
+                {' · '}Margin: <span style={{ color: n(d.margin) >= 0 ? GREEN : RED }}>{fmtDev(d.margin)}</span>
+              </div>
+              <div className="wr-dev-detail">{fmtDevNum(d.m)} merchant</div>
             </div>
           ))}
         </div>
@@ -389,21 +443,29 @@ function KatModal({ row, onClose, b1, b2, b3, mtd_info }) {
 /* ─── TAB 0: Executive Summary ─── */
 function ExecutiveSummaryTab({ data, loading, onClickRow, b1, b2, b3 }) {
   const [filter, setFilter] = useState('semua');
-  const [sort, setSort]     = useState('rev');
+  const [sort, setSort]     = useState('trx');
 
   const displayRows = (() => {
     if (!data?.tabel) return [];
     let rows = [...data.tabel];
-    if (filter === 'tumbuh') rows = rows.filter(r => n(r.dev_mei_jun_rev) > 0);
-    if (filter === 'turun')  rows = rows.filter(r => n(r.dev_mei_jun_rev) < 0);
-    if (filter === 'top10')  rows = rows.slice(0, 10);
-    const sk = { rev: 'jun_rev', dev_mei: 'dev_mei_jun_rev', merchant: 'jun_merchant', dev_apr: 'dev_apr_jun_rev' }[sort] || 'jun_rev';
-    return rows.sort((a, b) => n(b[sk]) - n(a[sk]));
+    if (filter === 'tumbuh')  rows = rows.filter(r => n(r.dev_mei_jun_trx) > 0);
+    if (filter === 'turun')   rows = rows.filter(r => n(r.dev_mei_jun_trx) < 0);
+    if (filter === 'anomali') rows = rows.filter(r => r.is_anomali);
+    if (filter === 'top10')   rows = rows.slice(0, 10);
+    const sk = {
+      trx:        'jun_trx',
+      margin:     'jun_margin',
+      dev_trx:    'dev_mei_jun_trx',
+      dev_margin: 'dev_mei_jun_margin',
+      merchant:   'jun_merchant',
+    }[sort] || 'jun_trx';
+    return [...rows].sort((a, b) => n(b[sk]) - n(a[sk]));
   })();
 
-  const maxTopRev  = n(data?.top_rev?.[0]?.jun_rev);
-  const maxGrowth  = n(data?.top_growth?.[0]?.dev_mei_jun_rev);
-  const maxMasalah = Math.abs(n(data?.segmen_masalah?.[0]?.dev_mei_jun_rev));
+  const maxTopTrx  = n(data?.top_trx?.[0]?.jun_trx);
+  const maxMargin  = n(data?.top_margin?.[0]?.jun_margin);
+  const maxGrowth  = n(data?.top_growth?.[0]?.dev_mei_jun_trx);
+  const maxMasalah = Math.abs(n(data?.segmen_masalah?.[0]?.dev_mei_jun_trx));
   const tid        = b1 || 'x';
   const lb1        = bulanLabel(b1);
   const mtd        = data?.mtd_info;
@@ -428,18 +490,17 @@ function ExecutiveSummaryTab({ data, loading, onClickRow, b1, b2, b3 }) {
         <>
           <div className="wr-panels">
             <div className="wr-panel">
-              <div className="wr-panel-title" style={{ color: GREEN }}>Top Omzet {lb1}</div>
-              {(data.top_rev || []).map((row, i) => <RankRow key={row.kategori} item={row} idx={i} maxVal={maxTopRev} color={GREEN} />)}
+              <div className="wr-panel-title" style={{ color: ACCENT }}>Top TRX {lb1}</div>
+              {(data.top_trx || []).map((row, i) => <RankRow key={row.kategori} item={row} idx={i} maxVal={maxTopTrx} color={ACCENT} metric="trx" />)}
             </div>
             <div className="wr-panel">
-              <div className="wr-panel-title" style={{ color: ACCENT }}>Pertumbuhan Tercepat</div>
-              {(data.top_growth || []).map((row, i) => <RankRow key={row.kategori} item={row} idx={i} maxVal={maxGrowth} color={ACCENT} showDev />)}
-              {!data.top_growth?.length && <div className="wr-empty-panel">Belum ada kategori tumbuh</div>}
+              <div className="wr-panel-title" style={{ color: GREEN }}>Top Margin {lb1}</div>
+              {(data.top_margin || []).map((row, i) => <RankRow key={row.kategori} item={row} idx={i} maxVal={maxMargin} color={GREEN} metric="margin" />)}
             </div>
             <div className="wr-panel">
-              <div className="wr-panel-title" style={{ color: RED }}>Kategori Bermasalah</div>
-              {(data.segmen_masalah || []).slice(0, 10).map((row, i) => <RankRow key={row.kategori} item={row} idx={i} maxVal={maxMasalah} color={RED} showDev />)}
-              {!data.segmen_masalah?.length && <div className="wr-empty-panel">Semua kategori positif ✓</div>}
+              <div className="wr-panel-title" style={{ color: RED }}>TRX Turun Terbanyak</div>
+              {(data.segmen_masalah || []).slice(0, 10).map((row, i) => <RankRow key={row.kategori} item={row} idx={i} maxVal={maxMasalah} color={RED} metric="dev_trx" />)}
+              {!data.segmen_masalah?.length && <div className="wr-empty-panel">Semua kategori TRX positif ✓</div>}
             </div>
           </div>
 
@@ -447,15 +508,16 @@ function ExecutiveSummaryTab({ data, loading, onClickRow, b1, b2, b3 }) {
             <div className="wr-table-controls">
               <div className="wr-table-left">
                 <select className="wr-select" value={sort} onChange={e => setSort(e.target.value)}>
-                  <option value="rev">Omzet ↓</option>
-                  <option value="dev_mei">DEV vs Bulan Lalu ↓</option>
+                  <option value="trx">TRX ↓</option>
+                  <option value="margin">Margin ↓</option>
+                  <option value="dev_trx">DEV TRX ↓</option>
+                  <option value="dev_margin">DEV Margin ↓</option>
                   <option value="merchant">Merchant ↓</option>
-                  <option value="dev_apr">DEV 2 Bulan ↓</option>
                 </select>
                 <span className="wr-count">{displayRows.length} kategori</span>
               </div>
               <div className="wr-filter-tabs">
-                {[['semua','Semua'],['tumbuh','Tumbuh'],['turun','Turun'],['top10','Top 10']].map(([k,l]) => (
+                {[['semua','Semua'],['tumbuh','TRX Naik'],['turun','TRX Turun'],['anomali','⚠ Anomali'],['top10','Top 10']].map(([k,l]) => (
                   <button key={k} className={`wr-filter-tab${filter===k?' active':''}`} onClick={() => setFilter(k)}>{l}</button>
                 ))}
               </div>
@@ -465,9 +527,11 @@ function ExecutiveSummaryTab({ data, loading, onClickRow, b1, b2, b3 }) {
                 <thead>
                   <tr>
                     <th>#</th><th>Kategori</th>
-                    <th>Merchant {lb1}</th><th>TRX {lb1}</th>
-                    <th>Omzet {lb1}</th><th>Omzet {lb2}</th>
-                    <th>DEV {lb2}→{lb1}</th><th>DEV {lb3}→{lb1}</th>
+                    <th>TRX {lb1}</th>
+                    <th>Margin {lb1}</th>
+                    <th style={{ color: 'var(--text-3)', fontWeight: 500 }}>Omzet {lb1}</th>
+                    <th>DEV TRX<br/><span style={{ fontWeight: 400, fontSize: 10, color: 'var(--text-3)' }}>{lb2}→{lb1}</span></th>
+                    <th>DEV Margin<br/><span style={{ fontWeight: 400, fontSize: 10, color: 'var(--text-3)' }}>{lb2}→{lb1}</span></th>
                     <th>Status</th>
                   </tr>
                 </thead>
@@ -477,18 +541,18 @@ function ExecutiveSummaryTab({ data, loading, onClickRow, b1, b2, b3 }) {
                     return (
                       <tr key={row.kategori} className="wr-tr-clickable" onClick={() => onClickRow(row)}>
                         <td>{i + 1}</td>
-                        <td><span className="wr-segmen-name">{row.kategori}</span>{row.is_anomali && <span className="pill-anomali" style={{ marginLeft: 6, fontSize: 10 }}>⚠ Anomali</span>}</td>
-                        <td>{fmtNum(row.jun_merchant)}</td><td>{fmtNum(row.jun_trx)}</td>
-                        <td style={{ fontWeight: 600, color: GREEN }}>{fmtRp(row.jun_rev)}</td>
-                        <td>{fmtRp(row.mei_rev)}</td>
-                        <td style={{ fontWeight: 600, color: devMei >= 0 ? GREEN : RED }}>{fmtDev(devMei)}</td>
-                        <td style={{ color: devApr >= 0 ? GREEN : RED }}>{fmtDev(devApr)}</td>
+                        <td><span className="wr-segmen-name">{row.kategori}</span></td>
+                        <td style={{ fontWeight: 700, color: ACCENT }}>{fmtNum(row.jun_trx)}</td>
+                        <td style={{ fontWeight: 700, color: GREEN }}>{fmtRp(row.jun_margin)}</td>
+                        <td style={{ color: 'var(--text-3)', fontSize: '0.9em' }}>{fmtRp(row.jun_rev)}</td>
+                        <td style={{ fontWeight: 600, color: n(row.dev_mei_jun_trx) >= 0 ? GREEN : RED }}>{fmtDevNum(row.dev_mei_jun_trx)}</td>
+                        <td style={{ fontWeight: 600, color: n(row.dev_mei_jun_margin) >= 0 ? GREEN : RED }}>{fmtDev(row.dev_mei_jun_margin)}</td>
                         <td><StatusPill row={row} /></td>
                       </tr>
                     );
                   })}
                   {!displayRows.length && (
-                    <tr><td colSpan={9} style={{ textAlign: 'center', padding: 24, color: 'var(--text-4)' }}>
+                    <tr><td colSpan={8} style={{ textAlign: 'center', padding: 24, color: 'var(--text-4)' }}>
                       {data?.tabel?.length ? 'Tidak ada data untuk filter ini' : 'Belum ada data — jalankan sync dari Apps Script'}
                     </td></tr>
                   )}
@@ -499,8 +563,8 @@ function ExecutiveSummaryTab({ data, loading, onClickRow, b1, b2, b3 }) {
 
           <div className="wr-analysis-grid">
             <div className="wr-analysis-panel">
-              <div className="wr-panel-title">Top 2 Kategori — {lb3} / {lb2} / {lb1}</div>
-              <Top2BulanChart data={data} tid={tid} b1={b1} b2={b2} b3={b3} />
+              <div className="wr-panel-title">Top 3 Kategori TRX — 3 Bulan</div>
+              <Top2BulanChart data={data} tid={tid} b1={b1} b2={b2} b3={b3} mtd={mtd} />
             </div>
             <div className="wr-analysis-panel">
               <div className="wr-panel-title">Rekomendasi Strategis</div>
@@ -516,7 +580,7 @@ function ExecutiveSummaryTab({ data, loading, onClickRow, b1, b2, b3 }) {
 /* ─── TAB 1: Trendline Harian ─── */
 function TrendlineTab({ activeBulan }) {
   const [days, setDays]          = useState(30);
-  const [metric, setMetric]      = useState('rev');
+  const [metric, setMetric]      = useState('trx');
   const [trendData, setTrend]    = useState(null);
   const [loading, setLoading]    = useState(true);
   const [error, setError]        = useState(null);
@@ -566,7 +630,7 @@ function TrendlineTab({ activeBulan }) {
         </div>
         <div className="wri-ctrl-group">
           <span className="wri-ctrl-label">Metrik:</span>
-          {[['rev','Omzet'],['merchant','Merchant'],['trx','TRX']].map(([k,l]) => (
+          {[['trx','TRX'],['margin','Margin'],['rev','Omzet'],['merchant','Merchant']].map(([k,l]) => (
             <button key={k} className={`wri-filter-btn${metric===k?' wri-filter-btn--active':''}`} onClick={() => setMetric(k)}>{l}</button>
           ))}
         </div>
@@ -796,19 +860,24 @@ function ActionCenterTab({ data }) {
   if (!data?.tabel?.length) return <div className="wri-state">Belum ada data</div>;
 
   const all     = data.tabel;
-  const anomali = all.filter(r => n(r.dev_mei_jun_merchant) > 0 && n(r.dev_mei_jun_rev) < 0);
-  const kritis  = all.filter(r => n(r.dev_mei_jun_rev) < 0 && !anomali.some(a => a.kategori === r.kategori))
-                     .sort((a,b) => n(a.dev_mei_jun_rev) - n(b.dev_mei_jun_rev)).slice(0, 5);
-  const growth  = all.filter(r => n(r.dev_mei_jun_rev) > 0)
-                     .sort((a,b) => n(b.dev_mei_jun_rev) - n(a.dev_mei_jun_rev)).slice(0, 5);
-  const peluang = all.filter(r => n(r.dev_mei_jun_merchant) > 0 && n(r.dev_mei_jun_rev) > 0 && n(r.jun_rev) < n(data.summary?.total_rev) * 0.05)
-                     .sort((a,b) => n(b.dev_mei_jun_merchant) - n(a.dev_mei_jun_merchant)).slice(0, 5);
+  // Anomali: TRX naik tapi margin turun
+  const anomali = all.filter(r => r.is_anomali);
+  // Kritis: TRX turun dan bukan anomali
+  const kritis  = all.filter(r => n(r.dev_mei_jun_trx) < 0 && !r.is_anomali)
+                     .sort((a,b) => n(a.dev_mei_jun_trx) - n(b.dev_mei_jun_trx)).slice(0, 5);
+  // Tumbuh: TRX naik dan margin naik
+  const growth  = all.filter(r => n(r.dev_mei_jun_trx) > 0 && n(r.dev_mei_jun_margin) > 0)
+                     .sort((a,b) => n(b.dev_mei_jun_margin) - n(a.dev_mei_jun_margin)).slice(0, 5);
+  // Peluang: TRX naik tapi kontribusi margin masih kecil
+  const totMargin = n(data.summary?.total_margin);
+  const peluang = all.filter(r => n(r.dev_mei_jun_trx) > 0 && n(r.jun_margin) < totMargin * 0.05 && n(r.jun_margin) > 0)
+                     .sort((a,b) => n(b.dev_mei_jun_trx) - n(a.dev_mei_jun_trx)).slice(0, 5);
 
   const riskCards = [
-    { icon: '🚨', label: 'Kritis',  count: kritis.length,  color: RED },
-    { icon: '⚠️',  label: 'Anomali', count: anomali.length, color: '#F59E0B' },
-    { icon: '📈', label: 'Tumbuh',  count: growth.length,  color: GREEN },
-    { icon: '💡', label: 'Peluang', count: peluang.length, color: ACCENT },
+    { icon: '🚨', label: 'TRX Turun', count: kritis.length,  color: RED },
+    { icon: '⚠️',  label: 'Anomali',   count: anomali.length, color: '#F59E0B' },
+    { icon: '📈',  label: 'TRX+Margin Naik', count: growth.length, color: GREEN },
+    { icon: '💡',  label: 'Peluang',   count: peluang.length, color: ACCENT },
   ];
 
   return (
@@ -825,23 +894,23 @@ function ActionCenterTab({ data }) {
 
       {kritis.length > 0 && (
         <div className="wri-action-block" style={{ borderLeft: `4px solid ${RED}` }}>
-          <div className="wri-action-block-head" style={{ color: RED }}>🚨 Wajib Diselamatkan — Omzet Turun ({kritis.length} kategori)</div>
+          <div className="wri-action-block-head" style={{ color: RED }}>🚨 Wajib Diselamatkan — TRX Turun ({kritis.length} kategori)</div>
           {kritis.map((r, i) => (
             <div key={r.kategori} className="wri-action-item">
               <div className="wri-action-item-hd">
                 <span className="wri-action-num" style={{ background: RED }}>{i + 1}</span>
                 <span className="wri-action-name">{r.kategori}</span>
-                <span className="wri-action-badge wri-badge-danger">{fmtDev(r.dev_mei_jun_rev)}</span>
+                <span className="wri-action-badge wri-badge-danger">TRX {fmtDevNum(r.dev_mei_jun_trx)}</span>
               </div>
               <div className="wri-action-steps">
                 <span>① Identifikasi merchant aktif yang berhenti bertransaksi</span>
                 <span>② Hubungi top merchant di kategori ini dalam 24 jam</span>
                 <span>③ Analisis penyebab: kompetitor, masalah teknis, atau seasonal</span>
-                <span>④ Target recovery: kembalikan ke level bulan lalu ({fmtRp(r.mei_rev)})</span>
+                <span>④ Target recovery: TRX {fmtNum(r.mei_trx)} (level bulan lalu)</span>
               </div>
               <div className="wri-action-stat">
-                Merchant: {fmtNum(r.mei_merchant)} → {fmtNum(r.jun_merchant)} ({fmtDev(r.dev_mei_jun_merchant)})
-                &nbsp;·&nbsp; Omzet: {fmtRp(r.mei_rev)} → {fmtRp(r.jun_rev)}
+                TRX: {fmtNum(r.mei_trx)} → {fmtNum(r.jun_trx)} &nbsp;·&nbsp;
+                Margin: {fmtRp(r.mei_margin)} → {fmtRp(r.jun_margin)}
               </div>
             </div>
           ))}
@@ -850,18 +919,24 @@ function ActionCenterTab({ data }) {
 
       {anomali.length > 0 && (
         <div className="wri-action-block" style={{ borderLeft: `4px solid #F59E0B` }}>
-          <div className="wri-action-block-head" style={{ color: '#D97706' }}>⚠️ Wajib Diinvestigasi — Anomali: Merchant Naik, Omzet Turun ({anomali.length} kategori)</div>
+          <div className="wri-action-block-head" style={{ color: '#D97706' }}>⚠️ Wajib Diinvestigasi — TRX Naik tapi Margin Turun ({anomali.length} kategori)</div>
           {anomali.map((r, i) => (
             <div key={r.kategori} className="wri-action-item">
               <div className="wri-action-item-hd">
                 <span className="wri-action-num" style={{ background: '#F59E0B' }}>{i + 1}</span>
                 <span className="wri-action-name">{r.kategori}</span>
-                <span className="wri-action-badge wri-badge-warn">Merchant {fmtDev(r.dev_mei_jun_merchant)} · Omzet {fmtDev(r.dev_mei_jun_rev)}</span>
+                <span className="wri-action-badge wri-badge-warn">
+                  TRX {fmtDevNum(r.dev_mei_jun_trx)} · Margin {fmtDev(r.dev_mei_jun_margin)}
+                </span>
               </div>
               <div className="wri-action-steps">
-                <span>① Merchant bertambah tapi omzet turun — cek kualitas merchant baru</span>
-                <span>② Audit frekuensi & nilai TRX merchant lama vs merchant baru</span>
-                <span>③ Kemungkinan: merchant dormant, nilai transaksi kecil, atau aktivasi belum optimal</span>
+                <span>① Volume naik tapi margin per TRX turun — cek mix jenis transaksi</span>
+                <span>② Kemungkinan: dominasi transaksi nominal kecil atau produk margin rendah</span>
+                <span>③ Dorong merchant ke transaksi bernilai lebih tinggi atau kategori produk premium</span>
+              </div>
+              <div className="wri-action-stat">
+                TRX: {fmtNum(r.mei_trx)} → {fmtNum(r.jun_trx)} ({fmtDevNum(r.dev_mei_jun_trx)}) &nbsp;·&nbsp;
+                Margin: {fmtRp(r.mei_margin)} → {fmtRp(r.jun_margin)} ({fmtDev(r.dev_mei_jun_margin)})
               </div>
             </div>
           ))}
@@ -870,20 +945,22 @@ function ActionCenterTab({ data }) {
 
       {growth.length > 0 && (
         <div className="wri-action-block" style={{ borderLeft: `4px solid ${GREEN}` }}>
-          <div className="wri-action-block-head" style={{ color: GREEN }}>📈 Wajib Dihubungi — Kategori Tumbuh ({growth.length} kategori)</div>
+          <div className="wri-action-block-head" style={{ color: GREEN }}>📈 Wajib Dihubungi — TRX dan Margin Tumbuh ({growth.length} kategori)</div>
           <div className="wri-action-2col">
             {growth.map((r, i) => (
               <div key={r.kategori} className="wri-action-item">
                 <div className="wri-action-item-hd">
                   <span className="wri-action-num" style={{ background: GREEN }}>{i + 1}</span>
                   <span className="wri-action-name">{r.kategori}</span>
-                  <span className="wri-action-badge wri-badge-success">{fmtDev(r.dev_mei_jun_rev)}</span>
+                  <span className="wri-action-badge wri-badge-success">Margin {fmtDev(r.dev_mei_jun_margin)}</span>
                 </div>
                 <div className="wri-action-steps">
                   <span>① Dokumentasikan best practice — apa yang berjalan baik</span>
-                  <span>② Replikasi ke kategori lain dengan profil merchant serupa</span>
+                  <span>② Replikasi strategi ke kategori lain dengan profil serupa</span>
                 </div>
-                <div className="wri-action-stat">Merchant: {fmtNum(r.jun_merchant)} · Omzet: {fmtRp(r.jun_rev)}</div>
+                <div className="wri-action-stat">
+                  TRX: {fmtNum(r.jun_trx)} ({fmtDevNum(r.dev_mei_jun_trx)}) &nbsp;·&nbsp; Margin: {fmtRp(r.jun_margin)}
+                </div>
               </div>
             ))}
           </div>
@@ -892,16 +969,18 @@ function ActionCenterTab({ data }) {
 
       {peluang.length > 0 && (
         <div className="wri-action-block" style={{ borderLeft: `4px solid ${ACCENT}` }}>
-          <div className="wri-action-block-head" style={{ color: ACCENT }}>💡 Kategori Peluang — Tumbuh tapi Kontribusi Masih Kecil ({peluang.length} kategori)</div>
+          <div className="wri-action-block-head" style={{ color: ACCENT }}>💡 Kategori Peluang — TRX Tumbuh tapi Kontribusi Margin Masih Kecil</div>
           <div className="wri-action-2col">
             {peluang.map((r, i) => (
               <div key={r.kategori} className="wri-action-item">
                 <div className="wri-action-item-hd">
                   <span className="wri-action-num" style={{ background: ACCENT }}>{i + 1}</span>
                   <span className="wri-action-name">{r.kategori}</span>
-                  <span className="wri-action-badge wri-badge-info">{fmtDev(r.dev_mei_jun_merchant)} merchant</span>
+                  <span className="wri-action-badge wri-badge-info">TRX {fmtDevNum(r.dev_mei_jun_trx)}</span>
                 </div>
-                <div className="wri-action-stat">Omzet: {fmtRp(r.jun_rev)} · Growth: {fmtDev(r.dev_mei_jun_rev)}</div>
+                <div className="wri-action-stat">
+                  TRX: {fmtNum(r.jun_trx)} &nbsp;·&nbsp; Margin: {fmtRp(r.jun_margin)} &nbsp;·&nbsp; Potensi ekspansi merchant
+                </div>
               </div>
             ))}
           </div>
