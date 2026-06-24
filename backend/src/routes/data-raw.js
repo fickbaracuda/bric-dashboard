@@ -54,7 +54,11 @@ function makeSyncHandler(table) {
 // ── Factory: list handler (requireAuth via router) ───────────────────────
 function makeListHandler(table) {
   return async function (req, res) {
-    const { bulan, q, page = 1, per_page = 200 } = req.query;
+    const {
+      bulan, q, page = 1, per_page = 200,
+      tgl_dari, tgl_sampai,
+      sort_col, sort_dir = 'asc',
+    } = req.query;
     const limit  = Math.min(parseInt(per_page) || 200, 500);
     const offset = (Math.max(parseInt(page) || 1, 1) - 1) * limit;
 
@@ -62,12 +66,28 @@ function makeListHandler(table) {
     const conditions = [];
     if (bulan) { params.push(bulan); conditions.push(`bulan=$${params.length}`); }
     if (q)     { params.push(`%${q.toUpperCase()}%`); conditions.push(`UPPER(row_data::text) LIKE $${params.length}`); }
+    if (tgl_dari && tgl_sampai && tgl_dari <= tgl_sampai) {
+      params.push(tgl_dari); conditions.push(`row_data->>'tanggal' IS NOT NULL AND (row_data->>'tanggal')::date >= $${params.length}::date`);
+      params.push(tgl_sampai); conditions.push(`(row_data->>'tanggal')::date <= $${params.length}::date`);
+    }
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
 
+    // Sort — sort_col diparameterisasi aman via ->>, direction divalidasi
+    const safeDir = sort_dir === 'desc' ? 'DESC' : 'ASC';
+    let orderBy;
+    if (sort_col) {
+      params.push(sort_col);
+      orderBy = `(row_data->>$${params.length}) ${safeDir} NULLS LAST`;
+    } else if (tgl_dari || tgl_sampai) {
+      orderBy = `(row_data->>'tanggal') ASC NULLS LAST`;
+    } else {
+      orderBy = 'bulan DESC, id ASC';
+    }
+
     try {
-      const [dataRes, countRes, bulanRes] = await Promise.all([
+      const [dataRes, countRes, bulanRes, statRes] = await Promise.all([
         pool.query(
-          `SELECT row_data FROM ${table} ${where} ORDER BY bulan DESC, id
+          `SELECT row_data FROM ${table} ${where} ORDER BY ${orderBy}
            LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
           [...params, limit, offset]
         ),
@@ -75,6 +95,11 @@ function makeListHandler(table) {
         pool.query(
           `SELECT bulan, sheet_name, COUNT(*) AS row_count, MAX(synced_at) AS last_synced
            FROM ${table} GROUP BY bulan, sheet_name ORDER BY bulan DESC`
+        ),
+        pool.query(
+          `SELECT MIN(row_data->>'tanggal') AS tgl_min, MAX(row_data->>'tanggal') AS tgl_max
+           FROM ${table} ${where}`,
+          params
         ),
       ]);
 
@@ -88,6 +113,8 @@ function makeListHandler(table) {
         per_page:   limit,
         columns,
         bulan_list: bulanRes.rows,
+        tgl_min:    statRes.rows[0]?.tgl_min || null,
+        tgl_max:    statRes.rows[0]?.tgl_max || null,
       });
     } catch (e) {
       console.error(`[data-raw ${table} list]`, e.message);

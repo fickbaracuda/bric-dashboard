@@ -190,14 +190,71 @@ export default function DataRaw() {
   );
 }
 
+// ── Summary cards ─────────────────────────────────────────────────────────
+function SummaryCards({ bulanList, total, loading, tglMin, tglMax, color, selectedBulan }) {
+  const totalSemua = bulanList.reduce((s, b) => s + Number(b.row_count), 0);
+  const lastSync   = bulanList.reduce((mx, b) => (!b.last_synced ? mx : !mx || b.last_synced > mx ? b.last_synced : mx), null);
+  const selInfo    = selectedBulan ? bulanList.find(b => b.bulan === selectedBulan) : null;
+
+  const cards = [
+    {
+      label: 'Total Data Tersimpan',
+      value: totalSemua.toLocaleString('id-ID'),
+      sub: `${bulanList.length} bulan tersedia`,
+      icon: 'ti-database',
+    },
+    {
+      label: selectedBulan ? `Baris — ${fmtBulan(selectedBulan)}` : 'Ditampilkan (filter aktif)',
+      value: loading ? '…' : total.toLocaleString('id-ID'),
+      sub: selInfo ? `Sheet: ${selInfo.sheet_name}` : 'semua bulan',
+      icon: 'ti-table-row',
+    },
+    {
+      label: 'Rentang Tanggal',
+      value: (tglMin && tglMax) ? (tglMin === tglMax ? tglMin : `${tglMin.slice(8)}/${tglMin.slice(5,7)} – ${tglMax.slice(8)}/${tglMax.slice(5,7)}`) : '–',
+      sub: (tglMin && tglMax && tglMin !== tglMax)
+        ? `${tglMin.slice(0,7)} s/d ${tglMax.slice(0,7)}`
+        : 'belum ada data tanggal',
+      icon: 'ti-calendar-stats',
+    },
+    {
+      label: 'Sync Terakhir',
+      value: lastSync ? fmtAge(lastSync) : '–',
+      sub: lastSync ? new Date(lastSync).toLocaleDateString('id-ID', { day:'2-digit', month:'short', year:'numeric' }) : 'belum pernah sync',
+      icon: 'ti-clock',
+    },
+  ];
+
+  return (
+    <div className="dr-summary-cards">
+      {cards.map((c, i) => (
+        <div key={i} className="dr-sc" style={{ borderTopColor: i === 0 ? color : undefined }}>
+          <div className="dr-sc-head">
+            <i className={`ti ${c.icon} dr-sc-icon`} />
+            <span className="dr-sc-label">{c.label}</span>
+          </div>
+          <div className="dr-sc-value">{c.value}</div>
+          <div className="dr-sc-sub">{c.sub}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ── Generic tab component ─────────────────────────────────────────────────
 function DataTab({ apiPath, label, color, script }) {
   const [bulanList,     setBulanList]     = useState([]);
   const [selectedBulan, setSelectedBulan] = useState('');
   const [search,        setSearch]        = useState('');
+  const [tglDari,       setTglDari]       = useState('');
+  const [tglSampai,     setTglSampai]     = useState('');
+  const [sortCol,       setSortCol]       = useState('');
+  const [sortDir,       setSortDir]       = useState('asc');
   const [rows,          setRows]          = useState([]);
   const [columns,       setColumns]       = useState([]);
   const [total,         setTotal]         = useState(0);
+  const [tglMin,        setTglMin]        = useState(null);
+  const [tglMax,        setTglMax]        = useState(null);
   const [page,          setPage]          = useState(1);
   const [loading,       setLoading]       = useState(false);
   const [showScript,    setShowScript]    = useState(false);
@@ -205,12 +262,17 @@ function DataTab({ apiPath, label, color, script }) {
   const searchTimer = useRef(null);
   const thisBulan   = curMonth();
 
-  const fetchData = useCallback(async (bulan, q, pg) => {
+  const fetchData = useCallback(async (bulan, q, pg, dari, sampai, sCol, sDir) => {
     setLoading(true);
     try {
       const params = new URLSearchParams({ page: pg, per_page: PER_PAGE });
-      if (bulan) params.set('bulan', bulan);
-      if (q)     params.set('q', q);
+      if (bulan)  params.set('bulan', bulan);
+      if (q)      params.set('q', q);
+      if (dari && sampai && dari <= sampai) {
+        params.set('tgl_dari', dari);
+        params.set('tgl_sampai', sampai);
+      }
+      if (sCol) { params.set('sort_col', sCol); params.set('sort_dir', sDir || 'asc'); }
       const res  = await fetch(`${API}/api/data-raw/${apiPath}?${params}`, {
         headers: { Authorization: `Bearer ${getToken()}` },
       });
@@ -218,32 +280,71 @@ function DataTab({ apiPath, label, color, script }) {
       setRows(data.rows || []);
       setColumns(data.columns || []);
       setTotal(parseInt(data.total) || 0);
+      setTglMin(data.tgl_min || null);
+      setTglMax(data.tgl_max || null);
       if (data.bulan_list?.length) setBulanList(data.bulan_list);
     } catch { /* ignore */ } finally {
       setLoading(false);
     }
   }, [apiPath]);
 
-  useEffect(() => { fetchData('', '', 1); }, [fetchData]);
+  useEffect(() => { fetchData('', '', 1, '', '', '', 'asc'); }, [fetchData]);
 
-  function handleBulan(v)  { setSelectedBulan(v); setPage(1); fetchData(v, search, 1); }
+  function doFetch(bulan, q, pg, dari, sampai, sCol, sDir) {
+    fetchData(bulan, q, pg, dari, sampai, sCol, sDir);
+  }
+
+  function handleBulan(v)  {
+    setSelectedBulan(v); setPage(1);
+    doFetch(v, search, 1, tglDari, tglSampai, sortCol, sortDir);
+  }
   function handleSearch(v) {
     setSearch(v);
     clearTimeout(searchTimer.current);
-    searchTimer.current = setTimeout(() => { setPage(1); fetchData(selectedBulan, v, 1); }, 450);
+    searchTimer.current = setTimeout(() => {
+      setPage(1); doFetch(selectedBulan, v, 1, tglDari, tglSampai, sortCol, sortDir);
+    }, 450);
   }
-  function gotoPage(pg)    { setPage(pg); fetchData(selectedBulan, search, pg); }
-  function refresh()       { fetchData(selectedBulan, search, page); }
+  function handleDateRange(dari, sampai) {
+    setTglDari(dari); setTglSampai(sampai); setPage(1);
+    doFetch(selectedBulan, search, 1, dari, sampai, sortCol, sortDir);
+  }
+  function resetDateRange() { handleDateRange('', ''); }
 
-  const totalPages  = Math.ceil(total / PER_PAGE);
-  // Apakah sedang menampilkan bulan berjalan?
+  function handleSort(col) {
+    const newDir = col === sortCol ? (sortDir === 'asc' ? 'desc' : 'asc') : 'asc';
+    setSortCol(col); setSortDir(newDir); setPage(1);
+    doFetch(selectedBulan, search, 1, tglDari, tglSampai, col, newDir);
+  }
+  function clearSort() {
+    setSortCol(''); setSortDir('asc'); setPage(1);
+    doFetch(selectedBulan, search, 1, tglDari, tglSampai, '', 'asc');
+  }
+
+  function gotoPage(pg) { setPage(pg); doFetch(selectedBulan, search, pg, tglDari, tglSampai, sortCol, sortDir); }
+  function refresh()    { doFetch(selectedBulan, search, page, tglDari, tglSampai, sortCol, sortDir); }
+
+  const totalPages = Math.ceil(total / PER_PAGE);
   const showingCurMonth = selectedBulan === thisBulan
     || (!selectedBulan && bulanList.some(b => b.bulan === thisBulan));
-  const curInfo = bulanList.find(b => b.bulan === thisBulan);
+  const curInfo      = bulanList.find(b => b.bulan === thisBulan);
+  const isDateActive = !!(tglDari && tglSampai && tglDari <= tglSampai);
+  const isSortActive = !!sortCol;
+
+  // Kolom yang bisa disort (dari data yang sudah ada + kolom tanggal default)
+  const sortableCols = columns.length ? columns : [];
 
   return (
     <div className="dr-outlet-wrap">
-      {/* Toolbar */}
+
+      {/* Summary Cards */}
+      <SummaryCards
+        bulanList={bulanList} total={total} loading={loading}
+        tglMin={tglMin} tglMax={tglMax} color={color}
+        selectedBulan={selectedBulan}
+      />
+
+      {/* Toolbar baris 1: filter utama */}
       <div className="dr-toolbar">
         <div className="dr-toolbar-left">
           <select
@@ -254,8 +355,7 @@ function DataTab({ apiPath, label, color, script }) {
             <option value="">Semua Bulan</option>
             {bulanList.map(b => (
               <option key={b.bulan} value={b.bulan}>
-                {fmtBulan(b.bulan)}
-                {b.bulan === thisBulan ? ' 🔄' : ''} — {b.sheet_name} ({Number(b.row_count).toLocaleString()} baris)
+                {fmtBulan(b.bulan)}{b.bulan === thisBulan ? ' 🔄' : ''} — {Number(b.row_count).toLocaleString()} baris
               </option>
             ))}
           </select>
@@ -286,19 +386,79 @@ function DataTab({ apiPath, label, color, script }) {
           <span className="dr-total-label">
             {loading ? 'Memuat…' : `${total.toLocaleString()} baris`}
           </span>
-          <button
-            className="dr-btn-refresh"
-            onClick={refresh}
-            disabled={loading}
-            title="Refresh data"
-          >
+          <button className="dr-btn-refresh" onClick={refresh} disabled={loading} title="Refresh data">
             <i className={`ti ti-refresh${loading ? ' dr-spinner' : ''}`} />
           </button>
           <button className="dr-btn-script" onClick={() => setShowScript(true)}>
-            <i className="ti ti-brand-google" />
-            Apps Script
+            <i className="ti ti-brand-google" /> Apps Script
           </button>
         </div>
+      </div>
+
+      {/* Toolbar baris 2: date range + sort */}
+      <div className="dr-filter-bar">
+        <div className="dr-filter-group">
+          <i className="ti ti-calendar-range dr-filter-icon" />
+          <span className="dr-filter-label">Dari</span>
+          <input
+            type="date" className="dr-date-input"
+            value={tglDari}
+            onChange={e => setTglDari(e.target.value)}
+          />
+          <span className="dr-filter-label">–</span>
+          <input
+            type="date" className="dr-date-input"
+            value={tglSampai}
+            onChange={e => setTglSampai(e.target.value)}
+          />
+          {isDateActive ? (
+            <button className="dr-apply-btn" style={{ background: color }}
+              onClick={() => handleDateRange(tglDari, tglSampai)}>
+              Terapkan
+            </button>
+          ) : (tglDari || tglSampai) ? (
+            <button className="dr-apply-btn" style={{ background: color }}
+              onClick={() => handleDateRange(tglDari, tglSampai)} disabled={!tglDari || !tglSampai}>
+              Terapkan
+            </button>
+          ) : null}
+          {(tglDari || tglSampai) && (
+            <button className="dr-reset-btn" onClick={resetDateRange} title="Reset filter tanggal">
+              <i className="ti ti-x" /> Reset
+            </button>
+          )}
+          {isDateActive && (
+            <span className="dr-active-badge" style={{ color, borderColor: color }}>
+              📅 {tglDari} s/d {tglSampai}
+            </span>
+          )}
+        </div>
+
+        {sortableCols.length > 0 && (
+          <div className="dr-filter-group">
+            <i className="ti ti-arrows-sort dr-filter-icon" />
+            <span className="dr-filter-label">Sort</span>
+            <select className="dr-select dr-sort-select" value={sortCol}
+              onChange={e => handleSort(e.target.value)}>
+              <option value="">Default</option>
+              {sortableCols.map(c => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+            {isSortActive && (
+              <>
+                <button className="dr-dir-btn" onClick={() => handleSort(sortCol)}
+                  title={sortDir === 'asc' ? 'Ascending' : 'Descending'}>
+                  <i className={`ti ti-sort-${sortDir === 'asc' ? 'ascending' : 'descending'}-letters`} />
+                  {sortDir === 'asc' ? 'A→Z' : 'Z→A'}
+                </button>
+                <button className="dr-reset-btn" onClick={clearSort}>
+                  <i className="ti ti-x" /> Reset Sort
+                </button>
+              </>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Banner bulan berjalan */}
@@ -313,16 +473,17 @@ function DataTab({ apiPath, label, color, script }) {
       <div className="dr-table-wrap">
         {loading ? (
           <div className="dr-loading">
-            <i className="ti ti-loader-2 dr-spinner" />
-            Memuat data…
+            <i className="ti ti-loader-2 dr-spinner" /> Memuat data…
           </div>
         ) : rows.length === 0 ? (
           <div className="dr-empty">
             <i className="ti ti-database-off" />
             <div className="dr-empty-title">Belum ada data</div>
             <div className="dr-empty-sub">
-              Klik <strong>Apps Script</strong> di kanan atas, paste ke Google Sheets,
-              lalu jalankan <code>syncSemuaSheet()</code>
+              {isDateActive
+                ? `Tidak ada data pada rentang ${tglDari} – ${tglSampai}`
+                : <>Klik <strong>Apps Script</strong> di kanan atas, paste ke Google Sheets, lalu jalankan <code>syncSemuaSheet()</code></>
+              }
             </div>
           </div>
         ) : (
@@ -330,7 +491,16 @@ function DataTab({ apiPath, label, color, script }) {
             <thead>
               <tr>
                 <th className="dr-th-no">#</th>
-                {columns.map(col => <th key={col}>{col}</th>)}
+                {columns.map(col => (
+                  <th key={col} className="dr-th-sortable" onClick={() => handleSort(col)}
+                    style={sortCol === col ? { color, background: color + '18' } : {}}>
+                    {col}
+                    {sortCol === col
+                      ? <i className={`ti ti-sort-${sortDir === 'asc' ? 'ascending' : 'descending'} dr-sort-icon`} />
+                      : <i className="ti ti-selector dr-sort-icon dr-sort-idle" />
+                    }
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -350,12 +520,18 @@ function DataTab({ apiPath, label, color, script }) {
       {/* Pagination */}
       {totalPages > 1 && (
         <div className="dr-pagination">
+          <button className="dr-page-btn" disabled={page <= 1} onClick={() => gotoPage(1)}>
+            <i className="ti ti-chevrons-left" />
+          </button>
           <button className="dr-page-btn" disabled={page <= 1} onClick={() => gotoPage(page - 1)}>
             <i className="ti ti-chevron-left" />
           </button>
-          <span className="dr-page-info">Hal {page} / {totalPages}</span>
+          <span className="dr-page-info">Hal {page} / {totalPages} · {total.toLocaleString()} baris</span>
           <button className="dr-page-btn" disabled={page >= totalPages} onClick={() => gotoPage(page + 1)}>
             <i className="ti ti-chevron-right" />
+          </button>
+          <button className="dr-page-btn" disabled={page >= totalPages} onClick={() => gotoPage(totalPages)}>
+            <i className="ti ti-chevrons-right" />
           </button>
         </div>
       )}

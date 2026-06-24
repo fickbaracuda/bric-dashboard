@@ -3747,6 +3747,49 @@ body {
   .dr-search-wrap   { flex: 1; }
 }
 
+/* Data Raw — summary cards */
+.dr-summary-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+@media (max-width: 1000px) { .dr-summary-cards { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 600px)  { .dr-summary-cards { grid-template-columns: 1fr 1fr; } }
+.dr-sc       { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px;
+               border-top: 3px solid var(--border); padding: 12px 16px; }
+.dr-sc-head  { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.dr-sc-icon  { font-size: 14px; color: var(--text-3); }
+.dr-sc-label { font-size: 11px; color: var(--text-3); font-weight: 500; text-transform: uppercase; letter-spacing: 0.4px; }
+.dr-sc-value { font-size: 22px; font-weight: 700; color: var(--text-1); line-height: 1.15; }
+.dr-sc-sub   { font-size: 11px; color: var(--text-3); margin-top: 2px; }
+
+/* Data Raw — filter bar (date range + sort) */
+.dr-filter-bar    { display: flex; align-items: center; flex-wrap: wrap; gap: 16px;
+                    background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 10px 16px; }
+.dr-filter-group  { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.dr-filter-icon   { font-size: 15px; color: var(--text-3); }
+.dr-filter-label  { font-size: 12px; color: var(--text-3); font-weight: 500; white-space: nowrap; }
+.dr-date-input    { padding: 6px 8px; border: 1px solid var(--border); border-radius: 7px;
+                    background: var(--bg-page); color: var(--text-1); font-size: 12px;
+                    font-family: inherit; cursor: pointer; min-width: 130px; }
+.dr-date-input:focus { outline: none; border-color: #3B82F6; }
+.dr-apply-btn     { padding: 5px 14px; border: none; border-radius: 7px; color: #fff;
+                    font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.dr-apply-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.dr-reset-btn     { padding: 5px 10px; border: 1px solid var(--border); border-radius: 7px;
+                    background: none; color: var(--text-3); font-size: 12px; cursor: pointer;
+                    display: flex; align-items: center; gap: 4px; }
+.dr-reset-btn:hover { border-color: #EF4444; color: #EF4444; }
+.dr-active-badge  { font-size: 11px; padding: 3px 10px; border-radius: 99px; border: 1px solid;
+                    background: transparent; font-weight: 600; white-space: nowrap; }
+.dr-sort-select   { min-width: 160px !important; }
+.dr-dir-btn       { padding: 5px 10px; border: 1px solid var(--border); border-radius: 7px;
+                    background: none; color: var(--text-2); font-size: 12px; cursor: pointer;
+                    display: flex; align-items: center; gap: 4px; }
+.dr-dir-btn:hover { border-color: #3B82F6; color: #3B82F6; }
+
+/* Data Raw — sortable column headers */
+.dr-th-sortable   { cursor: pointer; user-select: none; transition: background .1s; }
+.dr-th-sortable:hover { background: rgba(59,130,246,.08) !important; }
+.dr-sort-icon     { font-size: 12px; margin-left: 4px; vertical-align: middle; }
+.dr-sort-idle     { opacity: 0.3; }
+
 /* ── WAR-ROOM Hunter (wh-*) ─────────────────────────────────────────────── */
 .wh-page          { padding: 16px 20px; display: flex; flex-direction: column; gap: 14px; }
 .wh-header        { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
