@@ -15,7 +15,17 @@ async function upsertChunk(bulan, rows) {
        nama_kota, tanggal_registrasi, tanggal_aktifasi,
        trx_prev, rev_prev, trx_curr, rev_curr, dev_trx, dev_rev, synced_at)
     SELECT $1, t.id_outlet, t.upline, t.nama_pemilik, t.notelp_pemilik, t.tipe_outlet, t.balance,
-           t.nama_kota, NULLIF(t.tgl_reg,'')::date, NULLIF(t.tgl_aktif,'')::date,
+           t.nama_kota,
+           CASE
+             WHEN NULLIF(t.tgl_reg,'') ~ '^\d{4}-\d{2}-\d{2}$' THEN NULLIF(t.tgl_reg,'')::date
+             WHEN NULLIF(t.tgl_reg,'') ~ '^\d{1,2}/\d{1,2}/\d{4}$' THEN TO_DATE(t.tgl_reg,'DD/MM/YYYY')
+             ELSE NULL
+           END,
+           CASE
+             WHEN NULLIF(t.tgl_aktif,'') ~ '^\d{4}-\d{2}-\d{2}$' THEN NULLIF(t.tgl_aktif,'')::date
+             WHEN NULLIF(t.tgl_aktif,'') ~ '^\d{1,2}/\d{1,2}/\d{4}$' THEN TO_DATE(t.tgl_aktif,'DD/MM/YYYY')
+             ELSE NULL
+           END,
            t.trx_prev, t.rev_prev, t.trx_curr, t.rev_curr, t.dev_trx, t.dev_rev, NOW()
     FROM unnest(
       $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::bigint[],
