@@ -4,6 +4,18 @@ const SYNC_TOKEN = 'bric2026bimasaktisecret';
 
 const CHUNK = 500; // maks 500 baris per query (500×16 params = 8000, aman < 65535)
 
+// Konversi tanggal ke ISO "YYYY-MM-DD" di JS sebelum masuk SQL.
+// Terima DD/MM/YYYY, D/M/YYYY, atau sudah ISO. Return null jika tidak dikenali.
+function toIsoDate(v) {
+  if (v == null) return null;
+  const s = String(v).trim();
+  if (!s) return null;
+  const dm = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (dm) return `${dm[3]}-${dm[2].padStart(2,'0')}-${dm[1].padStart(2,'0')}`;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  return null;
+}
+
 async function upsertChunk(bulan, rows) {
   if (!rows.length) return;
   const str = f => rows.map(o => { const v = f(o); return v != null ? String(v).trim() : null; });
@@ -15,17 +27,7 @@ async function upsertChunk(bulan, rows) {
        nama_kota, tanggal_registrasi, tanggal_aktifasi,
        trx_prev, rev_prev, trx_curr, rev_curr, dev_trx, dev_rev, synced_at)
     SELECT $1, t.id_outlet, t.upline, t.nama_pemilik, t.notelp_pemilik, t.tipe_outlet, t.balance,
-           t.nama_kota,
-           CASE
-             WHEN NULLIF(t.tgl_reg,'') ~ '^\d{4}-\d{2}-\d{2}$' THEN NULLIF(t.tgl_reg,'')::date
-             WHEN NULLIF(t.tgl_reg,'') ~ '^\d{1,2}/\d{1,2}/\d{4}$' THEN TO_DATE(t.tgl_reg,'DD/MM/YYYY')
-             ELSE NULL
-           END,
-           CASE
-             WHEN NULLIF(t.tgl_aktif,'') ~ '^\d{4}-\d{2}-\d{2}$' THEN NULLIF(t.tgl_aktif,'')::date
-             WHEN NULLIF(t.tgl_aktif,'') ~ '^\d{1,2}/\d{1,2}/\d{4}$' THEN TO_DATE(t.tgl_aktif,'DD/MM/YYYY')
-             ELSE NULL
-           END,
+           t.nama_kota, NULLIF(t.tgl_reg,'')::date, NULLIF(t.tgl_aktif,'')::date,
            t.trx_prev, t.rev_prev, t.trx_curr, t.rev_curr, t.dev_trx, t.dev_rev, NOW()
     FROM unnest(
       $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::bigint[],
@@ -59,8 +61,8 @@ async function upsertChunk(bulan, rows) {
     str(o => o.tipe_outlet || null),
     int(o => o.balance),
     str(o => o.nama_kota || null),
-    str(o => o.tanggal_registrasi || null),
-    str(o => o.tanggal_aktifasi || null),
+    rows.map(o => toIsoDate(o.tanggal_registrasi)),
+    rows.map(o => toIsoDate(o.tanggal_aktifasi)),
     int(o => o.trx_prev),
     flt(o => o.rev_prev),
     int(o => o.trx_curr),
