@@ -299,6 +299,12 @@ export const getAsdpOutlets = () =>
   withCache('asdp-outlets', () =>
     axios.get(`${API_URL}/api/warroom/asdp/outlets`, { headers: authHeaders() }).then(r => r.data));
 
+/* WAR-ROOM — PA ASDP (multi-bulan) */
+export const getPaAsdpAnalytics = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/pa-asdp/analytics`, { params, headers: authHeaders() }).then(r => r.data);
+export const getPaAsdpOutlets = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/pa-asdp/outlets`, { params, headers: authHeaders() }).then(r => r.data);
+
 /* WAR-ROOM — Territory BUMDes */
 export const getBumdesAnalytics = () =>
   withCache('bumdes-analytics', () =>

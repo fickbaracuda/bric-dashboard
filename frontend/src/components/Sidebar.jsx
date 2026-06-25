@@ -169,6 +169,7 @@ export default function Sidebar({ onClose }) {
   const isWRPAProduk   = location.pathname === '/war-room/pa-produk';
   const isWRDMFPPath   = location.pathname === '/war-room/dm-fastpay';
   const isWRAsdpPath   = location.pathname === '/war-room/asdp';
+  const isWRPaAsdpPath = location.pathname === '/war-room/pa-asdp';
   const isWRBumdesPath = location.pathname === '/war-room/bumdes';
   const isWRLpdPath    = location.pathname === '/war-room/lpd';
   const isWRMgmPath    = location.pathname === '/war-room/mgm-pa';
@@ -176,7 +177,7 @@ export default function Sidebar({ onClose }) {
 
   const [winmeOpen, setWinmeOpen] = useState(isWinmePath || isWinmeTimPath || isWRIQPath || isWRIQTRXPath || isWRIQRawPath || isWRQrisPath || isWRTrxOutPath || isDataRawPath);
   const [timOpen,   setTimOpen]   = useState(isWinmeTimPath);
-  const [paOpen,    setPAOpen]    = useState(isPABasePath || isPATimPath || isWREkspPath || isWRFPPath || isWRFarmPath || isWRPAProduk || isWRDMFPPath || isWRAsdpPath || isWRBumdesPath || isWRLpdPath || isWRMgmPath || isWRHunterPath);
+  const [paOpen,    setPAOpen]    = useState(isPABasePath || isPATimPath || isWREkspPath || isWRFPPath || isWRFarmPath || isWRPAProduk || isWRDMFPPath || isWRAsdpPath || isWRPaAsdpPath || isWRBumdesPath || isWRLpdPath || isWRMgmPath || isWRHunterPath);
   const [paTimOpen, setPATimOpen] = useState(isPATimPath);
   const [ddOpen,    setDDOpen]    = useState(isDDPath || isSCTimPath || isWRSCPath);
   const [scTimOpen, setSCTimOpen] = useState(isSCTimPath);
@@ -184,7 +185,7 @@ export default function Sidebar({ onClose }) {
   useEffect(() => {
     if (isWinmePath || isWinmeTimPath || isWRIQPath || isWRIQTRXPath || isDataRawPath || isWRTrxOutPath) setWinmeOpen(true);
     if (isWinmeTimPath) setTimOpen(true);
-    if (isPABasePath || isPATimPath || isWREkspPath || isWRFPPath || isWRFarmPath || isWRPAProduk || isWRDMFPPath || isWRAsdpPath || isWRBumdesPath || isWRLpdPath || isWRMgmPath || isWRHunterPath) setPAOpen(true);
+    if (isPABasePath || isPATimPath || isWREkspPath || isWRFPPath || isWRFarmPath || isWRPAProduk || isWRDMFPPath || isWRAsdpPath || isWRPaAsdpPath || isWRBumdesPath || isWRLpdPath || isWRMgmPath || isWRHunterPath) setPAOpen(true);
     if (isPATimPath) setPATimOpen(true);
     if (isDDPath || isSCTimPath || isWRSCPath) setDDOpen(true);
     if (isSCTimPath) setSCTimOpen(true);
@@ -587,6 +588,17 @@ export default function Sidebar({ onClose }) {
                 <i className="ti ti-ship" style={{ color: '#0EA5E9' }} aria-hidden="true" />
                 <span>Territory ASDP</span>
                 <span className="sidebar-warroom-badge" style={{ background: '#0EA5E9' }}>ASDP</span>
+              </NavLink>
+              <NavLink
+                to="/war-room/pa-asdp"
+                onClick={onClose}
+                className={({ isActive }) =>
+                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                }
+              >
+                <i className="ti ti-ship" style={{ color: '#3B82F6' }} aria-hidden="true" />
+                <span>ASDP</span>
+                <span className="sidebar-warroom-badge" style={{ background: '#3B82F6' }}>PA</span>
               </NavLink>
               <NavLink
                 to="/war-room/bumdes"
