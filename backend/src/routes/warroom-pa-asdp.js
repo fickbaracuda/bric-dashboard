@@ -2,26 +2,13 @@ const pool = require('../db');
 
 const SYNC_TOKEN = 'bric2026bimasaktisecret';
 
-/* ── SYNC ── */
-async function syncHandler(req, res) {
-  const token = req.headers['x-sync-token'] || req.body?.token;
-  if (token !== SYNC_TOKEN) return res.status(401).json({ error: 'Unauthorized' });
+const CHUNK = 500; // maks 500 baris per query (500×16 params = 8000, aman < 65535)
 
-  const { bulan, outlets } = req.body;
-  if (!bulan || !Array.isArray(outlets) || outlets.length === 0) {
-    return res.status(400).json({ error: 'bulan dan outlets array required' });
-  }
-  if (!/^\d{4}-\d{2}$/.test(bulan)) {
-    return res.status(400).json({ error: 'bulan harus format YYYY-MM' });
-  }
-
-  const valid = outlets.filter(o => o.id_outlet);
-  if (!valid.length) return res.json({ ok: true, count: 0 });
-
-  const str = f => valid.map(o => { const v = f(o); return v != null ? String(v).trim() : null; });
-  const int = f => valid.map(o => parseInt(f(o)) || 0);
-  const flt = f => valid.map(o => parseFloat(f(o)) || 0);
-
+async function upsertChunk(bulan, rows) {
+  if (!rows.length) return;
+  const str = f => rows.map(o => { const v = f(o); return v != null ? String(v).trim() : null; });
+  const int = f => rows.map(o => parseInt(f(o))   || 0);
+  const flt = f => rows.map(o => parseFloat(f(o)) || 0);
   await pool.query(`
     INSERT INTO warroom_pa_asdp_outlet
       (bulan, id_outlet, upline, nama_pemilik, notelp_pemilik, tipe_outlet, balance,
@@ -71,8 +58,37 @@ async function syncHandler(req, res) {
     int(o => o.dev_trx),
     flt(o => o.dev_rev),
   ]);
+}
 
-  res.json({ ok: true, count: valid.length, bulan });
+/* ── SYNC ── */
+async function syncHandler(req, res) {
+  const token = req.headers['x-sync-token'] || req.body?.token;
+  if (token !== SYNC_TOKEN) return res.status(401).json({ error: 'Unauthorized' });
+
+  const { bulan, outlets } = req.body;
+  if (!bulan || !Array.isArray(outlets) || outlets.length === 0) {
+    return res.status(400).json({ error: 'bulan dan outlets array required' });
+  }
+  if (!/^\d{4}-\d{2}$/.test(bulan)) {
+    return res.status(400).json({ error: 'bulan harus format YYYY-MM' });
+  }
+
+  const valid = outlets.filter(o => o.id_outlet);
+  if (!valid.length) return res.json({ ok: true, count: 0 });
+
+  // Respond langsung agar Apps Script tidak timeout; DB write jalan di background
+  res.json({ ok: true, count: valid.length, bulan, chunks: Math.ceil(valid.length / CHUNK) });
+
+  setImmediate(async () => {
+    try {
+      for (let i = 0; i < valid.length; i += CHUNK) {
+        await upsertChunk(bulan, valid.slice(i, i + CHUNK));
+      }
+      console.log(`[pa-asdp sync] done: ${valid.length} outlets, bulan ${bulan}`);
+    } catch (err) {
+      console.error(`[pa-asdp sync] error bulan ${bulan}:`, err.message);
+    }
+  });
 }
 
 /* ── ANALYTICS ── */
