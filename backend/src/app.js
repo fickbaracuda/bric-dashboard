@@ -23,6 +23,7 @@ const dmFastpayRoutes     = require('./routes/warroom-dm-fastpay');
 const iqTrxRoutes         = require('./routes/warroom-instaqris-trx');
 const asdpRoutes          = require('./routes/warroom-asdp');
 const paAsdpRoutes        = require('./routes/warroom-pa-asdp');
+const paLpdRoutes         = require('./routes/warroom-pa-lpd');
 const bumdesRoutes        = require('./routes/warroom-bumdes');
 const lpdRoutes           = require('./routes/warroom-lpd');
 const dataRawRoutes       = require('./routes/data-raw');
@@ -106,6 +107,9 @@ app.get('/api/warroom/asdp/outlets',     requireAuth, asdpRoutes.outletsHandler)
 app.post('/api/warroom/pa-asdp/sync',    paAsdpRoutes.syncHandler);          // token auth, no JWT
 app.get('/api/warroom/pa-asdp/analytics',requireAuth, paAsdpRoutes.analyticsHandler);
 app.get('/api/warroom/pa-asdp/outlets',  requireAuth, paAsdpRoutes.outletsHandler);
+app.post('/api/warroom/pa-lpd/sync',     paLpdRoutes.syncHandler);            // token auth, no JWT
+app.get('/api/warroom/pa-lpd/analytics', requireAuth, paLpdRoutes.analyticsHandler);
+app.get('/api/warroom/pa-lpd/outlets',   requireAuth, paLpdRoutes.outletsHandler);
 app.post('/api/warroom/bumdes/sync',     bumdesRoutes.syncHandler);          // token auth, no JWT
 app.get('/api/warroom/bumdes/analytics', requireAuth, bumdesRoutes.analyticsHandler);
 app.get('/api/warroom/bumdes/outlets',   requireAuth, bumdesRoutes.outletsHandler);

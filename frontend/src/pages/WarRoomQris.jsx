@@ -324,12 +324,12 @@ function RingkasanTab({ data, loading, bulan }) {
           sub={<span style={{ color: GREEN, fontSize: 11, fontWeight: 600 }}>{fmtPct(summary?.terbit_rate)} dari total</span>} />
         <KPICard label="Perbaikan Data 🔧" value={fmtNum(summary?.perbaikan)} color={AMBER}
           sub={<span style={{ color: AMBER, fontSize: 11, fontWeight: 600 }}>{fmtPct(summary?.perbaikan_rate)} dari total</span>} />
+        <KPICard label="Rejected ❌" value={fmtNum(summary?.rejected)} color={RED}
+          sub={<span style={{ color: RED, fontSize: 11, fontWeight: 600 }}>{fmtPct(summary?.rejected > 0 && summary?.total > 0 ? +((summary.rejected/summary.total)*100).toFixed(1) : 0)} dari total</span>} />
         <KPICard label="Belum Terbit ⏳" value={fmtNum(summary?.belum)} color={BLUE}
           sub={<span style={{ color: BLUE, fontSize: 11 }}>{fmtPct(summary?.belum_rate)} dari total</span>} />
         <KPICard label="Aktivasi (Terbit→TRX)" value={fmtPct(summary?.activation_rate)} color={summary?.activation_rate >= 70 ? GREEN : summary?.activation_rate >= 50 ? AMBER : RED}
           sub={`${fmtNum(summary?.terbit_with_trx)} dari ${fmtNum(summary?.terbit_outlets)} outlet bertransaksi`} />
-        <KPICard label="Kecepatan Penerbitan" value={`${fmtNum(summary?.avg_daily_terbit)}/hari`} color={ACCENT}
-          sub={`Puncak: ${fmtNum(summary?.peak_daily_terbit)} QRIS (${summary?.peak_date?.slice(5) || '-'})`} />
       </div>
 
       <div className="wri-2col" style={{ marginTop: 16 }}>
@@ -388,9 +388,16 @@ function PenerbitanHarianTab({ data, loading, bulan }) {
           <div className="wri-kpi-sub">selama {terbitOnly.length} hari data</div>
         </div>
         <div className="wri-kpi-card">
-          <div className="wri-kpi-label">Rata-rata per Hari</div>
+          <div className="wri-kpi-label">Rata-rata Terbit/Hari</div>
           <div className="wri-kpi-value" style={{ color: ACCENT }}>{fmtNum(summary?.avg_daily_terbit)}</div>
-          <div className="wri-kpi-sub">QRIS Terbit</div>
+          <div className="wri-kpi-sub">QRIS terbit per hari aktif</div>
+        </div>
+        <div className="wri-kpi-card">
+          <div className="wri-kpi-label">Lama Perbaikan Data</div>
+          <div className="wri-kpi-value" style={{ color: summary?.avg_days_perbaikan == null ? GRAY : summary.avg_days_perbaikan <= 3 ? GREEN : summary.avg_days_perbaikan <= 7 ? AMBER : RED }}>
+            {summary?.avg_days_perbaikan != null ? `${fmtNum(summary.avg_days_perbaikan)} hari` : '–'}
+          </div>
+          <div className="wri-kpi-sub">rata-rata waktu memperbaiki data (dari aktivasi)</div>
         </div>
         <div className="wri-kpi-card">
           <div className="wri-kpi-label">Puncak Penerbitan</div>
