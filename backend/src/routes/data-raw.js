@@ -893,13 +893,13 @@ async function affiliateAnalyticsHandler(req, res) {
     const [uplineRes, summaryRes] = await Promise.all([
       pool.query(`
         WITH
+        -- Status QRIS terbaru per outlet dari SEMUA bulan (bukan hanya bulan terakhir)
         qris_latest AS (
           SELECT DISTINCT ON (row_data->>'id_outlet')
             row_data->>'id_outlet' AS id_outlet,
             row_data->>'status' AS qris_status
           FROM iq_raw_qris
-          WHERE bulan = (SELECT MAX(bulan) FROM iq_raw_qris)
-          ORDER BY row_data->>'id_outlet', row_data->>'tanggal' DESC
+          ORDER BY row_data->>'id_outlet', bulan DESC, row_data->>'tanggal' DESC
         ),
         trx_by_outlet AS (
           SELECT
@@ -919,8 +919,9 @@ async function affiliateAnalyticsHandler(req, res) {
           FROM iq_raw_affiliate
           WHERE bulan = $1 AND row_data ? 'ID Upline / ID Outlet'
         ),
+        -- Deduplicate: satu outlet muncul 1x saja (ambil yang paling baru berdasarkan bulan)
         outlets AS (
-          SELECT
+          SELECT DISTINCT ON (COALESCE(NULLIF(row_data->>'ID Outlet',''), NULLIF(row_data->>'D Outlet','')))
             COALESCE(NULLIF(row_data->>'ID Outlet',''), NULLIF(row_data->>'D Outlet','')) AS id_outlet,
             NULLIF(row_data->>'ID Upline','') AS id_upline,
             NULLIF(row_data->>'Tanggal Aktivasi','') AS tgl_akt
@@ -928,6 +929,7 @@ async function affiliateAnalyticsHandler(req, res) {
           WHERE bulan = $1
             AND COALESCE(NULLIF(row_data->>'ID Outlet',''), NULLIF(row_data->>'D Outlet','')) IS NOT NULL
             AND NULLIF(row_data->>'ID Upline','') IS NOT NULL
+          ORDER BY COALESCE(NULLIF(row_data->>'ID Outlet',''), NULLIF(row_data->>'D Outlet','')), id DESC
         )
         SELECT
           o.id_upline,
@@ -957,7 +959,7 @@ async function affiliateAnalyticsHandler(req, res) {
       pool.query(`
         SELECT
           COUNT(DISTINCT NULLIF(row_data->>'ID Upline','')) AS total_upline,
-          COUNT(*) AS total_downline
+          COUNT(DISTINCT COALESCE(NULLIF(row_data->>'ID Outlet',''), NULLIF(row_data->>'D Outlet',''))) AS total_downline
         FROM iq_raw_outlet
         WHERE bulan = $1
           AND NULLIF(row_data->>'ID Upline','') IS NOT NULL
@@ -1039,8 +1041,7 @@ async function affiliateDownlinesHandler(req, res) {
           row_data->>'status'    AS qris_status,
           COALESCE(NULLIF(row_data->>'nmid',''), '-') AS nmid
         FROM iq_raw_qris
-        WHERE bulan = (SELECT MAX(bulan) FROM iq_raw_qris)
-        ORDER BY row_data->>'id_outlet', row_data->>'tanggal' DESC
+        ORDER BY row_data->>'id_outlet', bulan DESC, row_data->>'tanggal' DESC
       ),
       trx_agg AS (
         SELECT
