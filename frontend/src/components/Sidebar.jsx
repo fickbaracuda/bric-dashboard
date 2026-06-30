@@ -152,11 +152,10 @@ export default function Sidebar({ onClose }) {
 
   const isWinmePath    = location.pathname === '/winme';
   const isWinmeTimPath = location.pathname === '/scoreboard-tim'    || isWinmeMember;
-  const isWRIQPath     = location.pathname === '/war-room/instaqris';
-  const isWRIQTRXPath  = location.pathname === '/war-room/instaqris-trx';
   const isWRIQRawPath  = location.pathname === '/war-room/iq-raw';
   const isWRQrisPath   = location.pathname === '/war-room/penerbitan-qris';
   const isWRTrxOutPath = location.pathname === '/war-room/trx-outlet';
+  const isWRAffPath    = location.pathname === '/war-room/affiliate-analitik';
   const isDataRawPath  = location.pathname.startsWith('/data-raw');
   const isPABasePath   = location.pathname === '/payment-agent';
   const isPATimPath    = location.pathname === '/scoreboard-tim-pa' || isPAMember;
@@ -174,7 +173,7 @@ export default function Sidebar({ onClose }) {
   const isWRMgmPath    = location.pathname === '/war-room/mgm-pa';
   const isWRHunterPath = location.pathname === '/war-room/hunter';
 
-  const [winmeOpen, setWinmeOpen] = useState(isWinmePath || isWinmeTimPath || isWRIQPath || isWRIQTRXPath || isWRIQRawPath || isWRQrisPath || isWRTrxOutPath || isDataRawPath);
+  const [winmeOpen, setWinmeOpen] = useState(isWinmePath || isWinmeTimPath || isWRIQRawPath || isWRQrisPath || isWRTrxOutPath || isWRAffPath || isDataRawPath);
   const [timOpen,   setTimOpen]   = useState(isWinmeTimPath);
   const [paOpen,    setPAOpen]    = useState(isPABasePath || isPATimPath || isWREkspPath || isWRFPPath || isWRFarmPath || isWRPAProduk || isWRDMFPPath || isWRPaAsdpPath || isWRPaLpdPath || isWRBumdesPath || isWRMgmPath || isWRHunterPath);
   const [paTimOpen, setPATimOpen] = useState(isPATimPath);
@@ -182,7 +181,7 @@ export default function Sidebar({ onClose }) {
   const [scTimOpen, setSCTimOpen] = useState(isSCTimPath);
 
   useEffect(() => {
-    if (isWinmePath || isWinmeTimPath || isWRIQPath || isWRIQTRXPath || isDataRawPath || isWRTrxOutPath) setWinmeOpen(true);
+    if (isWinmePath || isWinmeTimPath || isWRIQRawPath || isDataRawPath || isWRTrxOutPath || isWRAffPath) setWinmeOpen(true);
     if (isWinmeTimPath) setTimOpen(true);
     if (isPABasePath || isPATimPath || isWREkspPath || isWRFPPath || isWRFarmPath || isWRPAProduk || isWRDMFPPath || isWRPaAsdpPath || isWRPaLpdPath || isWRBumdesPath || isWRMgmPath || isWRHunterPath) setPAOpen(true);
     if (isPATimPath) setPATimOpen(true);
@@ -333,28 +332,6 @@ export default function Sidebar({ onClose }) {
                 War Room
               </div>
               <NavLink
-                to="/war-room/instaqris"
-                onClick={onClose}
-                className={({ isActive }) =>
-                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
-                }
-              >
-                <i className="ti ti-chart-pie" style={{ color: '#E24B4A' }} aria-hidden="true" />
-                <span>Instaqris - Segment</span>
-                <span className="sidebar-warroom-badge" style={{ background: '#E24B4A' }}>SEG</span>
-              </NavLink>
-              <NavLink
-                to="/war-room/instaqris-trx"
-                onClick={onClose}
-                className={({ isActive }) =>
-                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
-                }
-              >
-                <i className="ti ti-qrcode" style={{ color: '#7F77DD' }} aria-hidden="true" />
-                <span>Instaqris - TRX</span>
-                <span className="sidebar-warroom-badge" style={{ background: '#7F77DD' }}>TRX</span>
-              </NavLink>
-              <NavLink
                 to="/war-room/iq-raw"
                 onClick={onClose}
                 className={({ isActive }) =>
@@ -386,6 +363,17 @@ export default function Sidebar({ onClose }) {
                 <i className="ti ti-building-store" style={{ color: '#2563EB' }} aria-hidden="true" />
                 <span>Transaksi by Outlet</span>
                 <span className="sidebar-warroom-badge" style={{ background: '#2563EB' }}>OUT</span>
+              </NavLink>
+              <NavLink
+                to="/war-room/affiliate-analitik"
+                onClick={onClose}
+                className={({ isActive }) =>
+                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                }
+              >
+                <i className="ti ti-users-group" style={{ color: '#0891B2' }} aria-hidden="true" />
+                <span>Affiliate Analitik</span>
+                <span className="sidebar-warroom-badge" style={{ background: '#0891B2' }}>AFF</span>
               </NavLink>
 
               {/* ── Data Raw ── */}
@@ -607,8 +595,8 @@ export default function Sidebar({ onClose }) {
                 }
               >
                 <i className="ti ti-building-community" style={{ color: '#0D9488' }} aria-hidden="true" />
-                <span>Territory Bumdes</span>
-                <span className="sidebar-warroom-badge" style={{ background: '#0D9488' }}>BUMDes</span>
+                <span>BUMDes</span>
+                <span className="sidebar-warroom-badge" style={{ background: '#0D9488' }}>PA</span>
               </NavLink>
 
             </div>

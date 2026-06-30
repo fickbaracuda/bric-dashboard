@@ -64,8 +64,8 @@ function makeListHandler(table) {
 
     const params = [];
     const conditions = [];
-    // Kolom tanggal bisa 'Tanggal' (kapital, di iq_raw_trx) atau 'tanggal' (lowercase)
-    const TGL = `COALESCE(row_data->>'Tanggal', row_data->>'tanggal')`;
+    // Kolom tanggal: 'Tanggal' (trx), 'tanggal' (qris), 'Tanggal Registrasi' (outlet)
+    const TGL = `COALESCE(NULLIF(row_data->>'Tanggal',''), NULLIF(row_data->>'tanggal',''), NULLIF(row_data->>'Tanggal Registrasi',''))`;
     if (bulan) { params.push(bulan); conditions.push(`bulan=$${params.length}`); }
     if (q)     { params.push(`%${q.toUpperCase()}%`); conditions.push(`UPPER(row_data::text) LIKE $${params.length}`); }
     if (tgl_dari && tgl_sampai && tgl_dari <= tgl_sampai) {
@@ -74,24 +74,30 @@ function makeListHandler(table) {
     }
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
 
-    // Sort — sort_col diparameterisasi aman via ->>, direction divalidasi
+    // Sort — sort_col TIDAK masuk ke params WHERE (params dipakai bersama countRes/statRes)
+    // dataParams = [...params, sort_col?, limit, offset] — hanya untuk query SELECT data
     const safeDir = sort_dir === 'desc' ? 'DESC' : 'ASC';
     let orderBy;
+    let dataParams;
     if (sort_col) {
-      params.push(sort_col);
-      orderBy = `(row_data->>$${params.length}) ${safeDir} NULLS LAST`;
+      orderBy  = `(row_data->>$${params.length + 1}) ${safeDir} NULLS LAST`;
+      dataParams = [...params, sort_col, limit, offset];
     } else if (tgl_dari || tgl_sampai) {
-      orderBy = `(${TGL}) ASC NULLS LAST`;
+      orderBy  = `(${TGL}) ASC NULLS LAST`;
+      dataParams = [...params, limit, offset];
     } else {
-      orderBy = 'bulan DESC, id ASC';
+      orderBy  = 'bulan DESC, id ASC';
+      dataParams = [...params, limit, offset];
     }
+    const limitIdx  = dataParams.length - 1;
+    const offsetIdx = dataParams.length;
 
     try {
       const [dataRes, countRes, bulanRes, statRes] = await Promise.all([
         pool.query(
           `SELECT row_data FROM ${table} ${where} ORDER BY ${orderBy}
-           LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
-          [...params, limit, offset]
+           LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+          dataParams
         ),
         pool.query(`SELECT COUNT(*) AS total FROM ${table} ${where}`, params),
         pool.query(
@@ -396,6 +402,15 @@ const STATUS_COLOR = {
   'Rejected':       '#EF4444',
 };
 
+function parseAnyDate(s) {
+  if (!s) return null;
+  const str = String(s).trim().slice(0, 10);
+  const m = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) return new Date(`${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return new Date(str);
+  return null;
+}
+
 async function qrisAnalyticsHandler(req, res) {
   let { bulan } = req.query;
   try {
@@ -406,35 +421,52 @@ async function qrisAnalyticsHandler(req, res) {
     if (!bulanList.length) return res.json({ empty: true, bulan_list: [] });
     if (!bulan || !bulanList.includes(bulan)) bulan = bulanList[0];
 
-    const [statusRes, byOutletRes, dailyRes, catalog, trxRes] = await Promise.all([
-      // Status distribution
+    // Outlet yang sudah aktivasi = yang diajukan ke PTEN untuk penerbitan QRIS
+    // (registrasi saja belum diajukan, yang diajukan adalah yang sudah aktivasi instant/fleksibel)
+    const activatedRes = await pool.query(`
+      SELECT DISTINCT ON (COALESCE(NULLIF(row_data->>'ID Outlet',''), NULLIF(row_data->>'D Outlet','')))
+        COALESCE(NULLIF(row_data->>'ID Outlet',''), NULLIF(row_data->>'D Outlet','')) AS id_outlet,
+        NULLIF(row_data->>'Tanggal Aktivasi', '') AS tgl_aktivasi
+      FROM iq_raw_outlet
+      WHERE COALESCE(NULLIF(row_data->>'ID Outlet',''), NULLIF(row_data->>'D Outlet','')) IS NOT NULL
+        AND NULLIF(row_data->>'Tanggal Aktivasi', '') IS NOT NULL
+      ORDER BY COALESCE(NULLIF(row_data->>'ID Outlet',''), NULLIF(row_data->>'D Outlet','')), bulan DESC
+    `);
+    const activationMap = new Map(activatedRes.rows.map(r => [r.id_outlet, r.tgl_aktivasi]));
+    const activatedIds  = [...activationMap.keys()];
+
+    const [statusRes, byOutletRes, dailyRes, catalog, trxRes, perbaikanDaysRes] = await Promise.all([
+      // Status distribution — hanya outlet yang sudah aktivasi
       pool.query(`
         SELECT COALESCE(NULLIF(row_data->>'status',''), 'Tidak Diketahui') AS status,
                COUNT(*) AS cnt
         FROM iq_raw_qris WHERE bulan=$1
+          AND row_data->>'id_outlet' = ANY($2::text[])
         GROUP BY status ORDER BY cnt DESC
-      `, [bulan]),
+      `, [bulan, activatedIds]),
 
-      // Per outlet + status (for segmentation)
+      // Per outlet + status (for segmentation) — hanya aktivasi
       pool.query(`
         SELECT row_data->>'id_outlet' AS id_outlet,
                COALESCE(NULLIF(row_data->>'status',''), 'Tidak Diketahui') AS status,
                COUNT(*) AS cnt
         FROM iq_raw_qris
         WHERE bulan=$1 AND row_data->>'id_outlet' IS NOT NULL
+          AND row_data->>'id_outlet' = ANY($2::text[])
         GROUP BY row_data->>'id_outlet', status
-      `, [bulan]),
+      `, [bulan, activatedIds]),
 
-      // Daily trend
+      // Daily trend — hanya aktivasi
       pool.query(`
         SELECT row_data->>'tanggal' AS tanggal,
                COALESCE(NULLIF(row_data->>'status',''), 'Tidak Diketahui') AS status,
                COUNT(*) AS cnt
         FROM iq_raw_qris
         WHERE bulan=$1 AND row_data->>'tanggal' IS NOT NULL
+          AND row_data->>'id_outlet' = ANY($2::text[])
         GROUP BY row_data->>'tanggal', status
         ORDER BY tanggal
-      `, [bulan]),
+      `, [bulan, activatedIds]),
 
       // Outlet catalog (all months, most recent per outlet)
       getOutletCatalog(),
@@ -444,7 +476,28 @@ async function qrisAnalyticsHandler(req, res) {
         SELECT DISTINCT row_data->>'ID Outlet' AS id_outlet
         FROM iq_raw_trx WHERE bulan=$1 AND row_data->>'ID Outlet' IS NOT NULL
       `, [bulan]),
+
+      // Lama perbaikan data: tanggal perbaikan terakhir - tanggal aktivasi per outlet
+      pool.query(`
+        SELECT ROUND(AVG(diff_days)) AS avg_days_perbaikan FROM (
+          SELECT MAX(q.row_data->>'tanggal')::date
+               - MIN((o.row_data->>'Tanggal Aktivasi')::date) AS diff_days
+          FROM iq_raw_qris q
+          JOIN iq_raw_outlet o
+            ON q.row_data->>'id_outlet' = COALESCE(NULLIF(o.row_data->>'ID Outlet',''), NULLIF(o.row_data->>'D Outlet',''))
+          WHERE q.bulan=$1
+            AND COALESCE(NULLIF(q.row_data->>'status',''), '') = 'Perbaikan Data'
+            AND q.row_data->>'id_outlet' = ANY($2::text[])
+            AND NULLIF(o.row_data->>'Tanggal Aktivasi','') IS NOT NULL
+          GROUP BY q.row_data->>'id_outlet'
+          HAVING MAX(q.row_data->>'tanggal')::date >= MIN((o.row_data->>'Tanggal Aktivasi')::date)
+        ) sub
+      `, [bulan, activatedIds]),
     ]);
+
+    const avgDaysPerbaikan = perbaikanDaysRes.rows[0]?.avg_days_perbaikan != null
+      ? Math.round(+perbaikanDaysRes.rows[0].avg_days_perbaikan)
+      : null;
 
     // ── Status totals ───────────────────────────────────────────────────────
     const statusMap = {};
@@ -560,6 +613,8 @@ async function qrisAnalyticsHandler(req, res) {
         avg_daily_terbit:  avgTerbit,
         peak_daily_terbit: peakTerbit,
         peak_date:         peakDate,
+        avg_days_perbaikan: avgDaysPerbaikan,    // rata-rata hari outlet dalam Perbaikan Data sejak aktivasi
+        total_activated:    activatedIds.length,
       },
       by_status,
       by_kategori:  by_kategori.slice(0, 30),
@@ -826,11 +881,213 @@ async function outletAnalyticsHandler(req, res) {
   }
 }
 
+// ── Affiliate Analytics ───────────────────────────────────────────────────
+async function affiliateAnalyticsHandler(req, res) {
+  let { bulan } = req.query;
+  try {
+    const blRes = await pool.query(`SELECT DISTINCT bulan FROM iq_raw_outlet ORDER BY bulan DESC`);
+    const bulanList = blRes.rows.map(r => r.bulan);
+    if (!bulanList.length) return res.json({ empty: true, bulan_list: [] });
+    if (!bulan || !bulanList.includes(bulan)) bulan = bulanList[0];
+
+    const [uplineRes, summaryRes] = await Promise.all([
+      pool.query(`
+        WITH
+        qris_latest AS (
+          SELECT DISTINCT ON (row_data->>'id_outlet')
+            row_data->>'id_outlet' AS id_outlet,
+            row_data->>'status' AS qris_status
+          FROM iq_raw_qris
+          WHERE bulan = (SELECT MAX(bulan) FROM iq_raw_qris)
+          ORDER BY row_data->>'id_outlet', row_data->>'tanggal' DESC
+        ),
+        trx_by_outlet AS (
+          SELECT
+            row_data->>'ID Outlet' AS id_outlet,
+            SUM(COALESCE(NULLIF(row_data->>'Jumlah Transaksi','')::numeric, 0)) AS total_trx,
+            SUM(COALESCE(NULLIF(row_data->>'Margin','')::numeric, 0))           AS total_margin,
+            SUM(COALESCE(NULLIF(row_data->>'Jumlah Omzet','')::numeric, 0))     AS total_omzet
+          FROM iq_raw_trx WHERE bulan = $1
+          GROUP BY row_data->>'ID Outlet'
+        ),
+        aff_info AS (
+          SELECT
+            (row_data->>'ID Upline / ID Outlet')::text AS id_upline,
+            row_data->>'Nama Pemilik'                  AS nama_pemilik,
+            row_data->>'No. HP'                        AS no_hp,
+            COALESCE(NULLIF(row_data->>'Komisi','')::numeric, 0) AS komisi
+          FROM iq_raw_affiliate
+          WHERE bulan = $1 AND row_data ? 'ID Upline / ID Outlet'
+        ),
+        outlets AS (
+          SELECT
+            COALESCE(NULLIF(row_data->>'ID Outlet',''), NULLIF(row_data->>'D Outlet','')) AS id_outlet,
+            NULLIF(row_data->>'ID Upline','') AS id_upline,
+            NULLIF(row_data->>'Tanggal Aktivasi','') AS tgl_akt
+          FROM iq_raw_outlet
+          WHERE bulan = $1
+            AND COALESCE(NULLIF(row_data->>'ID Outlet',''), NULLIF(row_data->>'D Outlet','')) IS NOT NULL
+            AND NULLIF(row_data->>'ID Upline','') IS NOT NULL
+        )
+        SELECT
+          o.id_upline,
+          COALESCE(MAX(a.nama_pemilik), o.id_upline)    AS nama_pemilik,
+          MAX(a.no_hp)                                   AS no_hp,
+          COALESCE(MAX(a.komisi), 0)                     AS komisi,
+          COUNT(*)                                        AS total_downline,
+          COUNT(*) FILTER (WHERE o.tgl_akt IS NULL)      AS registrasi_only,
+          COUNT(*) FILTER (WHERE o.tgl_akt IS NOT NULL)  AS sudah_aktivasi,
+          COUNT(*) FILTER (WHERE COALESCE(t.total_trx,0)>0) AS dengan_trx,
+          COUNT(*) FILTER (WHERE q.qris_status='Terbit')        AS qris_terbit,
+          COUNT(*) FILTER (WHERE q.qris_status='Belum Terbit')  AS qris_belum_terbit,
+          COUNT(*) FILTER (WHERE q.qris_status='Perbaikan Data')AS qris_perbaikan,
+          COUNT(*) FILTER (WHERE q.qris_status='Rejected')      AS qris_rejected,
+          COUNT(*) FILTER (WHERE q.id_outlet IS NULL)            AS qris_tidak_diajukan,
+          COALESCE(SUM(t.total_trx),    0)::bigint AS total_trx,
+          COALESCE(SUM(t.total_margin), 0)         AS total_margin,
+          COALESCE(SUM(t.total_omzet),  0)         AS total_omzet
+        FROM outlets o
+        LEFT JOIN qris_latest     q ON o.id_outlet = q.id_outlet
+        LEFT JOIN trx_by_outlet   t ON o.id_outlet = t.id_outlet
+        LEFT JOIN aff_info        a ON o.id_upline  = a.id_upline
+        GROUP BY o.id_upline
+        ORDER BY COUNT(*) DESC
+      `, [bulan]),
+
+      pool.query(`
+        SELECT
+          COUNT(DISTINCT NULLIF(row_data->>'ID Upline','')) AS total_upline,
+          COUNT(*) AS total_downline
+        FROM iq_raw_outlet
+        WHERE bulan = $1
+          AND NULLIF(row_data->>'ID Upline','') IS NOT NULL
+          AND COALESCE(NULLIF(row_data->>'ID Outlet',''), NULLIF(row_data->>'D Outlet','')) IS NOT NULL
+      `, [bulan]),
+    ]);
+
+    const uplines = uplineRes.rows.map(r => {
+      const td = +r.total_downline, sa = +r.sudah_aktivasi, dt = +r.dengan_trx;
+      return {
+        id_upline:            r.id_upline,
+        nama_pemilik:         r.nama_pemilik,
+        no_hp:                r.no_hp,
+        komisi:               +r.komisi || 0,
+        total_downline:       td,
+        registrasi_only:      +r.registrasi_only,
+        sudah_aktivasi:       sa,
+        dengan_trx:           dt,
+        qris_terbit:          +r.qris_terbit,
+        qris_belum_terbit:    +r.qris_belum_terbit,
+        qris_perbaikan:       +r.qris_perbaikan,
+        qris_rejected:        +r.qris_rejected,
+        qris_tidak_diajukan:  +r.qris_tidak_diajukan,
+        total_trx:            +r.total_trx,
+        total_margin:         +r.total_margin,
+        total_omzet:          +r.total_omzet,
+        aktivasi_rate: td > 0 ? +((sa / td) * 100).toFixed(1) : 0,
+        trx_rate:      sa > 0 ? +((dt / sa) * 100).toFixed(1) : 0,
+      };
+    });
+
+    const sm = summaryRes.rows[0] || {};
+    const totalAktivasi  = uplines.reduce((s, u) => s + u.sudah_aktivasi,   0);
+    const totalDgnTrx    = uplines.reduce((s, u) => s + u.dengan_trx,       0);
+    const totalTrx       = uplines.reduce((s, u) => s + u.total_trx,        0);
+    const totalMargin    = uplines.reduce((s, u) => s + u.total_margin,      0);
+    const totalQrisTerbit= uplines.reduce((s, u) => s + u.qris_terbit,      0);
+    const totalQrisBelum = uplines.reduce((s, u) => s + u.qris_belum_terbit,0);
+    const totalQrisPerbaikan = uplines.reduce((s, u) => s + u.qris_perbaikan,0);
+    const td = +sm.total_downline || 0;
+
+    res.json({
+      bulan, bulan_list: bulanList,
+      summary: {
+        total_upline:      +sm.total_upline || 0,
+        total_downline:    td,
+        registrasi_only:   td - totalAktivasi,
+        sudah_aktivasi:    totalAktivasi,
+        dengan_trx:        totalDgnTrx,
+        qris_terbit:       totalQrisTerbit,
+        qris_belum_terbit: totalQrisBelum,
+        qris_perbaikan:    totalQrisPerbaikan,
+        total_trx:         totalTrx,
+        total_margin:      +totalMargin.toFixed(2),
+        aktivasi_rate: td > 0 ? +((totalAktivasi / td) * 100).toFixed(1) : 0,
+        trx_rate: totalAktivasi > 0 ? +((totalDgnTrx / totalAktivasi) * 100).toFixed(1) : 0,
+      },
+      uplines,
+    });
+  } catch (e) {
+    console.error('[affiliate-analytics]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+}
+
+async function affiliateDownlinesHandler(req, res) {
+  let { upline, bulan } = req.query;
+  if (!upline) return res.status(400).json({ error: 'upline wajib' });
+  try {
+    const blRes = await pool.query(`SELECT DISTINCT bulan FROM iq_raw_outlet ORDER BY bulan DESC`);
+    const bulanList = blRes.rows.map(r => r.bulan);
+    if (!bulan || !bulanList.includes(bulan)) bulan = bulanList[0];
+
+    const r = await pool.query(`
+      WITH
+      qris_latest AS (
+        SELECT DISTINCT ON (row_data->>'id_outlet')
+          row_data->>'id_outlet' AS id_outlet,
+          row_data->>'status'    AS qris_status,
+          COALESCE(NULLIF(row_data->>'nmid',''), '-') AS nmid
+        FROM iq_raw_qris
+        WHERE bulan = (SELECT MAX(bulan) FROM iq_raw_qris)
+        ORDER BY row_data->>'id_outlet', row_data->>'tanggal' DESC
+      ),
+      trx_agg AS (
+        SELECT
+          row_data->>'ID Outlet' AS id_outlet,
+          SUM(COALESCE(NULLIF(row_data->>'Jumlah Transaksi','')::numeric, 0)) AS total_trx,
+          SUM(COALESCE(NULLIF(row_data->>'Margin','')::numeric, 0))           AS total_margin,
+          SUM(COALESCE(NULLIF(row_data->>'Jumlah Omzet','')::numeric, 0))     AS total_omzet
+        FROM iq_raw_trx WHERE bulan = $1
+        GROUP BY row_data->>'ID Outlet'
+      )
+      SELECT
+        COALESCE(NULLIF(o.row_data->>'ID Outlet',''), NULLIF(o.row_data->>'D Outlet','')) AS id_outlet,
+        o.row_data->>'Nama Merchant'      AS nama_merchant,
+        o.row_data->>'Kota'               AS kota,
+        o.row_data->>'Nama Paket'         AS nama_paket,
+        o.row_data->>'Nama Kategori'      AS nama_kategori,
+        NULLIF(o.row_data->>'Tanggal Registrasi','') AS tgl_reg,
+        NULLIF(o.row_data->>'Tanggal Aktivasi','')   AS tgl_akt,
+        COALESCE(q.qris_status, '-') AS qris_status,
+        COALESCE(q.nmid, '-')        AS nmid,
+        COALESCE(t.total_trx,    0)::bigint AS total_trx,
+        COALESCE(t.total_margin, 0)         AS total_margin,
+        COALESCE(t.total_omzet,  0)         AS total_omzet
+      FROM iq_raw_outlet o
+      LEFT JOIN qris_latest q ON
+        COALESCE(NULLIF(o.row_data->>'ID Outlet',''), NULLIF(o.row_data->>'D Outlet','')) = q.id_outlet
+      LEFT JOIN trx_agg t ON
+        COALESCE(NULLIF(o.row_data->>'ID Outlet',''), NULLIF(o.row_data->>'D Outlet','')) = t.id_outlet
+      WHERE o.bulan = $1
+        AND NULLIF(o.row_data->>'ID Upline','') = $2
+      ORDER BY COALESCE(t.total_trx, 0) DESC, o.row_data->>'Tanggal Registrasi' DESC
+    `, [bulan, upline]);
+
+    res.json({ bulan, upline, downlines: r.rows });
+  } catch (e) {
+    console.error('[affiliate-downlines]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+}
+
 // ── GET routes ────────────────────────────────────────────────────────────
 router.get('/analytics',         analyticsRawHandler);
 router.get('/trendline',         trendlineRawHandler);
 router.get('/qris-analytics',    qrisAnalyticsHandler);
 router.get('/outlet-analytics',  outletAnalyticsHandler);
+router.get('/affiliate-analytics/downlines', affiliateDownlinesHandler);
+router.get('/affiliate-analytics',           affiliateAnalyticsHandler);
 router.get('/outlet',    makeListHandler(TABLES.outlet));
 router.get('/affiliate', makeListHandler(TABLES.affiliate));
 router.get('/qris',      makeListHandler(TABLES.qris));

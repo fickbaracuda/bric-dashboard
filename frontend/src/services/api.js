@@ -208,6 +208,10 @@ export const getDataRawTrendline = async (days = 30, bulan) => {
 };
 export const getDataRawQrisAnalytics = (params = {}) =>
   axios.get(`${API_URL}/api/data-raw/qris-analytics`, { params, headers: authHeaders() }).then(r => r.data);
+export const getAffiliateAnalytics = (bulan) =>
+  axios.get(`${API_URL}/api/data-raw/affiliate-analytics`, { params: bulan ? { bulan } : {}, headers: authHeaders() }).then(r => r.data);
+export const getAffiliateDownlines = (upline, bulan) =>
+  axios.get(`${API_URL}/api/data-raw/affiliate-analytics/downlines`, { params: { upline, bulan }, headers: authHeaders() }).then(r => r.data);
 
 /* WAR-ROOM — Speedcash */
 export const getSpeedcashData = async (params = {}) => {
@@ -305,13 +309,17 @@ export const getPaAsdpAnalytics = (params = {}) =>
 export const getPaAsdpOutlets = (params = {}) =>
   axios.get(`${API_URL}/api/warroom/pa-asdp/outlets`, { params, headers: authHeaders() }).then(r => r.data);
 
-/* WAR-ROOM — Territory BUMDes */
-export const getBumdesAnalytics = () =>
-  withCache('bumdes-analytics', () =>
-    axios.get(`${API_URL}/api/warroom/bumdes/analytics`, { headers: authHeaders() }).then(r => r.data));
-export const getBumdesOutlets = () =>
-  withCache('bumdes-outlets', () =>
-    axios.get(`${API_URL}/api/warroom/bumdes/outlets`, { headers: authHeaders() }).then(r => r.data));
+/* WAR-ROOM — PA LPD (multi-bulan) */
+export const getPaLpdAnalytics = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/pa-lpd/analytics`, { params, headers: authHeaders() }).then(r => r.data);
+export const getPaLpdOutlets = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/pa-lpd/outlets`, { params, headers: authHeaders() }).then(r => r.data);
+
+/* WAR-ROOM — BUMDes (multi-bulan) */
+export const getBumdesAnalytics = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/bumdes/analytics`, { params, headers: authHeaders() }).then(r => r.data);
+export const getBumdesOutlets = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/bumdes/outlets`, { params, headers: authHeaders() }).then(r => r.data);
 
 /* WAR-ROOM — Territory LPD */
 export const getLpdAnalytics = () =>
