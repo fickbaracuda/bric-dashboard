@@ -26,7 +26,6 @@ import WarRoomHunter from './pages/WarRoomHunter';
 import WarRoomIqRaw      from './pages/WarRoomIqRaw';
 import WarRoomQris        from './pages/WarRoomQris';
 import WarRoomTrxOutlet   from './pages/WarRoomTrxOutlet';
-import WarRoomAffiliateAnalitik from './pages/WarRoomAffiliateAnalitik';
 import ServerMonitor from './pages/ServerMonitor';
 import DataRaw from './pages/DataRaw';
 import ProtectedRoute from './components/ProtectedRoute';
@@ -79,7 +78,6 @@ export default function App() {
         <Route path="/war-room/iq-raw"          element={<ProtectedRoute><WarRoomIqRaw /></ProtectedRoute>} />
         <Route path="/war-room/penerbitan-qris" element={<ProtectedRoute><WarRoomQris /></ProtectedRoute>} />
         <Route path="/war-room/trx-outlet"        element={<ProtectedRoute><WarRoomTrxOutlet /></ProtectedRoute>} />
-        <Route path="/war-room/affiliate-analitik" element={<ProtectedRoute><WarRoomAffiliateAnalitik /></ProtectedRoute>} />
         <Route path="/server-monitor"          element={<ProtectedRoute><ServerMonitor /></ProtectedRoute>} />
         <Route path="/dashboard"  element={<ProtectedRoute><ComingSoon title="Dashboard Pencapaian" /></ProtectedRoute>} />
         <Route path="/tren"       element={<ProtectedRoute><ComingSoon title="Tren Harian" /></ProtectedRoute>} />

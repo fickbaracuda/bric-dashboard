@@ -155,7 +155,6 @@ export default function Sidebar({ onClose }) {
   const isWRIQRawPath  = location.pathname === '/war-room/iq-raw';
   const isWRQrisPath   = location.pathname === '/war-room/penerbitan-qris';
   const isWRTrxOutPath = location.pathname === '/war-room/trx-outlet';
-  const isWRAffPath    = location.pathname === '/war-room/affiliate-analitik';
   const isDataRawPath  = location.pathname.startsWith('/data-raw');
   const isPABasePath   = location.pathname === '/payment-agent';
   const isPATimPath    = location.pathname === '/scoreboard-tim-pa' || isPAMember;
@@ -173,7 +172,7 @@ export default function Sidebar({ onClose }) {
   const isWRMgmPath    = location.pathname === '/war-room/mgm-pa';
   const isWRHunterPath = location.pathname === '/war-room/hunter';
 
-  const [winmeOpen, setWinmeOpen] = useState(isWinmePath || isWinmeTimPath || isWRIQRawPath || isWRQrisPath || isWRTrxOutPath || isWRAffPath || isDataRawPath);
+  const [winmeOpen, setWinmeOpen] = useState(isWinmePath || isWinmeTimPath || isWRIQRawPath || isWRQrisPath || isWRTrxOutPath || isDataRawPath);
   const [timOpen,   setTimOpen]   = useState(isWinmeTimPath);
   const [paOpen,    setPAOpen]    = useState(isPABasePath || isPATimPath || isWREkspPath || isWRFPPath || isWRFarmPath || isWRPAProduk || isWRDMFPPath || isWRPaAsdpPath || isWRPaLpdPath || isWRBumdesPath || isWRMgmPath || isWRHunterPath);
   const [paTimOpen, setPATimOpen] = useState(isPATimPath);
@@ -181,7 +180,7 @@ export default function Sidebar({ onClose }) {
   const [scTimOpen, setSCTimOpen] = useState(isSCTimPath);
 
   useEffect(() => {
-    if (isWinmePath || isWinmeTimPath || isWRIQRawPath || isDataRawPath || isWRTrxOutPath || isWRAffPath) setWinmeOpen(true);
+    if (isWinmePath || isWinmeTimPath || isWRIQRawPath || isDataRawPath || isWRTrxOutPath) setWinmeOpen(true);
     if (isWinmeTimPath) setTimOpen(true);
     if (isPABasePath || isPATimPath || isWREkspPath || isWRFPPath || isWRFarmPath || isWRPAProduk || isWRDMFPPath || isWRPaAsdpPath || isWRPaLpdPath || isWRBumdesPath || isWRMgmPath || isWRHunterPath) setPAOpen(true);
     if (isPATimPath) setPATimOpen(true);
@@ -363,17 +362,6 @@ export default function Sidebar({ onClose }) {
                 <i className="ti ti-building-store" style={{ color: '#2563EB' }} aria-hidden="true" />
                 <span>Transaksi by Outlet</span>
                 <span className="sidebar-warroom-badge" style={{ background: '#2563EB' }}>OUT</span>
-              </NavLink>
-              <NavLink
-                to="/war-room/affiliate-analitik"
-                onClick={onClose}
-                className={({ isActive }) =>
-                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
-                }
-              >
-                <i className="ti ti-users-group" style={{ color: '#0891B2' }} aria-hidden="true" />
-                <span>Affiliate Analitik</span>
-                <span className="sidebar-warroom-badge" style={{ background: '#0891B2' }}>AFF</span>
               </NavLink>
 
               {/* ── Data Raw ── */}
