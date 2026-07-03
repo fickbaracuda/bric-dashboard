@@ -28,6 +28,8 @@ const bumdesRoutes        = require('./routes/warroom-bumdes');
 const lpdRoutes           = require('./routes/warroom-lpd');
 const dataRawRoutes       = require('./routes/data-raw');
 const hunterRoutes        = require('./routes/warroom-hunter');
+const qrisCtrlRoutes      = require('./routes/warroom-qris-control-tower');
+const dmCtRoutes          = require('./routes/warroom-dm-control-tower');
 const systemRoutes        = require('./routes/system');
 const requireAuth         = require('./middleware/auth');
 
@@ -85,6 +87,10 @@ app.post('/api/warroom/segmen/sync',      warroomRoutes.syncHandler);           
 app.post('/api/warroom/speedcash/sync',  warroomRoutes.speedcashSyncHandler);   // token auth, no JWT
 app.post('/api/warroom/ekspedisi/sync',    ekspedisiRoutes.syncHandler);          // token auth, no JWT
 app.get('/api/warroom/ekspedisi/analytics', requireAuth, ekspedisiRoutes.analyticsHandler);
+app.get('/api/warroom/ekspedisi/outlet-status',  requireAuth, ekspedisiRoutes.outletStatusHandler);
+app.post('/api/warroom/ekspedisi/outlet-status', requireAuth, ekspedisiRoutes.updateOutletStatusHandler);
+app.get('/api/warroom/ekspedisi/notes',  requireAuth, ekspedisiRoutes.notesHandler);
+app.post('/api/warroom/ekspedisi/notes', requireAuth, ekspedisiRoutes.addNoteHandler);
 app.post('/api/warroom/fastpay/sync',      fastpayRoutes.syncHandler);            // token auth, no JWT
 app.get('/api/warroom/fastpay/analytics', requireAuth, fastpayRoutes.analyticsHandler);
 app.get('/api/warroom/fastpay/outlets',   requireAuth, fastpayRoutes.outletsHandler);
@@ -118,6 +124,18 @@ app.get('/api/warroom/lpd/analytics',    requireAuth, lpdRoutes.analyticsHandler
 app.get('/api/warroom/lpd/outlets',      requireAuth, lpdRoutes.outletsHandler);
 app.post('/api/warroom/hunter/sync',     hunterRoutes.syncHandler);           // token auth, no JWT
 app.get('/api/warroom/hunter/analytics', requireAuth, hunterRoutes.analyticsHandler);
+app.post('/api/warroom/qris-ctrl/merchant/sync',      qrisCtrlRoutes.syncMerchantHandler);     // token auth, no JWT
+app.post('/api/warroom/qris-ctrl/kyckym/sync',        qrisCtrlRoutes.syncKycHandler);          // token auth, no JWT
+app.post('/api/warroom/qris-ctrl/verifikasi-op/sync', qrisCtrlRoutes.syncVerifikasiOpHandler); // token auth, no JWT
+app.post('/api/warroom/qris-ctrl/pten/sync',          qrisCtrlRoutes.syncPtenHandler);         // token auth, no JWT
+app.get('/api/warroom/qris-ctrl/analytics',           requireAuth, qrisCtrlRoutes.analyticsHandler);
+app.post('/api/warroom/dm-control-tower/register/sync',  dmCtRoutes.registerSyncHandler);  // token auth, no JWT
+app.post('/api/warroom/dm-control-tower/aktivasi/sync',  dmCtRoutes.aktivasiSyncHandler);  // token auth, no JWT
+app.post('/api/warroom/dm-control-tower/trx/sync',       dmCtRoutes.trxSyncHandler);       // token auth, no JWT
+app.get('/api/warroom/dm-control-tower/months',        requireAuth, dmCtRoutes.monthsHandler);
+app.get('/api/warroom/dm-control-tower/analytics',     requireAuth, dmCtRoutes.analyticsHandler);
+app.get('/api/warroom/dm-control-tower/data-quality',  requireAuth, dmCtRoutes.dataQualityHandler);
+app.get('/api/warroom/dm-control-tower/outlets',       requireAuth, dmCtRoutes.outletsHandler);
 app.use('/api/warroom',        requireAuth, warroomRoutes);
 
 app.post('/api/data-raw/outlet/sync',    dataRawRoutes.outletSyncHandler);    // token auth, no JWT

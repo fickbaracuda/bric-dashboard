@@ -155,6 +155,7 @@ export default function Sidebar({ onClose }) {
   const isWRIQRawPath  = location.pathname === '/war-room/iq-raw';
   const isWRQrisPath   = location.pathname === '/war-room/penerbitan-qris';
   const isWRTrxOutPath = location.pathname === '/war-room/trx-outlet';
+  const isWRQrisCtlPath = location.pathname === '/war-room/qris-control-tower';
   const isDataRawPath  = location.pathname.startsWith('/data-raw');
   const isPABasePath   = location.pathname === '/payment-agent';
   const isPATimPath    = location.pathname === '/scoreboard-tim-pa' || isPAMember;
@@ -166,23 +167,24 @@ export default function Sidebar({ onClose }) {
   const isWRFarmPath   = location.pathname === '/war-room/farming';
   const isWRPAProduk   = location.pathname === '/war-room/pa-produk';
   const isWRDMFPPath   = location.pathname === '/war-room/dm-fastpay';
+  const isWRDmCtPath   = location.pathname === '/war-room/dm-control-tower';
   const isWRPaAsdpPath = location.pathname === '/war-room/pa-asdp';
   const isWRPaLpdPath  = location.pathname === '/war-room/pa-lpd';
   const isWRBumdesPath = location.pathname === '/war-room/bumdes';
   const isWRMgmPath    = location.pathname === '/war-room/mgm-pa';
   const isWRHunterPath = location.pathname === '/war-room/hunter';
 
-  const [winmeOpen, setWinmeOpen] = useState(isWinmePath || isWinmeTimPath || isWRIQRawPath || isWRQrisPath || isWRTrxOutPath || isDataRawPath);
+  const [winmeOpen, setWinmeOpen] = useState(isWinmePath || isWinmeTimPath || isWRIQRawPath || isWRQrisPath || isWRTrxOutPath || isWRQrisCtlPath || isDataRawPath);
   const [timOpen,   setTimOpen]   = useState(isWinmeTimPath);
-  const [paOpen,    setPAOpen]    = useState(isPABasePath || isPATimPath || isWREkspPath || isWRFPPath || isWRFarmPath || isWRPAProduk || isWRDMFPPath || isWRPaAsdpPath || isWRPaLpdPath || isWRBumdesPath || isWRMgmPath || isWRHunterPath);
+  const [paOpen,    setPAOpen]    = useState(isPABasePath || isPATimPath || isWREkspPath || isWRFPPath || isWRFarmPath || isWRPAProduk || isWRDMFPPath || isWRDmCtPath || isWRPaAsdpPath || isWRPaLpdPath || isWRBumdesPath || isWRMgmPath || isWRHunterPath);
   const [paTimOpen, setPATimOpen] = useState(isPATimPath);
   const [ddOpen,    setDDOpen]    = useState(isDDPath || isSCTimPath || isWRSCPath);
   const [scTimOpen, setSCTimOpen] = useState(isSCTimPath);
 
   useEffect(() => {
-    if (isWinmePath || isWinmeTimPath || isWRIQRawPath || isDataRawPath || isWRTrxOutPath) setWinmeOpen(true);
+    if (isWinmePath || isWinmeTimPath || isWRIQRawPath || isDataRawPath || isWRTrxOutPath || isWRQrisCtlPath) setWinmeOpen(true);
     if (isWinmeTimPath) setTimOpen(true);
-    if (isPABasePath || isPATimPath || isWREkspPath || isWRFPPath || isWRFarmPath || isWRPAProduk || isWRDMFPPath || isWRPaAsdpPath || isWRPaLpdPath || isWRBumdesPath || isWRMgmPath || isWRHunterPath) setPAOpen(true);
+    if (isPABasePath || isPATimPath || isWREkspPath || isWRFPPath || isWRFarmPath || isWRPAProduk || isWRDMFPPath || isWRDmCtPath || isWRPaAsdpPath || isWRPaLpdPath || isWRBumdesPath || isWRMgmPath || isWRHunterPath) setPAOpen(true);
     if (isPATimPath) setPATimOpen(true);
     if (isDDPath || isSCTimPath || isWRSCPath) setDDOpen(true);
     if (isSCTimPath) setSCTimOpen(true);
@@ -351,6 +353,17 @@ export default function Sidebar({ onClose }) {
                 <i className="ti ti-qrcode" style={{ color: '#EC4899' }} aria-hidden="true" />
                 <span>Penerbitan QRIS</span>
                 <span className="sidebar-warroom-badge" style={{ background: '#EC4899' }}>QRIS</span>
+              </NavLink>
+              <NavLink
+                to="/war-room/qris-control-tower"
+                onClick={onClose}
+                className={({ isActive }) =>
+                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                }
+              >
+                <i className="ti ti-radar" style={{ color: '#0891B2' }} aria-hidden="true" />
+                <span>QRIS Control Tower</span>
+                <span className="sidebar-warroom-badge" style={{ background: '#0891B2' }}>CTL</span>
               </NavLink>
               <NavLink
                 to="/war-room/trx-outlet"
@@ -552,6 +565,17 @@ export default function Sidebar({ onClose }) {
                 <i className="ti ti-speakerphone" style={{ color: '#0EA5E9' }} aria-hidden="true" />
                 <span>DM Fastpay</span>
                 <span className="sidebar-warroom-badge" style={{ background: '#0EA5E9' }}>DM</span>
+              </NavLink>
+              <NavLink
+                to="/war-room/dm-control-tower"
+                onClick={onClose}
+                className={({ isActive }) =>
+                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                }
+              >
+                <i className="ti ti-radar-2" style={{ color: '#7F77DD' }} aria-hidden="true" />
+                <span>DM Control Tower</span>
+                <span className="sidebar-warroom-badge" style={{ background: '#7F77DD' }}>DM CT</span>
               </NavLink>
               <NavLink
                 to="/war-room/pa-asdp"

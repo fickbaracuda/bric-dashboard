@@ -2,3 +2,34 @@ node_modules/
 dist/
 .env
 *.log
+
+# ── Part 2A: credential & environment (jangan pernah commit file asli) ──
+.env.*
+!.env.example
+!.env.deploy.example
+
+# SSH private key (kalau nanti dipakai, jangan sampai ikut Git)
+*.pem
+id_rsa
+id_rsa.*
+*.ppk
+
+# ── Backup database (dump berisi data asli, jangan ikut Git) ──
+backups/
+*.dump
+*.sql.gz
+db_backup_*.sql
+
+# ── Backup frontend production (folder besar, bukan source code) ──
+bric_backup_*/
+frontend_backup_*/
+dist_backup_*/
+
+# ── File sementara saat proses deploy ──
+deploy_tmp/
+*.deploy.log
+*.deploy.tmp
+
+# ── Cache lokal Python (bukan bagian dari source code) ──
+__pycache__/
+*.pyc

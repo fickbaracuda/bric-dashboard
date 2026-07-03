@@ -235,6 +235,17 @@ export const getEkspedisiAnalytics = (params = {}) =>
   withCache(`ekspedisi-analytics-${JSON.stringify(params)}`, () =>
     axios.get(`${API_URL}/api/warroom/ekspedisi/analytics`, { params, headers: authHeaders() }).then(r => r.data));
 
+/* WAR-ROOM — Ekspedisi Execution Queue actions (contacted/PIC/follow-up/notes) —
+   TIDAK pakai withCache, ini state yang di-mutate user jadi harus selalu segar. */
+export const getEkspedisiOutletStatus = () =>
+  axios.get(`${API_URL}/api/warroom/ekspedisi/outlet-status`, { headers: authHeaders() }).then(r => r.data);
+export const updateEkspedisiOutletStatus = (data) =>
+  axios.post(`${API_URL}/api/warroom/ekspedisi/outlet-status`, data, { headers: authHeaders() }).then(r => r.data);
+export const getEkspedisiNotes = (idOutlet) =>
+  axios.get(`${API_URL}/api/warroom/ekspedisi/notes`, { params: { idOutlet }, headers: authHeaders() }).then(r => r.data);
+export const addEkspedisiNote = (data) =>
+  axios.post(`${API_URL}/api/warroom/ekspedisi/notes`, data, { headers: authHeaders() }).then(r => r.data);
+
 /* WAR-ROOM — Fastpay Global */
 export const getFastpayAnalytics = (params = {}) =>
   withCache(`fastpay-analytics-${JSON.stringify(params)}`, () =>
@@ -320,6 +331,21 @@ export const getBumdesAnalytics = (params = {}) =>
   axios.get(`${API_URL}/api/warroom/bumdes/analytics`, { params, headers: authHeaders() }).then(r => r.data);
 export const getBumdesOutlets = (params = {}) =>
   axios.get(`${API_URL}/api/warroom/bumdes/outlets`, { params, headers: authHeaders() }).then(r => r.data);
+
+/* WAR-ROOM — DM Control Tower (multi-bulan, TIDAK di-cache — selalu fresh, sama pola dengan PA LPD/BUMDes/PA ASDP) */
+export const getDmControlTowerMonths = () =>
+  axios.get(`${API_URL}/api/warroom/dm-control-tower/months`, { headers: authHeaders() }).then(r => r.data);
+export const getDmControlTowerAnalytics = (bulan) =>
+  axios.get(`${API_URL}/api/warroom/dm-control-tower/analytics`, { params: { bulan }, headers: authHeaders() }).then(r => r.data);
+export const getDmControlTowerDataQuality = (bulan) =>
+  axios.get(`${API_URL}/api/warroom/dm-control-tower/data-quality`, { params: { bulan }, headers: authHeaders() }).then(r => r.data);
+export const getDmControlTowerOutlets = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/dm-control-tower/outlets`, { params, headers: authHeaders() }).then(r => r.data);
+
+/* WAR-ROOM — QRIS Issuance Control Tower */
+export const getQrisControlTowerAnalytics = () =>
+  withCache('qris-control-tower-analytics', () =>
+    axios.get(`${API_URL}/api/warroom/qris-ctrl/analytics`, { headers: authHeaders() }).then(r => r.data));
 
 /* WAR-ROOM — Territory LPD */
 export const getLpdAnalytics = () =>
