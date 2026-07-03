@@ -15,11 +15,30 @@
   --border:       #E5E7EB;
   --bg-page:      #F3F4F6;
   --bg-card:      #FFFFFF;
+  --bg-hover:     #F3F4F6;
   --sidebar-w:    260px;
   --topbar-h:     56px;
   --radius:       10px;
   --shadow-sm:    0 1px 3px rgba(0,0,0,.08);
   --shadow-md:    0 4px 16px rgba(0,0,0,.08);
+}
+
+/* ── Mode Malam — override token warna saja, semua komponen yang sudah
+   pakai var(--bg-card)/var(--text-*)/var(--border) otomatis ikut berubah.
+   Warna aksen/brand (badge, chart, prioritas P0-P4, dll) SENGAJA tidak
+   diubah supaya tetap konsisten sebagai warna identitas. ── */
+[data-theme="dark"] {
+  --primary-bg:   #12261F;
+  --text-1:       #F3F4F6;
+  --text-2:       #D1D5DB;
+  --text-3:       #9CA3AF;
+  --text-4:       #6B7280;
+  --border:       #2D3340;
+  --bg-page:      #0F1115;
+  --bg-card:      #1A1D24;
+  --bg-hover:     #232733;
+  --shadow-sm:    0 1px 3px rgba(0,0,0,.4);
+  --shadow-md:    0 4px 16px rgba(0,0,0,.4);
 }
 
 body {
@@ -29,6 +48,7 @@ body {
   font-size: 14px;
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
+  transition: background-color .15s ease, color .15s ease;
 }
 
 /* ═══════════════════════════════════════════
@@ -244,6 +264,21 @@ body {
   gap: 8px;
   margin-left: auto;
 }
+
+.theme-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px; height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-page);
+  color: var(--text-2);
+  cursor: pointer;
+  font-size: 15px;
+  transition: background .15s, color .15s;
+}
+.theme-toggle:hover { background: var(--bg-hover); color: var(--text-1); }
 
 .chip {
   display: inline-flex;

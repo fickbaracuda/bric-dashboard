@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import Sidebar from './Sidebar';
 import AiChat from './AiChat';
 import { pingPresence } from '../services/api';
+import { resolveInitialTheme, setTheme } from '../utils/theme';
 
 /* Avatar color berdasarkan hash username */
 const AVATAR_COLORS = [
@@ -35,9 +36,16 @@ function formatSync(iso) {
 export default function Layout({ children, syncedAt, bulan, gsheetUrl, gsheetLabel }) {
   const [open, setOpen]               = useState(false);
   const [activeUsers, setActiveUsers] = useState([]);
+  const [theme, setThemeState]        = useState(resolveInitialTheme);
   const timerRef                      = useRef(null);
   const sidebarRef                    = useRef(null);
   const syncStr                       = formatSync(syncedAt);
+
+  function toggleTheme() {
+    const next = theme === 'dark' ? 'light' : 'dark';
+    setTheme(next);
+    setThemeState(next);
+  }
 
   useEffect(() => {
     const el = sidebarRef.current;
@@ -81,6 +89,14 @@ export default function Layout({ children, syncedAt, bulan, gsheetUrl, gsheetLab
             <span /><span /><span />
           </button>
           <div className="topbar-right">
+            <button
+              className="theme-toggle"
+              onClick={toggleTheme}
+              aria-label={theme === 'dark' ? 'Ganti ke mode terang' : 'Ganti ke mode malam'}
+              title={theme === 'dark' ? 'Mode Terang' : 'Mode Malam'}
+            >
+              <i className={theme === 'dark' ? 'ti ti-sun' : 'ti ti-moon'} />
+            </button>
             {syncStr && (
               <span className="chip chip-sync">
                 <span className="chip-dot" />
