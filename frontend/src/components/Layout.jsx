@@ -3,6 +3,7 @@ import Sidebar from './Sidebar';
 import AiChat from './AiChat';
 import { pingPresence } from '../services/api';
 import { resolveInitialTheme, setTheme } from '../utils/theme';
+import { applyChartTheme } from '../utils/chartTheme';
 
 /* Avatar color berdasarkan hash username */
 const AVATAR_COLORS = [
@@ -45,6 +46,10 @@ export default function Layout({ children, syncedAt, bulan, gsheetUrl, gsheetLab
     const next = theme === 'dark' ? 'light' : 'dark';
     setTheme(next);
     setThemeState(next);
+    // Chart.js render ke canvas (bukan DOM biasa) jadi tidak ikut CSS — chart
+    // yang dibuat SETELAH toggle ini akan pakai warna tema baru; chart yang
+    // sudah tergambar di layar saat ini baru ikut berubah saat datanya di-refresh.
+    applyChartTheme();
   }
 
   useEffect(() => {
