@@ -710,6 +710,40 @@ classified AS (
 )
 `;
 
+/**
+ * PERBAIKAN PERFORMA (ditemukan saat validasi sync Juni production, 2026-07-03):
+ * Sebelumnya CLASSIFIED_CTE di-inline ulang di 13 query terpisah per 1x
+ * request `GET .../analytics` (6 query utama + 7 query di computeDataQuality),
+ * semuanya jalan berbarengan lewat Promise.all. Query tunggalnya cepat
+ * (~0.8 detik kalau dites sendirian), TAPI menjalankan >10 salinan identik
+ * dari CTE berat yang sama secara bersamaan ke database menyebabkan
+ * beberapa di antaranya macet puluhan detik (diverifikasi lewat
+ * pg_stat_activity: 1 query yang sama macet >70 detik sampai Nginx
+ * mengembalikan 504), padahal query itu sendiri terbukti cepat kalau
+ * dijalankan sendirian. Solusinya: hitung `classified` SATU KALI per
+ * request ke tabel sementara (temp table, hidup selama 1 koneksi/request),
+ * lalu semua query turunan tinggal SELECT dari situ — bukan menghitung
+ * ulang dari tabel mentah tiap kali.
+ *
+ * Temp table bersifat per-KONEKSI (bukan per-query), jadi WAJIB pakai 1
+ * client yang sama (dari pool.connect(), bukan pool.query() biasa) untuk
+ * seluruh rangkaian query dalam 1 request, dan WAJIB di-drop + client
+ * di-release setelah selesai (lihat pemakaian di analyticsHandler/
+ * dataQualityHandler/outletsHandler).
+ */
+async function buildClassifiedTempTable(client, bulan, matureCohortEnd) {
+  // DROP dulu jaga-jaga kalau ada temp table tersisa dari request sebelumnya
+  // di koneksi yang sama yang gagal di-cleanup (mis. proses sempat crash).
+  await client.query('DROP TABLE IF EXISTS classified_tmp');
+  await client.query(
+    `CREATE TEMP TABLE classified_tmp AS ${CLASSIFIED_CTE} SELECT * FROM classified`,
+    [bulan, matureCohortEnd]
+  );
+  // Index membantu query turunan yang GROUP BY/WHERE/ORDER BY kolom ini.
+  await client.query('CREATE INDEX ON classified_tmp (segment)');
+  await client.query('CREATE INDEX ON classified_tmp (tanggal_register)');
+}
+
 /** GET /api/warroom/dm-control-tower/months */
 async function monthsHandler(req, res) {
   try {
@@ -752,16 +786,17 @@ async function monthsHandler(req, res) {
  * Cek kualitas data untuk 1 bulan. Dipakai oleh analyticsHandler (ringkas,
  * tanpa contoh baris) dan dataQualityHandler (lengkap, dengan contoh baris
  * dibatasi per jenis supaya total response tidak membengkak).
+ *
+ * WAJIB dipanggil dengan `client` yang classified_tmp-nya SUDAH DIBANGUN
+ * (lewat buildClassifiedTempTable) di koneksi yang sama — fungsi ini tidak
+ * lagi membangun ulang CLASSIFIED_CTE sendiri (lihat catatan perbaikan
+ * performa di atas buildClassifiedTempTable).
  */
-async function computeDataQuality(bulan, { exampleLimit = 20 } = {}) {
+async function computeDataQuality(client, bulan, { exampleLimit = 20 } = {}) {
   const checks = [];
-  // Beberapa cek di bawah reuse CLASSIFIED_CTE (butuh param $2=mature_cohort_end)
-  // walau tidak memakai kolom is_mature — tetap dihitung dari config bulan
-  // (fallback kalender kalau config belum ada), bukan tanggal dummy.
-  const { matureCohortEnd } = await resolveMonthConfig(bulan);
 
   const addCheck = async (checkType, description, sql, params) => {
-    const r = await pool.query(sql, params);
+    const r = await client.query(sql, params);
     checks.push({
       check_type: checkType,
       description,
@@ -770,73 +805,69 @@ async function computeDataQuality(bulan, { exampleLimit = 20 } = {}) {
     });
   };
 
-  await Promise.all([
-    // 1-2: secara teori selalu 0 karena UNIQUE(bulan, id_outlet) di tabel —
-    // tetap dicek sebagai jaring pengaman kalau constraint pernah dilonggarkan.
-    addCheck(
-      'duplicate_register',
-      'id_outlet muncul lebih dari sekali di data register bulan ini',
-      `SELECT id_outlet, COUNT(*) AS jumlah FROM dm_ct_raw_register WHERE bulan=$1 GROUP BY id_outlet HAVING COUNT(*) > 1 LIMIT 200`,
-      [bulan]
-    ),
-    addCheck(
-      'duplicate_aktivasi',
-      'id_outlet muncul lebih dari sekali di data aktivasi bulan ini',
-      `SELECT id_outlet, COUNT(*) AS jumlah FROM dm_ct_raw_aktivasi WHERE bulan=$1 GROUP BY id_outlet HAVING COUNT(*) > 1 LIMIT 200`,
-      [bulan]
-    ),
-    addCheck(
-      'duplicate_outlet_date_trx',
-      'Outlet yang sama punya lebih dari 1 baris transaksi pada tanggal yang sama (mungkin wajar kalau memang multi-transaksi/hari, tapi perlu dicek)',
-      `SELECT id_outlet, tanggal_transaksi, COUNT(*) AS jumlah
-       FROM dm_ct_raw_trx WHERE bulan=$1 AND tanggal_transaksi IS NOT NULL
-       GROUP BY id_outlet, tanggal_transaksi HAVING COUNT(*) > 1
-       ORDER BY jumlah DESC LIMIT 200`,
-      [bulan]
-    ),
-    addCheck(
-      'trx_before_register',
-      'Ada transaksi dengan tanggal SEBELUM tanggal register outlet tersebut',
-      `${CLASSIFIED_CTE} SELECT id_outlet, tanggal_register, first_tx_date, h_reg FROM classified WHERE h_reg < 0 ORDER BY h_reg ASC LIMIT 200`,
-      [bulan, matureCohortEnd]
-    ),
-    addCheck(
-      'trx_before_aktivasi',
-      'Ada transaksi dengan tanggal SEBELUM tanggal aktivasi outlet tersebut',
-      `${CLASSIFIED_CTE} SELECT id_outlet, tanggal_aktivasi, first_tx_date, h_akt FROM classified WHERE h_akt < 0 ORDER BY h_akt ASC LIMIT 200`,
-      [bulan, matureCohortEnd]
-    ),
-    addCheck(
-      'trx_outlet_tidak_ada_di_register',
-      'Outlet punya transaksi tapi tidak ditemukan di data register bulan ini',
-      `${CLASSIFIED_CTE} SELECT id_outlet, first_tx_date, total_trx FROM classified WHERE first_tx_date IS NOT NULL AND tanggal_register IS NULL LIMIT 200`,
-      [bulan, matureCohortEnd]
-    ),
-    addCheck(
-      'trx_outlet_tidak_ada_di_aktivasi',
-      'Outlet punya transaksi tapi tidak ditemukan di data aktivasi bulan ini',
-      `${CLASSIFIED_CTE} SELECT id_outlet, first_tx_date, total_trx FROM classified WHERE first_tx_date IS NOT NULL AND tanggal_aktivasi IS NULL LIMIT 200`,
-      [bulan, matureCohortEnd]
-    ),
-    addCheck(
-      'aktivasi_tanpa_register',
-      'Outlet sudah aktivasi tapi tidak ditemukan di data register bulan ini',
-      `${CLASSIFIED_CTE} SELECT id_outlet, tanggal_aktivasi FROM classified WHERE tanggal_aktivasi IS NOT NULL AND tanggal_register IS NULL LIMIT 200`,
-      [bulan, matureCohortEnd]
-    ),
-    addCheck(
-      'register_tanpa_aktivasi',
-      'Outlet sudah register tapi belum ada data aktivasi bulan ini',
-      `${CLASSIFIED_CTE} SELECT id_outlet, tanggal_register FROM classified WHERE tanggal_register IS NOT NULL AND tanggal_aktivasi IS NULL LIMIT 200`,
-      [bulan, matureCohortEnd]
-    ),
-    addCheck(
-      'aktivasi_tanpa_transaksi',
-      'Outlet sudah aktivasi tapi belum pernah transaksi sama sekali bulan ini',
-      `${CLASSIFIED_CTE} SELECT id_outlet, tanggal_aktivasi FROM classified WHERE tanggal_aktivasi IS NOT NULL AND first_tx_date IS NULL LIMIT 200`,
-      [bulan, matureCohortEnd]
-    ),
-  ]);
+  // Dijalankan berurutan (bukan Promise.all) karena semuanya berbagi 1
+  // client/koneksi yang sama — Postgres cuma bisa proses 1 query per
+  // koneksi dalam satu waktu. Tetap cepat karena masing-masing tinggal
+  // baca dari classified_tmp/tabel mentah dengan index, bukan hitung ulang.
+  // Tetap pakai parameter $1 (bukan interpolasi string) untuk `bulan`,
+  // konsisten dengan pola aman di seluruh file ini, walau `bulan` sendiri
+  // sudah divalidasi regex oleh isValidBulan() di pemanggil.
+  await addCheck(
+    'duplicate_register',
+    'id_outlet muncul lebih dari sekali di data register bulan ini',
+    `SELECT id_outlet, COUNT(*) AS jumlah FROM dm_ct_raw_register WHERE bulan=$1 GROUP BY id_outlet HAVING COUNT(*) > 1 LIMIT 200`,
+    [bulan]
+  );
+  await addCheck(
+    'duplicate_aktivasi',
+    'id_outlet muncul lebih dari sekali di data aktivasi bulan ini',
+    `SELECT id_outlet, COUNT(*) AS jumlah FROM dm_ct_raw_aktivasi WHERE bulan=$1 GROUP BY id_outlet HAVING COUNT(*) > 1 LIMIT 200`,
+    [bulan]
+  );
+  await addCheck(
+    'duplicate_outlet_date_trx',
+    'Outlet yang sama punya lebih dari 1 baris transaksi pada tanggal yang sama (mungkin wajar kalau memang multi-transaksi/hari, tapi perlu dicek)',
+    `SELECT id_outlet, tanggal_transaksi, COUNT(*) AS jumlah
+     FROM dm_ct_raw_trx WHERE bulan=$1 AND tanggal_transaksi IS NOT NULL
+     GROUP BY id_outlet, tanggal_transaksi HAVING COUNT(*) > 1
+     ORDER BY jumlah DESC LIMIT 200`,
+    [bulan]
+  );
+  await addCheck(
+    'trx_before_register',
+    'Ada transaksi dengan tanggal SEBELUM tanggal register outlet tersebut',
+    `SELECT id_outlet, tanggal_register, first_tx_date, h_reg FROM classified_tmp WHERE h_reg < 0 ORDER BY h_reg ASC LIMIT 200`
+  );
+  await addCheck(
+    'trx_before_aktivasi',
+    'Ada transaksi dengan tanggal SEBELUM tanggal aktivasi outlet tersebut',
+    `SELECT id_outlet, tanggal_aktivasi, first_tx_date, h_akt FROM classified_tmp WHERE h_akt < 0 ORDER BY h_akt ASC LIMIT 200`
+  );
+  await addCheck(
+    'trx_outlet_tidak_ada_di_register',
+    'Outlet punya transaksi tapi tidak ditemukan di data register bulan ini',
+    `SELECT id_outlet, first_tx_date, total_trx FROM classified_tmp WHERE first_tx_date IS NOT NULL AND tanggal_register IS NULL LIMIT 200`
+  );
+  await addCheck(
+    'trx_outlet_tidak_ada_di_aktivasi',
+    'Outlet punya transaksi tapi tidak ditemukan di data aktivasi bulan ini',
+    `SELECT id_outlet, first_tx_date, total_trx FROM classified_tmp WHERE first_tx_date IS NOT NULL AND tanggal_aktivasi IS NULL LIMIT 200`
+  );
+  await addCheck(
+    'aktivasi_tanpa_register',
+    'Outlet sudah aktivasi tapi tidak ditemukan di data register bulan ini',
+    `SELECT id_outlet, tanggal_aktivasi FROM classified_tmp WHERE tanggal_aktivasi IS NOT NULL AND tanggal_register IS NULL LIMIT 200`
+  );
+  await addCheck(
+    'register_tanpa_aktivasi',
+    'Outlet sudah register tapi belum ada data aktivasi bulan ini',
+    `SELECT id_outlet, tanggal_register FROM classified_tmp WHERE tanggal_register IS NOT NULL AND tanggal_aktivasi IS NULL LIMIT 200`
+  );
+  await addCheck(
+    'aktivasi_tanpa_transaksi',
+    'Outlet sudah aktivasi tapi belum pernah transaksi sama sekali bulan ini',
+    `SELECT id_outlet, tanggal_aktivasi FROM classified_tmp WHERE tanggal_aktivasi IS NOT NULL AND first_tx_date IS NULL LIMIT 200`
+  );
 
   // id_outlet_kosong & tanggal_invalid: dicegah/di-drop saat sync (baris tanpa
   // id_outlet valid otomatis dilewati — lihat skipped count di dm_ct_sync_log,
@@ -862,61 +893,41 @@ async function computeDataQuality(bulan, { exampleLimit = 20 } = {}) {
 
 /** GET /api/warroom/dm-control-tower/data-quality?bulan=YYYY-MM */
 async function dataQualityHandler(req, res) {
+  const { bulan } = req.query;
+  if (!isValidBulan(bulan)) return res.status(400).json({ error: 'bulan wajib format YYYY-MM' });
+
+  const client = await pool.connect();
   try {
-    const { bulan } = req.query;
-    if (!isValidBulan(bulan)) return res.status(400).json({ error: 'bulan wajib format YYYY-MM' });
-    const checks = await computeDataQuality(bulan, { exampleLimit: 50 });
+    const { matureCohortEnd } = await resolveMonthConfig(bulan);
+    await buildClassifiedTempTable(client, bulan, matureCohortEnd);
+    const checks = await computeDataQuality(client, bulan, { exampleLimit: 50 });
     res.json({ bulan, checks });
   } catch (err) {
     console.error('[dm-control-tower data-quality]', err);
     res.status(500).json({ error: err.message });
+  } finally {
+    await client.query('DROP TABLE IF EXISTS classified_tmp').catch(() => {});
+    client.release();
   }
 }
 
 /** GET /api/warroom/dm-control-tower/analytics?bulan=YYYY-MM */
 async function analyticsHandler(req, res) {
+  const { bulan } = req.query;
+  if (!isValidBulan(bulan)) return res.status(400).json({ error: 'bulan wajib format YYYY-MM' });
+
+  const client = await pool.connect();
   try {
-    const { bulan } = req.query;
-    if (!isValidBulan(bulan)) return res.status(400).json({ error: 'bulan wajib format YYYY-MM' });
-
     const { periodStart, periodEnd, matureCohortEnd, configSource, configUpdatedAt } = await resolveMonthConfig(bulan);
-    const params = [bulan, matureCohortEnd];
 
-    const [
-      summaryRes, segmentRes, cohortRes, h03Res, actionRes,
-      topMarginRes, topRepeatRes, calendarRes, lastSyncRes,
-    ] = await Promise.all([
-      pool.query(`${CLASSIFIED_CTE}
-        SELECT
-          COUNT(*) FILTER (WHERE tanggal_register IS NOT NULL) AS total_registrasi,
-          COUNT(*) FILTER (WHERE tanggal_aktivasi IS NOT NULL) AS total_aktivasi,
-          COUNT(*) FILTER (WHERE first_tx_date IS NOT NULL) AS total_outlet_transaksi,
-          COALESCE(SUM(total_trx), 0) AS total_transaksi,
-          COALESCE(SUM(total_margin), 0) AS total_margin,
-          COUNT(*) FILTER (WHERE is_mature) AS mature_cohort_count,
-          COUNT(*) FILTER (WHERE is_mature AND h_reg BETWEEN 0 AND 3) AS reg_to_tx1_h0_h3,
-          COUNT(*) FILTER (WHERE tanggal_aktivasi IS NOT NULL AND h_akt BETWEEN 0 AND 3) AS valid_akt_to_tx1,
-          COUNT(*) FILTER (WHERE segment = 'repeat_h0_h3') AS early_repeat_count,
-          COUNT(*) FILTER (WHERE segment = 'handoff_farming') AS handoff_farming_count,
-          COUNT(*) FILTER (WHERE segment = 'anomaly') AS anomaly_count
-        FROM classified`, params),
+    // Hitung classified SATU KALI ke temp table (lihat catatan performa di
+    // atas buildClassifiedTempTable) — semua query berbasis segmentasi di
+    // bawah tinggal SELECT dari sini, bukan menghitung ulang CTE berat.
+    await buildClassifiedTempTable(client, bulan, matureCohortEnd);
 
-      pool.query(`${CLASSIFIED_CTE}
-        SELECT segment, COUNT(*) AS count FROM classified GROUP BY segment ORDER BY count DESC`, params),
-
-      pool.query(`${CLASSIFIED_CTE}
-        SELECT
-          tanggal_register AS cohort_date,
-          COUNT(*) AS total_registrasi,
-          COUNT(*) FILTER (WHERE tanggal_aktivasi IS NOT NULL AND (tanggal_aktivasi - tanggal_register) BETWEEN 0 AND 3) AS aktivasi_h3,
-          COUNT(*) FILTER (WHERE h_reg BETWEEN 0 AND 3) AS tx1_h3,
-          COUNT(*) FILTER (WHERE h_reg BETWEEN 0 AND 3 AND distinct_tx_days >= 2) AS repeat_h3,
-          COALESCE(SUM(total_trx) FILTER (WHERE h_reg BETWEEN 0 AND 3), 0) AS trx_h3,
-          COALESCE(SUM(total_margin) FILTER (WHERE h_reg BETWEEN 0 AND 3), 0) AS margin_h3
-        FROM classified
-        WHERE tanggal_register IS NOT NULL
-        GROUP BY tanggal_register ORDER BY tanggal_register`, params),
-
+    // 3 query yang TIDAK butuh classified_tmp jalan paralel di koneksi pool
+    // terpisah (tidak perlu menunggu client di atas).
+    const [h03Res, calendarRes, lastSyncRes] = await Promise.all([
       // h03_activity: per hari-offset (0-3) dari tanggal register, aktivitas transaksi ril
       // (per-baris transaksi, bukan hanya first-tx) — lebih presisi dari sekadar h_reg di atas.
       pool.query(`
@@ -930,23 +941,6 @@ async function analyticsHandler(req, res) {
         WHERE t.bulan = $1 AND t.tanggal_transaksi IS NOT NULL AND r.tanggal_register IS NOT NULL
           AND (t.tanggal_transaksi - r.tanggal_register) BETWEEN 0 AND 3
         GROUP BY day_offset ORDER BY day_offset`, [bulan]),
-
-      pool.query(`${CLASSIFIED_CTE}
-        SELECT id_outlet, segment, ${SEGMENT_SQL_PRIORITY} AS priority,
-          tanggal_register, tanggal_aktivasi, first_tx_date, h_reg, h_akt, total_trx, total_margin
-        FROM classified
-        ORDER BY ${SEGMENT_SQL_ORDER}, tanggal_register DESC NULLS LAST
-        LIMIT 300`, params),
-
-      pool.query(`${CLASSIFIED_CTE}
-        SELECT id_outlet, segment, total_trx, total_margin
-        FROM classified WHERE total_margin > 0
-        ORDER BY total_margin DESC LIMIT 20`, params),
-
-      pool.query(`${CLASSIFIED_CTE}
-        SELECT id_outlet, segment, distinct_tx_days, total_trx, total_margin
-        FROM classified WHERE distinct_tx_days >= 2
-        ORDER BY distinct_tx_days DESC, total_trx DESC LIMIT 20`, params),
 
       pool.query(`
         WITH days AS (
@@ -976,6 +970,59 @@ async function analyticsHandler(req, res) {
         ) x`, [bulan]),
     ]);
 
+    // 6 query berbasis classified_tmp — WAJIB berurutan di client yang SAMA
+    // (temp table cuma terlihat di koneksi yang membuatnya, 1 koneksi cuma
+    // proses 1 query dalam satu waktu). Masing-masing tinggal baca dari temp
+    // table yang sudah ter-index, jadi tetap cepat walau berurutan.
+    const summaryRes = await client.query(`
+      SELECT
+        COUNT(*) FILTER (WHERE tanggal_register IS NOT NULL) AS total_registrasi,
+        COUNT(*) FILTER (WHERE tanggal_aktivasi IS NOT NULL) AS total_aktivasi,
+        COUNT(*) FILTER (WHERE first_tx_date IS NOT NULL) AS total_outlet_transaksi,
+        COALESCE(SUM(total_trx), 0) AS total_transaksi,
+        COALESCE(SUM(total_margin), 0) AS total_margin,
+        COUNT(*) FILTER (WHERE is_mature) AS mature_cohort_count,
+        COUNT(*) FILTER (WHERE is_mature AND h_reg BETWEEN 0 AND 3) AS reg_to_tx1_h0_h3,
+        COUNT(*) FILTER (WHERE tanggal_aktivasi IS NOT NULL AND h_akt BETWEEN 0 AND 3) AS valid_akt_to_tx1,
+        COUNT(*) FILTER (WHERE segment = 'repeat_h0_h3') AS early_repeat_count,
+        COUNT(*) FILTER (WHERE segment = 'handoff_farming') AS handoff_farming_count,
+        COUNT(*) FILTER (WHERE segment = 'anomaly') AS anomaly_count
+      FROM classified_tmp`);
+
+    const segmentRes = await client.query(
+      `SELECT segment, COUNT(*) AS count FROM classified_tmp GROUP BY segment ORDER BY count DESC`
+    );
+
+    const cohortRes = await client.query(`
+      SELECT
+        tanggal_register AS cohort_date,
+        COUNT(*) AS total_registrasi,
+        COUNT(*) FILTER (WHERE tanggal_aktivasi IS NOT NULL AND (tanggal_aktivasi - tanggal_register) BETWEEN 0 AND 3) AS aktivasi_h3,
+        COUNT(*) FILTER (WHERE h_reg BETWEEN 0 AND 3) AS tx1_h3,
+        COUNT(*) FILTER (WHERE h_reg BETWEEN 0 AND 3 AND distinct_tx_days >= 2) AS repeat_h3,
+        COALESCE(SUM(total_trx) FILTER (WHERE h_reg BETWEEN 0 AND 3), 0) AS trx_h3,
+        COALESCE(SUM(total_margin) FILTER (WHERE h_reg BETWEEN 0 AND 3), 0) AS margin_h3
+      FROM classified_tmp
+      WHERE tanggal_register IS NOT NULL
+      GROUP BY tanggal_register ORDER BY tanggal_register`);
+
+    const actionRes = await client.query(`
+      SELECT id_outlet, segment, ${SEGMENT_SQL_PRIORITY} AS priority,
+        tanggal_register, tanggal_aktivasi, first_tx_date, h_reg, h_akt, total_trx, total_margin
+      FROM classified_tmp
+      ORDER BY ${SEGMENT_SQL_ORDER}, tanggal_register DESC NULLS LAST
+      LIMIT 300`);
+
+    const topMarginRes = await client.query(`
+      SELECT id_outlet, segment, total_trx, total_margin
+      FROM classified_tmp WHERE total_margin > 0
+      ORDER BY total_margin DESC LIMIT 20`);
+
+    const topRepeatRes = await client.query(`
+      SELECT id_outlet, segment, distinct_tx_days, total_trx, total_margin
+      FROM classified_tmp WHERE distinct_tx_days >= 2
+      ORDER BY distinct_tx_days DESC, total_trx DESC LIMIT 20`);
+
     const s = summaryRes.rows[0] || {};
     const totalRegistrasi = Number(s.total_registrasi || 0);
     const totalAktivasi = Number(s.total_aktivasi || 0);
@@ -985,7 +1032,8 @@ async function analyticsHandler(req, res) {
     const regToTx1 = Number(s.reg_to_tx1_h0_h3 || 0);
     const matureCohortCount = Number(s.mature_cohort_count || 0);
 
-    const dataQuality = await computeDataQuality(bulan, { exampleLimit: 0 }); // ringkas: count saja, tanpa contoh baris
+    // Reuse classified_tmp yang sudah dibangun di atas — tidak build ulang.
+    const dataQuality = await computeDataQuality(client, bulan, { exampleLimit: 0 }); // ringkas: count saja, tanpa contoh baris
 
     res.json({
       meta: {
@@ -1043,25 +1091,30 @@ async function analyticsHandler(req, res) {
   } catch (err) {
     console.error('[dm-control-tower analytics]', err);
     res.status(500).json({ error: err.message });
+  } finally {
+    await client.query('DROP TABLE IF EXISTS classified_tmp').catch(() => {});
+    client.release();
   }
 }
 
 /** GET /api/warroom/dm-control-tower/outlets?bulan=&page=&limit=&search=&segment= */
 async function outletsHandler(req, res) {
+  const { bulan } = req.query;
+  if (!isValidBulan(bulan)) return res.status(400).json({ error: 'bulan wajib format YYYY-MM' });
+
+  const page = Math.max(1, parseInt(req.query.page) || 1);
+  const limit = Math.min(200, Math.max(1, parseInt(req.query.limit) || 100));
+  const offset = (page - 1) * limit;
+  const search = (req.query.search || '').trim();
+  const segment = (req.query.segment || '').trim();
+
+  const client = await pool.connect();
   try {
-    const { bulan } = req.query;
-    if (!isValidBulan(bulan)) return res.status(400).json({ error: 'bulan wajib format YYYY-MM' });
-
-    const page = Math.max(1, parseInt(req.query.page) || 1);
-    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit) || 100));
-    const offset = (page - 1) * limit;
-    const search = (req.query.search || '').trim();
-    const segment = (req.query.segment || '').trim();
-
     const { matureCohortEnd } = await resolveMonthConfig(bulan);
-    const params = [bulan, matureCohortEnd];
-    const conditions = [];
+    await buildClassifiedTempTable(client, bulan, matureCohortEnd);
 
+    const params = [];
+    const conditions = [];
     if (search) {
       params.push(`%${search.toUpperCase()}%`);
       conditions.push(`UPPER(id_outlet) LIKE $${params.length}`);
@@ -1072,19 +1125,16 @@ async function outletsHandler(req, res) {
     }
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
-    const [countRes, dataRes] = await Promise.all([
-      pool.query(`${CLASSIFIED_CTE} SELECT COUNT(*) FROM classified ${where}`, params),
-      pool.query(
-        `${CLASSIFIED_CTE}
-         SELECT id_outlet, segment, ${SEGMENT_SQL_PRIORITY} AS priority,
-           tanggal_register, tanggal_aktivasi, first_tx_date, last_tx_date,
-           h_reg, h_akt, distinct_tx_days, total_trx, total_margin
-         FROM classified ${where}
-         ORDER BY total_margin DESC, id_outlet
-         LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
-        [...params, limit, offset]
-      ),
-    ]);
+    const countRes = await client.query(`SELECT COUNT(*) FROM classified_tmp ${where}`, params);
+    const dataRes = await client.query(
+      `SELECT id_outlet, segment, ${SEGMENT_SQL_PRIORITY} AS priority,
+         tanggal_register, tanggal_aktivasi, first_tx_date, last_tx_date,
+         h_reg, h_akt, distinct_tx_days, total_trx, total_margin
+       FROM classified_tmp ${where}
+       ORDER BY total_margin DESC, id_outlet
+       LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      [...params, limit, offset]
+    );
 
     res.json({
       bulan,
@@ -1095,6 +1145,9 @@ async function outletsHandler(req, res) {
   } catch (err) {
     console.error('[dm-control-tower outlets]', err);
     res.status(500).json({ error: err.message });
+  } finally {
+    await client.query('DROP TABLE IF EXISTS classified_tmp').catch(() => {});
+    client.release();
   }
 }
 
