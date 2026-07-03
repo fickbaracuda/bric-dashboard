@@ -120,7 +120,7 @@
 [data-theme="dark"] ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 6px; }
 [data-theme="dark"] ::-webkit-scrollbar-thumb:hover { background: var(--text-4); }
 
-/* Link generik (di luar class .sidebar-*/.wr-*/.chip-* yang sudah bertoken) */
+/* Link generik (di luar class sidebar/wr/chip yang sudah bertoken) */
 [data-theme="dark"] a { color: inherit; }
 [data-theme="dark"] a:hover { opacity: .85; }
 
