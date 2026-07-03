@@ -1,7 +1,14 @@
 'use strict';
 
-const fs   = require('fs');
 const path = require('path');
+// WAJIB load .env dengan path eksplisit (relatif ke lokasi file ini), BUKAN
+// mengandalkan dotenv default yang membaca dari process.cwd() — script ini
+// dipanggil dengan working directory di root project (`cd project && node
+// backend/scripts/...`), sedangkan file env sebenarnya ada di backend/.env.
+// Tanpa ini, DATABASE_URL kosong dan koneksi database gagal (SASL error).
+require('dotenv').config({ path: path.join(__dirname, '../.env') });
+
+const fs   = require('fs');
 const pool = require('../src/db');
 
 async function main() {
