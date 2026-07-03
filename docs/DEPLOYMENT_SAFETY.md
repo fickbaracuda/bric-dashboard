@@ -256,7 +256,7 @@ hanya catatan rencana.
 
 | Credential | Dampak kalau diganti |
 |---|---|
-| Password SSH VPS | Semua script/alat yang menyambung ke server (termasuk yang baru) harus pakai password baru. Tidak berdampak ke user dashboard biasa. |
+| Password SSH VPS | Semua script/alat yang menyambung ke server (termasuk yang baru) harus pakai password baru. Tidak berdampak ke user dashboard biasa. **Update 2026-07-03**: komputer yang sudah pakai SSH key (lihat Bagian 13) TIDAK terpengaruh rotasi password ini sama sekali — akses key terpisah dari password, dan sebaiknya justru dijadikan cara akses UTAMA (password login root bisa dinonaktifkan sepenuhnya nanti demi keamanan lebih baik, itu pembahasan terpisah). |
 | `JWT_SECRET` | **Semua orang yang sedang login akan otomatis logout** dan harus login ulang. Tidak ada data yang hilang, hanya sesi login yang direset. Sebaiknya dilakukan di luar jam sibuk. |
 | `APPS_SCRIPT_TOKEN` (token sync umum) | Google Apps Script yang mengirim data (Speedcash, Ekspedisi, Fastpay, dll) **harus diperbarui juga** dengan token baru, kalau tidak, sinkronisasi data akan berhenti (gagal, bukan merusak data). |
 | `MGM_PA_SYNC_TOKEN` | Sama seperti di atas, tapi khusus untuk Apps Script MGM PA saja. |
@@ -326,3 +326,99 @@ akan dibahas terpisah nanti kalau/ketika dibutuhkan):**
   disengaja per 2026-07-02 — lihat komentar di `scripts/safe_deploy.py`).
 - Menghapus/merapikan file backup lama (`.env.backup.*`, `*_backup_*`)
   yang sudah menumpuk di server.
+
+---
+
+## 13. Akses SSH Tanpa Password (2026-07-03)
+
+Sejak tanggal ini, komputer yang sudah di-setup (lihat langkah di bawah)
+bisa menyambung ke server BRIC **tanpa mengetik password VPS setiap kali**
+— memakai SSH key, bukan password. Ini menggantikan kebutuhan mengetik
+password interaktif untuk `safe_deploy.py`, `backup_db.py`,
+`check_server_readonly.py`, dan script sejenis lainnya — **script-nya
+sendiri TIDAK berubah cara pakainya**, cuma tidak lagi tanya password
+kalau key sudah terpasang.
+
+**PENTING — ini mengubah "rem tangan" yang sebelumnya berlaku**: sebelum
+ini, aturan tak tertulis kita adalah "harus ada manusia yang mengetik
+password setiap kali sebelum apa pun menyentuh server" — itu jadi
+pengaman terakhir. Dengan SSH key, akses ke server (sebagai `root`, penuh)
+jadi otomatis begitu ada yang menjalankan script dari komputer yang
+key-nya terpasang. Ini pilihan yang disetujui sadar oleh pemilik project
+(bukan default/otomatis) — kalau suatu saat mau kembali ke wajib password
+manual, tinggal hapus/nonaktifkan key (lihat "Cara Mencabut Akses" di bawah).
+
+### Cara kerja singkat
+1. Ada SSH key (sepasang: privat + publik) khusus BRIC di komputer:
+   `~/.ssh/bric_prod_ed25519` (privat, JANGAN PERNAH dibagikan/di-commit)
+   dan `~/.ssh/bric_prod_ed25519.pub` (publik, aman dibagikan).
+2. Public key-nya sudah didaftarkan ke server, di file
+   `/root/.ssh/authorized_keys` (server-side, bukan bagian dari repo Git).
+3. Ada alias `bric-prod` di `~/.ssh/config` (komputer lokal, di luar folder
+   project, TIDAK ikut Git) yang menghubungkan alias itu ke IP server,
+   user `root`, dan key di atas.
+4. `scripts/deploy_common.py` (dipakai semua script keamanan) sekarang
+   otomatis mendeteksi alias `bric-prod` ini duluan — kalau ketemu dan
+   key-nya ada, langsung pakai itu (tanpa tanya password). Kalau TIDAK
+   ketemu (mis. di komputer lain yang belum di-setup), otomatis kembali ke
+   cara lama (tanya password interaktif) — jadi tetap kompatibel.
+
+### Setup di komputer baru (kalau perlu, sekali saja per komputer)
+1. Buat key baru: `ssh-keygen -t ed25519 -f ~/.ssh/bric_prod_ed25519 -N ""`
+2. Daftarkan public key ke server (masih perlu password VPS **1x terakhir**
+   di langkah ini saja):
+   ```powershell
+   $pubKey = (Get-Content "$env:USERPROFILE\.ssh\bric_prod_ed25519.pub").Trim()
+   ssh root@147.139.201.43 "mkdir -p ~/.ssh && chmod 700 ~/.ssh && grep -qxF '$pubKey' ~/.ssh/authorized_keys 2>/dev/null || echo '$pubKey' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && echo KEY_ADDED_OK"
+   ```
+3. Buat/tambahkan ke `~/.ssh/config`:
+   ```
+   Host bric-prod
+     HostName 147.139.201.43
+     User root
+     IdentityFile ~/.ssh/bric_prod_ed25519
+     IdentitiesOnly yes
+   ```
+4. Tes: `ssh bric-prod "hostname && whoami"` — harus langsung masuk tanpa
+   tanya password.
+
+### Cara deploy sekarang (tidak berubah, cuma tanpa prompt password)
+```
+python scripts/safe_deploy.py --execute
+```
+Tetap akan minta ketik `DEPLOY` untuk konfirmasi (pengaman ini TIDAK
+dihilangkan), tapi tidak lagi tanya alamat server/user/password — semua
+otomatis dari alias `bric-prod`.
+
+### Hal yang TETAP TIDAK BOLEH dilakukan
+Semua aturan di Bagian 5 tetap berlaku persis sama — SSH key hanya
+mengganti CARA menyambung ke server, bukan mengubah apa yang boleh
+dijalankan di server. Tetap: tidak ada `pkill`, restart backend tetap
+wajib lewat `sudo -u admin pm2 reload bric-backend`, migration tetap wajib
+backup dulu, `safe_deploy.py --execute` tetap butuh alasan jelas.
+
+### Cara Mencabut Akses (kalau suatu saat perlu)
+Kalau laptop hilang/dicuri, atau ingin kembali wajib password manual:
+1. SSH ke server (masih bisa pakai password root biasa kalau key belum
+   dicabut, atau lewat akses konsol VPS provider kalau perlu):
+   ```
+   nano /root/.ssh/authorized_keys
+   ```
+2. Hapus baris yang mengandung komentar `bric-prod-vscode-...` (nama key
+   ada di ujung baris publicnya), simpan.
+3. Di komputer yang mau dicabut aksesnya, hapus juga:
+   `~/.ssh/bric_prod_ed25519`, `~/.ssh/bric_prod_ed25519.pub`, dan entri
+   `Host bric-prod` di `~/.ssh/config` (opsional, tidak wajib, tapi rapi).
+4. Setelah baris itu dihapus dari server, semua script otomatis kembali
+   ke alur lama (tanya password interaktif) di komputer manapun.
+
+### Verifikasi tidak ada credential bocor
+- Private key (`bric_prod_ed25519`) ada di `~/.ssh/`, folder ini **di luar**
+  folder project `bric-dashboard/` sama sekali — tidak mungkin ikut Git
+  kecuali sengaja dicopy ke dalam folder project.
+- `.gitignore` sudah ditambah pola `id_ed25519*`, `*_ed25519*`, dan `.ssh/`
+  sebagai jaring pengaman tambahan kalau suatu saat ada yang taruh key di
+  dalam folder project.
+- `~/.ssh/config` juga di luar folder project, tidak ikut Git.
+- `git status` dicek setelah setup ini — tidak ada file baru terkait SSH
+  key yang muncul di daftar perubahan repo.
