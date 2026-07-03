@@ -4727,3 +4727,32 @@ body {
 [data-theme="dark"] .rec-card[style*="FFF1F2" i]  { background: rgba(239,68,68,.12) !important; }
 [data-theme="dark"] .alert-card-rec { background: var(--bg-elevated) !important; }
 [data-theme="dark"] .wrpa-trend-anomali { background: rgba(239,68,68,.14) !important; }
+
+/* ═══════════════════════════════════════════
+   DARK MODE — PATCH SPESIFIK RONDE 3 (2026-07)
+   Ditemukan lewat versi audit yang lebih ketat: ronde sebelumnya hanya
+   menandai rule tanpa `color` sama sekali; ronde ini juga menandai rule
+   yang PUNYA `color: var(--text-X)` tapi tetap dipasangkan dengan
+   background hardcode terang — var(--text-X) di dark mode tetap terang,
+   jadi kombinasinya tetap "hampir putih di atas pastel". Termasuk laporan
+   baru: Payment Agent "Dasar proyeksi"/"Target pace ideal", dan kartu
+   "Rekomendasi Tindakan" (Farming/Fastpay/DM Fastpay/Trx Outlet/
+   InstaQRIS TRX) yang background-nya inline style. ── */
+[data-theme="dark"] .chip-sync        { background: var(--bg-elevated); }
+[data-theme="dark"] .delta-flat       { background: var(--bg-elevated); }
+[data-theme="dark"] .lm-badge-grey    { background: var(--bg-elevated); }
+[data-theme="dark"] .info-box-green   { background: rgba(16,185,129,.12); }
+[data-theme="dark"] .info-box-amber   { background: rgba(245,158,11,.12); }
+[data-theme="dark"] .wrpa-insight--positive { background: rgba(16,185,129,.12); }
+[data-theme="dark"] .wrpa-insight--negative { background: rgba(239,68,68,.12); }
+[data-theme="dark"] .wrpa-insight--warning  { background: rgba(245,158,11,.12); }
+[data-theme="dark"] .wrpa-insight--info     { background: rgba(59,130,246,.12); }
+
+/* Kartu "Rekomendasi Tindakan" (Farming/Fastpay/DM Fastpay/Trx Outlet/
+   InstaQRIS TRX) — background inline style (lv.bg / r.level), butuh
+   attribute selector + !important sama seperti .rec-card di atas. */
+[data-theme="dark"] .wrfp-rec-item[style*="FEE2E2" i] { background: rgba(239,68,68,.12) !important; }
+[data-theme="dark"] .wrfp-rec-item[style*="F0FDF4" i],
+[data-theme="dark"] .wrfp-rec-item[style*="ECFDF5" i] { background: rgba(16,185,129,.12) !important; }
+[data-theme="dark"] .wrfp-rec-item[style*="FEF3C7" i] { background: rgba(245,158,11,.12) !important; }
+[data-theme="dark"] .wrfp-rec-item[style*="EFF6FF" i] { background: rgba(59,130,246,.12) !important; }
