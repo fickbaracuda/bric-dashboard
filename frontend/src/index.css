@@ -4659,3 +4659,71 @@ body {
 /* Catatan: .modal-box, .wr-modal, .wrpa-modal, .dr-modal semuanya sudah
    pakai var(--bg-card) di rule aslinya, jadi otomatis ikut gelap lewat
    perbaikan token di atas — tidak perlu override tambahan di sini. */
+
+/* ═══════════════════════════════════════════
+   DARK MODE — PATCH SPESIFIK RONDE 2 (2026-07)
+   Ditemukan lewat audit sistematis (script cek "background terang di rule
+   yang TIDAK ikut men-set color eksplisit" — pola inilah penyebab utama
+   laporan "background terang, teks putih/hampir putih"): rule-rule ini
+   HANYA mengubah background, sedangkan teks di dalamnya mengambil warna
+   dari var(--text-1)/(--text-2) yang di dark mode SUDAH BENAR terang —
+   begitu background-nya ikut digelapkan, teks otomatis kembali kontras
+   tanpa perlu dipaksa warna baru. TIDAK ADA rule light mode yang disentuh.
+   ═══════════════════════════════════════════ */
+
+/* ── Tabel: row subtotal/total/parent/anomali & row-hover hardcode terang
+   (Scoreboard "Detail Pencapaian", PA Produk, PA ARPU, Ekspedisi) ── */
+[data-theme="dark"] .row-subtotal td      { background: var(--bg-elevated); }
+[data-theme="dark"] .row-total td         { background: rgba(16,185,129,.14); }
+[data-theme="dark"] .row-parent td        { background: rgba(139,92,246,.14); }
+[data-theme="dark"] .wrpa-row--positive td { background: rgba(16,185,129,.14) !important; }
+[data-theme="dark"] .wrpa-row--negative td { background: rgba(239,68,68,.14) !important; }
+[data-theme="dark"] .wre-row-anomali       { background: rgba(245,158,11,.14) !important; }
+[data-theme="dark"] .table-row:hover td   { background: var(--bg-table-hover); }
+[data-theme="dark"] .st-tim-row:hover     { background: var(--bg-table-hover); }
+[data-theme="dark"] .wrpa-table tr:hover td { background: var(--bg-table-hover); }
+[data-theme="dark"] .st-leader-header:hover { background: var(--bg-hover); }
+[data-theme="dark"] .ranking-table th     { background: var(--bg-table-header); }
+[data-theme="dark"] .ranking-table td     { border-bottom-color: var(--border); }
+
+/* ── Card/box status pastel yang teksnya (.rec-title/.rec-text/.wr-dev-label/
+   dst) ambil var(--text-1)/(--text-2) — otomatis terbaca begitu background
+   ikut gelap (Payment Agent pace indicator, InstaQris rekomendasi/deviasi
+   growth, PA LPD action block) ── */
+[data-theme="dark"] .wr-reco-hijau        { background: rgba(16,185,129,.12); }
+[data-theme="dark"] .wr-reco-merah        { background: rgba(239,68,68,.12); }
+[data-theme="dark"] .wr-reco-kuning       { background: rgba(245,158,11,.12); }
+[data-theme="dark"] .wr-dev-pos           { background: rgba(16,185,129,.12); }
+[data-theme="dark"] .wr-dev-neg           { background: rgba(239,68,68,.12); }
+[data-theme="dark"] .wrpa-action-block--red   { background: rgba(239,68,68,.12); }
+[data-theme="dark"] .wrpa-action-block--amber { background: rgba(245,158,11,.12); }
+[data-theme="dark"] .wrpa-action-block--green { background: rgba(16,185,129,.12); }
+[data-theme="dark"] .wrpa-action-block--blue  { background: rgba(59,130,246,.12); }
+[data-theme="dark"] .pi-green             { background: rgba(16,185,129,.12); }
+[data-theme="dark"] .pi-amber             { background: rgba(245,158,11,.12); }
+[data-theme="dark"] .pi-red               { background: rgba(239,68,68,.12); }
+
+/* ── KPI card "alert" (Data Quality > 0): background var sudah OK, tapi
+   nilai (.dmct-kpi-value/.iqcc-kpi-value) di-set fixed #B91C1C (merah tua)
+   — kontras rendah di atas card gelap, dicerahkan + background ditinting ── */
+[data-theme="dark"] .dmct-kpi-card--alert { background: rgba(239,68,68,.10); }
+[data-theme="dark"] .dmct-kpi-card--alert .dmct-kpi-value { color: #F87171; }
+[data-theme="dark"] .iqcc-kpi-card--alert { background: rgba(239,68,68,.10); }
+[data-theme="dark"] .iqcc-kpi-card--alert .iqcc-kpi-value { color: #F87171; }
+
+/* ── Card rekomendasi dengan background INLINE style (bukan class CSS) —
+   dipakai di Dashboard Utama: Winme&InstaQris, Payment Agent, Dompet
+   Digital, Unit Scoreboard ("💡 Rekomendasi Strategis" & sejenisnya).
+   Inline style menang atas class biasa, jadi override WAJIB pakai
+   !important. Dicocokkan lewat isi attribute style (bukan ubah JSX),
+   supaya tetap 1 baris CSS untuk semua halaman yang pakai class ini. ── */
+[data-theme="dark"] .rec-card[style*="F0FBF7" i],
+[data-theme="dark"] .rec-card[style*="F0FDF4" i],
+[data-theme="dark"] .alert-card-rec[style*="F0FDF4" i] { background: rgba(16,185,129,.12) !important; }
+[data-theme="dark"] .rec-card[style*="FFFBEB" i]  { background: rgba(245,158,11,.12) !important; }
+[data-theme="dark"] .rec-card[style*="F5F3FF" i]  { background: rgba(139,92,246,.12) !important; }
+[data-theme="dark"] .rec-card[style*="E6F1FB" i]  { background: rgba(59,130,246,.12) !important; }
+[data-theme="dark"] .rec-card[style*="FEF2F2" i],
+[data-theme="dark"] .rec-card[style*="FFF1F2" i]  { background: rgba(239,68,68,.12) !important; }
+[data-theme="dark"] .alert-card-rec { background: var(--bg-elevated) !important; }
+[data-theme="dark"] .wrpa-trend-anomali { background: rgba(239,68,68,.14) !important; }

@@ -210,7 +210,7 @@ export default function UserManagement() {
                       <span style={{ fontWeight: 600 }}>{u.full_name || '—'}</span>
                     </div>
                   </td>
-                  <td><code style={{ fontSize: 12, background: '#F3F4F6', padding: '2px 6px', borderRadius: 4 }}>{u.username}</code></td>
+                  <td><code style={{ fontSize: 12, background: 'var(--bg-elevated)', padding: '2px 6px', borderRadius: 4 }}>{u.username}</code></td>
                   <td style={{ fontSize: 13 }}>{u.unit || '—'}</td>
                   <td>
                     <span className={`pill ${u.role === 'admin' ? 'pill-aman' : 'pill-waspada'}`} style={{ fontSize: 11 }}>

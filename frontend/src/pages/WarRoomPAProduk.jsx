@@ -835,7 +835,7 @@ function UnitEkonomiTab({ data, meta }) {
               const arptDown = arptJun<arptMei && Number(r.trx_jun)>0;
               const anomali  = arptDown && (Number(r.dev_trx_mei_jun)||0)<0;
               return (
-                <tr key={i} style={{background:anomali?'#FFF1F0':undefined}}>
+                <tr key={i} className={anomali ? 'wrpa-trend-anomali' : undefined} style={{background:anomali?'#FFF1F0':undefined}}>
                   <td style={{fontWeight:600}}>{r.produk}</td>
                   <td>{fmtRp(calcArpt(r.rev_apr,r.trx_apr))}</td>
                   <td>{fmtRp(arptMei)}</td>
