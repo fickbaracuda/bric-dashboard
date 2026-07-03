@@ -111,6 +111,7 @@ const NEW_SAFETY_FILES = [
   path.join(ROOT, 'scripts', 'backup_db.py'),
   path.join(ROOT, 'scripts', 'deploy_common.py'),
   path.join(ROOT, 'scripts', 'check_server_readonly.py'),
+  path.join(ROOT, 'scripts', 'run_dm_control_tower_migration_remote.py'),
   path.join(ROOT, 'backend', 'scripts', 'preflight-check.js'),
   path.join(ROOT, 'backend', 'src', 'config', 'env.js'),
 ];
