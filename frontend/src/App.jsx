@@ -25,6 +25,7 @@ import WarRoomBumdes from './pages/WarRoomBumdes';
 import WarRoomLpd from './pages/WarRoomLpd';
 import WarRoomHunter from './pages/WarRoomHunter';
 import WarRoomQrisControlTower from './pages/WarRoomQrisControlTower';
+import WarRoomInstaqrisCommandCenter from './pages/WarRoomInstaqrisCommandCenter';
 import WarRoomIqRaw      from './pages/WarRoomIqRaw';
 import WarRoomQris        from './pages/WarRoomQris';
 import WarRoomTrxOutlet   from './pages/WarRoomTrxOutlet';
@@ -79,6 +80,7 @@ export default function App() {
         <Route path="/war-room/lpd"            element={<ProtectedRoute><WarRoomLpd /></ProtectedRoute>} />
         <Route path="/war-room/hunter"        element={<ProtectedRoute><WarRoomHunter /></ProtectedRoute>} />
         <Route path="/war-room/qris-control-tower" element={<ProtectedRoute><WarRoomQrisControlTower /></ProtectedRoute>} />
+        <Route path="/war-room/instaqris-command-center" element={<ProtectedRoute><WarRoomInstaqrisCommandCenter /></ProtectedRoute>} />
         <Route path="/war-room/iq-raw"          element={<ProtectedRoute><WarRoomIqRaw /></ProtectedRoute>} />
         <Route path="/war-room/penerbitan-qris" element={<ProtectedRoute><WarRoomQris /></ProtectedRoute>} />
         <Route path="/war-room/trx-outlet"        element={<ProtectedRoute><WarRoomTrxOutlet /></ProtectedRoute>} />

@@ -30,6 +30,7 @@ const dataRawRoutes       = require('./routes/data-raw');
 const hunterRoutes        = require('./routes/warroom-hunter');
 const qrisCtrlRoutes      = require('./routes/warroom-qris-control-tower');
 const dmCtRoutes          = require('./routes/warroom-dm-control-tower');
+const iqCcRoutes          = require('./routes/warroom-instaqris-command-center');
 const systemRoutes        = require('./routes/system');
 const requireAuth         = require('./middleware/auth');
 
@@ -136,6 +137,8 @@ app.get('/api/warroom/dm-control-tower/months',        requireAuth, dmCtRoutes.m
 app.get('/api/warroom/dm-control-tower/analytics',     requireAuth, dmCtRoutes.analyticsHandler);
 app.get('/api/warroom/dm-control-tower/data-quality',  requireAuth, dmCtRoutes.dataQualityHandler);
 app.get('/api/warroom/dm-control-tower/outlets',       requireAuth, dmCtRoutes.outletsHandler);
+app.get('/api/warroom/instaqris-command-center/months',    requireAuth, iqCcRoutes.monthsHandler);
+app.get('/api/warroom/instaqris-command-center/analytics', requireAuth, iqCcRoutes.analyticsHandler);
 app.use('/api/warroom',        requireAuth, warroomRoutes);
 
 app.post('/api/data-raw/outlet/sync',    dataRawRoutes.outletSyncHandler);    // token auth, no JWT

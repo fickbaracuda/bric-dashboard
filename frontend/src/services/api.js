@@ -342,6 +342,12 @@ export const getDmControlTowerDataQuality = (bulan) =>
 export const getDmControlTowerOutlets = (params = {}) =>
   axios.get(`${API_URL}/api/warroom/dm-control-tower/outlets`, { params, headers: authHeaders() }).then(r => r.data);
 
+/* WAR-ROOM — InstaQRIS Command Center (multi-bulan, TIDAK di-cache — selalu fresh, sama pola dengan DM Control Tower) */
+export const getInstaqrisCommandCenterMonths = () =>
+  axios.get(`${API_URL}/api/warroom/instaqris-command-center/months`, { headers: authHeaders() }).then(r => r.data);
+export const getInstaqrisCommandCenterAnalytics = (bulan) =>
+  axios.get(`${API_URL}/api/warroom/instaqris-command-center/analytics`, { params: bulan ? { bulan } : {}, headers: authHeaders() }).then(r => r.data);
+
 /* WAR-ROOM — QRIS Issuance Control Tower */
 export const getQrisControlTowerAnalytics = () =>
   withCache('qris-control-tower-analytics', () =>
