@@ -339,11 +339,17 @@ Google Apps Script Editor — bukan dijalankan dari repo, sama seperti semua
 2. Menu **Extensions > Apps Script**.
 3. Buat file script baru, beri nama bebas (mis. `DmControlTowerSync`), lalu
    tempel seluruh isi `apps-script-dm-control-tower.js`.
-4. **Isi `SYNC_TOKEN`**: ganti nilai placeholder `ISI_TOKEN_APPS_SCRIPT_DI_SINI`
-   di baris `const SYNC_TOKEN = ...` dengan token asli (nilai yang sama dengan
-   env `APPS_SCRIPT_TOKEN` di server — TANYAKAN ke yang memegang akses server,
-   JANGAN pernah tulis token asli ini di dokumentasi, screenshot, atau chat).
-5. Simpan (Ctrl+S / ikon disket).
+4. **Isi token lewat Script Properties** (bukan ditulis di kode):
+   - Klik ikon gerigi **Project Settings** di sidebar kiri Apps Script Editor.
+   - Scroll ke bagian **Script Properties** > **Add script property**.
+   - Property: `SYNC_TOKEN`, Value: token asli (sama dengan env
+     `APPS_SCRIPT_TOKEN` di server — TANYAKAN ke yang memegang akses server,
+     JANGAN pernah tulis token asli ini di dokumentasi, screenshot, atau chat).
+   - Klik **Save script properties**.
+   - Kalau property ini belum diisi, semua fungsi sync akan berhenti dengan
+     pesan error jelas ("SYNC_TOKEN belum diisi...") — tidak pernah mencoba
+     sync dengan token kosong.
+5. Simpan kode (Ctrl+S / ikon disket).
 
 **Cara sync manual (Juni pertama kali / bulan mana pun):**
 1. Pastikan sheet `01_CONFIG` sudah berisi baris `Bulan` dengan nilai bulan
@@ -508,9 +514,9 @@ Semua langkah di bawah **DISIAPKAN, TIDAK DIJALANKAN**. Urutan aman
 5. **Copy Apps Script ke Google Sheet** — buka Google Sheet DM Control
    Tower → Extensions > Apps Script → tempel isi
    `apps-script-dm-control-tower.js` (lihat Bagian 11).
-6. **Isi `SYNC_TOKEN` di Apps Script** — ganti placeholder
-   `ISI_TOKEN_APPS_SCRIPT_DI_SINI` dengan token asli server. Jangan pernah
-   tulis token asli di chat/dokumentasi/screenshot.
+6. **Isi token Apps Script lewat Script Properties** (Project Settings >
+   Script Properties > key `SYNC_TOKEN`) dengan token asli server. Jangan
+   pernah tulis token asli di chat/dokumentasi/screenshot.
 7. **Jalankan sync manual Juni pertama kali** — HANYA setelah disetujui,
    jalankan `pushDmControlTowerSemua()` dari Apps Script Editor, cek log
    (jumlah baris, status HTTP, peringatan `logFieldCoverage`).

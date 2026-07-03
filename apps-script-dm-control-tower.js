@@ -10,9 +10,12 @@
 //   - 02_RAW_TRX_DIRECT       -> POST .../dm-control-tower/trx/sync
 //
 // KEAMANAN:
-//   - Isi SYNC_TOKEN di bawah dengan token asli dari server (env APPS_SCRIPT_TOKEN)
-//     SEBELUM menjalankan fungsi apa pun. JANGAN commit token asli ke git manapun,
-//     JANGAN tulis token asli di dokumentasi/screenshot/chat.
+//   - Token TIDAK ditulis di kode ini. Isi lewat Script Properties (Apps
+//     Script Editor > ikon gerigi "Project Settings" > "Script Properties" >
+//     "Add script property" > key `SYNC_TOKEN`, value = token asli, sama
+//     dengan env `APPS_SCRIPT_TOKEN` di server) SEBELUM menjalankan fungsi
+//     apa pun — lihat getSyncToken() di bawah. JANGAN commit token asli ke
+//     git manapun, JANGAN tulis token asli di dokumentasi/screenshot/chat.
 //   - Semua log (Logger.log) di file ini SENGAJA tidak pernah mencetak SYNC_TOKEN
 //     atau isi payload mentah — hanya bulan/sheet/jumlah baris/status HTTP.
 //
@@ -58,8 +61,28 @@
 // mengaktifkan trigger setelah stabil.
 // ============================================================
 
-const VPS_URL    = 'https://bmsretail.my.id';
-const SYNC_TOKEN = 'ISI_TOKEN_APPS_SCRIPT_DI_SINI'; // ganti dengan token asli server sebelum dijalankan
+const VPS_URL = 'https://bmsretail.my.id';
+
+// SYNC_TOKEN dibaca dari Script Properties (Project Settings > Script
+// Properties di Apps Script Editor), BUKAN ditulis langsung di kode ini —
+// supaya token asli tidak pernah ikut ter-commit ke Git kalau file ini
+// suatu saat disalin balik ke repo. Cara isi:
+//   1. Di Apps Script Editor, klik ikon gerigi (Project Settings) di kiri.
+//   2. Scroll ke "Script Properties" > "Add script property".
+//   3. Property: SYNC_TOKEN   Value: (token asli, sama dengan APPS_SCRIPT_TOKEN di server)
+//   4. Simpan.
+// Kalau property belum diisi, fungsi akan STOP dengan pesan error jelas
+// (lihat getSyncToken()) — tidak pernah mencoba sync dengan token kosong.
+function getSyncToken() {
+  const token = PropertiesService.getScriptProperties().getProperty('SYNC_TOKEN');
+  if (!token) {
+    throw new Error(
+      'SYNC_TOKEN belum diisi di Script Properties (Project Settings > Script Properties). ' +
+      'Sync dibatalkan — isi dulu sebelum menjalankan pushDmControlTowerSemua().'
+    );
+  }
+  return token;
+}
 
 const CONFIG_SHEET_NAME = '01_CONFIG';
 
@@ -246,7 +269,7 @@ function postJson(url, payload) {
     method: 'post',
     contentType: 'application/json',
     payload: JSON.stringify(payload),
-    headers: { 'x-sync-token': SYNC_TOKEN }, // token juga disertakan di body payload.token
+    headers: { 'x-sync-token': getSyncToken() }, // token juga disertakan di body payload.token
     muteHttpExceptions: true,
   };
   const res = UrlFetchApp.fetch(url, options);
@@ -290,6 +313,7 @@ function pushSource(sourceKey) {
   const meta = SOURCE_META[sourceKey];
   if (!meta) throw new Error(`Source key tidak dikenal: ${sourceKey}`);
 
+  getSyncToken(); // gagal cepat & jelas kalau Script Property belum diisi, sebelum baca/kirim apa pun
   const config = readConfig(); // throw & stop kalau config tidak valid — tidak pernah sync tanpa bulan
   const rows = getSheetRows(meta.sheetName);
 
@@ -314,7 +338,7 @@ function pushSource(sourceKey) {
     // Chunk berikutnya WAJIB append (insert/upsert saja, tidak pernah hapus).
     const replaceMode = idx === 0 ? 'replace' : 'append';
     const payload = {
-      token: SYNC_TOKEN,
+      token: getSyncToken(),
       bulan: config.bulan,
       sheet_name: meta.sheetName,
       period_start: config.periodStart,
