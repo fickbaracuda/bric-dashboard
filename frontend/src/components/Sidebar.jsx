@@ -153,6 +153,7 @@ export default function Sidebar({ onClose }) {
   const isWinmePath    = location.pathname === '/winme';
   const isWinmeTimPath = location.pathname === '/scoreboard-tim'    || isWinmeMember;
   const isWRIqCcPath   = location.pathname === '/war-room/instaqris-command-center';
+  const isWRQw3Path    = location.pathname === '/war-room/quick-win-q3';
   const isWRIQRawPath  = location.pathname === '/war-room/iq-raw';
   const isWRQrisPath   = location.pathname === '/war-room/penerbitan-qris';
   const isWRTrxOutPath = location.pathname === '/war-room/trx-outlet';
@@ -175,7 +176,7 @@ export default function Sidebar({ onClose }) {
   const isWRMgmPath    = location.pathname === '/war-room/mgm-pa';
   const isWRHunterPath = location.pathname === '/war-room/hunter';
 
-  const [winmeOpen, setWinmeOpen] = useState(isWinmePath || isWinmeTimPath || isWRIqCcPath || isWRIQRawPath || isWRQrisPath || isWRTrxOutPath || isWRQrisCtlPath || isDataRawPath);
+  const [winmeOpen, setWinmeOpen] = useState(isWinmePath || isWinmeTimPath || isWRIqCcPath || isWRQw3Path || isWRIQRawPath || isWRQrisPath || isWRTrxOutPath || isWRQrisCtlPath || isDataRawPath);
   const [timOpen,   setTimOpen]   = useState(isWinmeTimPath);
   const [paOpen,    setPAOpen]    = useState(isPABasePath || isPATimPath || isWREkspPath || isWRFPPath || isWRFarmPath || isWRPAProduk || isWRDMFPPath || isWRDmCtPath || isWRPaAsdpPath || isWRPaLpdPath || isWRBumdesPath || isWRMgmPath || isWRHunterPath);
   const [paTimOpen, setPATimOpen] = useState(isPATimPath);
@@ -183,7 +184,7 @@ export default function Sidebar({ onClose }) {
   const [scTimOpen, setSCTimOpen] = useState(isSCTimPath);
 
   useEffect(() => {
-    if (isWinmePath || isWinmeTimPath || isWRIqCcPath || isWRIQRawPath || isDataRawPath || isWRTrxOutPath || isWRQrisCtlPath) setWinmeOpen(true);
+    if (isWinmePath || isWinmeTimPath || isWRIqCcPath || isWRQw3Path || isWRIQRawPath || isDataRawPath || isWRTrxOutPath || isWRQrisCtlPath) setWinmeOpen(true);
     if (isWinmeTimPath) setTimOpen(true);
     if (isPABasePath || isPATimPath || isWREkspPath || isWRFPPath || isWRFarmPath || isWRPAProduk || isWRDMFPPath || isWRDmCtPath || isWRPaAsdpPath || isWRPaLpdPath || isWRBumdesPath || isWRMgmPath || isWRHunterPath) setPAOpen(true);
     if (isPATimPath) setPATimOpen(true);
@@ -343,6 +344,17 @@ export default function Sidebar({ onClose }) {
                 <i className="ti ti-radar-2" style={{ color: '#7F77DD' }} aria-hidden="true" />
                 <span>InstaQRIS Command Center</span>
                 <span className="sidebar-warroom-badge" style={{ background: '#7F77DD' }}>CMD</span>
+              </NavLink>
+              <NavLink
+                to="/war-room/quick-win-q3"
+                onClick={onClose}
+                className={({ isActive }) =>
+                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                }
+              >
+                <i className="ti ti-target-arrow" style={{ color: '#0EA5E9' }} aria-hidden="true" />
+                <span>Quick Win Q3</span>
+                <span className="sidebar-warroom-badge" style={{ background: '#0EA5E9' }}>Q3</span>
               </NavLink>
               <NavLink
                 to="/war-room/iq-raw"

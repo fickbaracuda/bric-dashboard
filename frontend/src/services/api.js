@@ -348,6 +348,12 @@ export const getInstaqrisCommandCenterMonths = () =>
 export const getInstaqrisCommandCenterAnalytics = (bulan) =>
   axios.get(`${API_URL}/api/warroom/instaqris-command-center/analytics`, { params: bulan ? { bulan } : {}, headers: authHeaders() }).then(r => r.data);
 
+/* WAR-ROOM — Quick Win Q3 IQWM (multi-periode, TIDAK di-cache — selalu fresh) */
+export const getQuickWinQ3Periods = () =>
+  axios.get(`${API_URL}/api/warroom/quick-win-q3/periods`, { headers: authHeaders() }).then(r => r.data);
+export const getQuickWinQ3Analytics = (periode) =>
+  axios.get(`${API_URL}/api/warroom/quick-win-q3/analytics`, { params: periode ? { periode } : {}, headers: authHeaders() }).then(r => r.data);
+
 /* WAR-ROOM — QRIS Issuance Control Tower */
 export const getQrisControlTowerAnalytics = () =>
   withCache('qris-control-tower-analytics', () =>
