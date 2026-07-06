@@ -5,9 +5,9 @@
 **Prompt 1 (selesai)** = backend saja: migration, sync endpoint, analytics endpoint, dokumentasi.
 **Prompt 2 (selesai)** = Apps Script (baca 3 sheet, kirim payload terstruktur ke `/sync`) — lihat §14 di bawah. Trigger otomatis TIDAK diaktifkan, sync production TIDAK dijalankan.
 **Prompt 3 (selesai)** = Validasi preview Apps Script terhadap sheet asli (§14) + Frontend (halaman `/war-room/quick-win-q3`, menu sidebar) — lihat §15 di bawah.
-**Prompt 4 (belum)** = Deploy approval (migration production + build + safe_deploy.py + sync production).
+**Prompt 4 (selesai)** = Deploy production: migration `iqwm_qw_*` (4 tabel), env `QUICK_WIN_Q3_SYNC_TOKEN` di server + Script Properties Apps Script, build+deploy via `safe_deploy.py`, sync manual `pushQuickWinQ3Semua()` (resume=6, breakdown=221, sukses), validasi endpoint & fitur lama. Trigger otomatis Apps Script TIDAK diaktifkan (menunggu persetujuan terpisah).
 
-Tidak ada deploy/migration production/sync production yang dijalankan di Prompt 1-3 — sesuai batasan eksplisit.
+Sejak Prompt 4, fitur ini LIVE di production (`/war-room/quick-win-q3`, periode `2026-Q3`). Sync selanjutnya masih manual (jalankan `pushQuickWinQ3Semua()` di Apps Script) sampai trigger otomatis disetujui.
 
 ## 2. Tujuan Fitur
 
