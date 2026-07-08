@@ -40,6 +40,8 @@ const BULAN_OPTIONS = [
   'JAN_2026', 'FEB_2026', 'MAR_2026', 'APR_2026',
   'MEI_2026', 'JUN_2026', 'JUL_2026'
 ];
+const MONTH_ORDER = ['JAN','FEB','MAR','APR','MEI','JUN','JUL','AGU','SEP','OKT','NOV','DES'];
+const MONTH_FULL_NAME = { JAN:'Januari',FEB:'Februari',MAR:'Maret',APR:'April',MEI:'Mei',JUN:'Juni',JUL:'Juli',AGU:'Agustus',SEP:'September',OKT:'Oktober',NOV:'November',DES:'Desember' };
 
 /* ── Bar chart tren harian ── */
 function TrenBarChart({ tren }) {
@@ -136,6 +138,10 @@ function SkeletonCards() {
 function PageBody({ data, bulan }) {
   const { unit, pace, kontribusi, tren_harian, days_elapsed, days_left, total_days } = data;
   const targetPacePct = total_days > 0 ? (days_elapsed / total_days) * 100 : 0;
+  const monthKey       = bulan.split('_')[0];
+  const currMonthName  = MONTH_FULL_NAME[monthKey] || monthKey;
+  const prevMonthKey   = MONTH_ORDER[Math.max(MONTH_ORDER.indexOf(monthKey) - 1, 0)];
+  const prevMonthName  = MONTH_FULL_NAME[prevMonthKey] || prevMonthKey;
   const aktualPct     = targetPacePct > 0 ? Math.min((unit.real_kpi / targetPacePct) * 100, 100) : 0;
 
   return (
@@ -268,8 +274,8 @@ function PageBody({ data, bulan }) {
               </div>
               <div className="pace-desc">
                 {unit.delta_vs_mei > 0
-                  ? `+${fmtRev(unit.delta_vs_mei)} vs Mei`
-                  : `${fmtRev(unit.delta_vs_mei)} vs Mei`}
+                  ? `+${fmtRev(unit.delta_vs_mei)} vs ${prevMonthName}`
+                  : `${fmtRev(unit.delta_vs_mei)} vs ${prevMonthName}`}
               </div>
             </div>
           </div>
@@ -309,10 +315,10 @@ function PageBody({ data, bulan }) {
         <div className="insight-card">
           <div className="insight-title">📊 Statistik Detail</div>
           {[
-            { label: 'Revenue Juni aktual', val: fmtRev(unit.juni),                    color: null },
-            { label: 'Revenue Mei',         val: fmtRev(unit.mei),                     color: null },
-            { label: 'Delta Juni vs Mei',   val: fmtRevSign(unit.delta_vs_mei),        color: unit.delta_vs_mei >= 0 ? '#1D9E75' : '#EF4444' },
-            { label: 'Est Rev Juni',        val: fmtRev(unit.est_rev_juni),            color: null },
+            { label: `Revenue ${currMonthName} aktual`, val: fmtRev(unit.juni),         color: null },
+            { label: `Revenue ${prevMonthName}`,        val: fmtRev(unit.mei),          color: null },
+            { label: `Delta ${currMonthName} vs ${prevMonthName}`, val: fmtRevSign(unit.delta_vs_mei), color: unit.delta_vs_mei >= 0 ? '#1D9E75' : '#EF4444' },
+            { label: `Est Rev ${currMonthName}`,        val: fmtRev(unit.est_rev_juni), color: null },
             { label: 'Est Surplus vs RKAP', val: fmtRevSign(pace.surplus_rkap),        color: pace.surplus_rkap >= 0 ? '#1D9E75' : '#EF4444' },
             { label: 'Kontribusi vs BMS',   val: kontribusi.rev_pct.toFixed(1) + '%',  color: null },
             { label: 'Hari tersisa',        val: days_left + ' hari',                  color: null },
@@ -391,7 +397,7 @@ function PageBody({ data, bulan }) {
               <span className="rec-tag" style={{ background: '#D1FAE5', color: '#065F46' }}>Peluang — Target Stretch</span>
               <div className="rec-title">Naikkan target stretch ke {Math.round(unit.est_kpi_juni * 1.05)}% untuk bulan ini</div>
               <div className="rec-text">
-                Dengan momentum yang kuat (+{fmtRev(unit.delta_vs_mei)} vs Mei), ada peluang menutup
+                Dengan momentum yang kuat (+{fmtRev(unit.delta_vs_mei)} vs {prevMonthName}), ada peluang menutup
                 bulan lebih tinggi. Dorong tim di minggu terakhir. Jika tercapai, jadikan
                 baseline target RKAP bulan depan yang lebih ambisius.
               </div>
@@ -431,7 +437,7 @@ function PageBody({ data, bulan }) {
             },
             {
               dot: '#7F77DD',
-              text: `Target bulan depan: pertahankan pace minimum ${fmtRev(pace.pace_ideal_per_hari)}/hari. Tren ${unit.delta_vs_mei >= 0 ? 'naik ' + fmtRev(unit.delta_vs_mei) : 'turun ' + fmtRev(Math.abs(unit.delta_vs_mei))} vs Mei — ${unit.delta_vs_mei >= 0 ? 'momentum baik untuk target lebih ambisius.' : 'perlu evaluasi faktor penurunan.'}`
+              text: `Target bulan depan: pertahankan pace minimum ${fmtRev(pace.pace_ideal_per_hari)}/hari. Tren ${unit.delta_vs_mei >= 0 ? 'naik ' + fmtRev(unit.delta_vs_mei) : 'turun ' + fmtRev(Math.abs(unit.delta_vs_mei))} vs ${prevMonthName} — ${unit.delta_vs_mei >= 0 ? 'momentum baik untuk target lebih ambisius.' : 'perlu evaluasi faktor penurunan.'}`
             }
           ].map((item, i) => (
             <div key={i} className="exec-bullet">
@@ -468,6 +474,10 @@ export default function PaymentAgent() {
   useEffect(() => { loadData(bulan); }, [bulan]);
 
   const bulanLabel = bulan.replace('_', ' ');
+  const pageMonthKey      = bulan.split('_')[0];
+  const pageCurrMonthName = MONTH_FULL_NAME[pageMonthKey] || pageMonthKey;
+  const pagePrevMonthKey  = MONTH_ORDER[Math.max(MONTH_ORDER.indexOf(pageMonthKey) - 1, 0)];
+  const pagePrevMonthName = MONTH_FULL_NAME[pagePrevMonthKey] || pagePrevMonthKey;
 
   return (
     <Layout syncedAt={data?.synced_at} bulan={bulan}>
@@ -510,10 +520,10 @@ export default function PaymentAgent() {
       {loading ? <SkeletonCards /> : data && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(160px,1fr))', gap: 12, marginBottom: 16 }}>
           <div className="sum-card" style={{ borderLeft: `3px solid ${WARNA_PA}` }}>
-            <div className="sum-label">Revenue Juni</div>
+            <div className="sum-label">Revenue {pageCurrMonthName}</div>
             <div className="sum-main" style={{ fontSize: 15 }}>{fmtRev(data.unit.juni)}</div>
             <div style={{ fontSize: 11, color: data.unit.delta_vs_mei >= 0 ? '#1D9E75' : '#EF4444', marginTop: 2 }}>
-              {fmtRevSign(data.unit.delta_vs_mei)} vs Mei
+              {fmtRevSign(data.unit.delta_vs_mei)} vs {pagePrevMonthName}
             </div>
           </div>
           <div className="sum-card" style={{ borderLeft: `3px solid ${WARNA_PA}` }}>
@@ -522,7 +532,7 @@ export default function PaymentAgent() {
             <div style={{ fontSize: 11, color: 'var(--text-4)', marginTop: 2 }}>Target bulanan penuh</div>
           </div>
           <div className="sum-card" style={{ borderLeft: `3px solid ${WARNA_PA}` }}>
-            <div className="sum-label">Est Rev Juni</div>
+            <div className="sum-label">Est Rev {pageCurrMonthName}</div>
             <div className="sum-main" style={{ fontSize: 15 }}>{fmtRev(data.unit.est_rev_juni)}</div>
             <div style={{ fontSize: 11, color: 'var(--text-4)', marginTop: 2 }}>Proyeksi akhir bulan</div>
           </div>

@@ -45,6 +45,7 @@ const BULAN_OPTIONS = [
   'JAN_2026','FEB_2026','MAR_2026',
   'APR_2026','MEI_2026','JUN_2026','JUL_2026'
 ];
+const MONTH_FULL_NAME = { JAN:'Januari',FEB:'Februari',MAR:'Maret',APR:'April',MEI:'Mei',JUN:'Juni',JUL:'Juli',AGU:'Agustus',SEP:'September',OKT:'Oktober',NOV:'November',DES:'Desember' };
 
 /* ── Tren line chart ── */
 function TrenLineChart({ tren }) {
@@ -138,6 +139,7 @@ function SkeletonCards() {
 function PageBody({ data, bulan }) {
   const { grup, sub_units, summary, tren_harian, days_elapsed, days_left } = data;
   const bulanLabel = bulan.replace('_', ' ');
+  const currMonthName = MONTH_FULL_NAME[bulan.split('_')[0]] || bulan.split('_')[0];
 
   /* head-to-head rows */
   const hthRows = [
@@ -226,7 +228,7 @@ function PageBody({ data, bulan }) {
               </div>
               <div className="sub-meta">
                 <div>
-                  <div className="sub-meta-lbl">Rev Juni</div>
+                  <div className="sub-meta-lbl">Rev {currMonthName}</div>
                   <div className="sub-meta-val">{fmtRev(u.juni)}</div>
                 </div>
                 <div>
@@ -234,7 +236,7 @@ function PageBody({ data, bulan }) {
                   <div className="sub-meta-val">{fmtRev(u.target_rkap)}</div>
                 </div>
                 <div>
-                  <div className="sub-meta-lbl">Est Rev Juni</div>
+                  <div className="sub-meta-lbl">Est Rev {currMonthName}</div>
                   <div className="sub-meta-val">{fmtRev(u.est_rev_juni)}</div>
                 </div>
                 <div>

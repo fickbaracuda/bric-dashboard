@@ -127,7 +127,7 @@ function AlertCard({ unit, daysLeft }) {
 }
 
 /* ── Modal detail per unit ── */
-function UnitModal({ unit, daysLeft, onClose }) {
+function UnitModal({ unit, daysLeft, onClose, currMonthName, prevMonthName }) {
   if (!unit) return null;
 
   const gap          = Math.max((unit.target_rkap || 0) - (unit.est_rev_juni || unit.juni || 0), 0);
@@ -163,7 +163,7 @@ function UnitModal({ unit, daysLeft, onClose }) {
           <div className="um-hero">
             <div className="um-hero-top">
               <div>
-                <div className="um-hero-label">Est % KPI Juni</div>
+                <div className="um-hero-label">Est % KPI {currMonthName}</div>
                 <div className="um-hero-val" style={{ color: statusColor }}>
                   {unit.est_kpi_juni?.toFixed(2)}%
                 </div>
@@ -184,9 +184,9 @@ function UnitModal({ unit, daysLeft, onClose }) {
           {/* KPI cards row */}
           <div className="um-cards">
             {[
-              { label:'Revenue Juni',  val: fmtRev(unit.juni) },
+              { label:`Revenue ${currMonthName}`,  val: fmtRev(unit.juni) },
               { label:'Target RKAP',   val: fmtRev(unit.target_rkap) },
-              { label:'Est Rev Juni',  val: fmtRev(unit.est_rev_juni) },
+              { label:`Est Rev ${currMonthName}`,  val: fmtRev(unit.est_rev_juni) },
               { label:'Avg Rev / Hari',val: fmtRev(unit.avg_rev_day) },
             ].map(c => (
               <div key={c.label} className="um-card">
@@ -200,8 +200,8 @@ function UnitModal({ unit, daysLeft, onClose }) {
           <div className="um-analysis">
             <div className="um-analysis-box">
               <div className="um-analysis-title">📅 vs Bulan Lalu</div>
-              <Row label="Revenue Mei"  val={fmtRev(unit.mei)} />
-              <Row label="Revenue Juni" val={fmtRev(unit.juni)} valStyle={{ fontWeight:700 }} />
+              <Row label={`Revenue ${prevMonthName}`}  val={fmtRev(unit.mei)} />
+              <Row label={`Revenue ${currMonthName}`} val={fmtRev(unit.juni)} valStyle={{ fontWeight:700 }} />
               <div className="um-divider" />
               <Row label="Selisih MoM"
                 val={`${fmtRevShort(deltaMoM)}${pctMoM !== null ? ` (${pctMoM >= 0 ? '+' : ''}${pctMoM.toFixed(1)}%)` : ''}`}
@@ -244,6 +244,8 @@ function UnitModal({ unit, daysLeft, onClose }) {
 const BULAN_OPTIONS = ['JAN_2026','FEB_2026','MAR_2026','APR_2026','MEI_2026','JUN_2026','JUL_2026'];
 const FILTERS = ['Semua','Aman','Waspada','Awas','Kritis'];
 const DAYS_IN_MONTH = { JAN:31,FEB:28,MAR:31,APR:30,MEI:31,JUN:30,JUL:31,AGU:31,SEP:30,OKT:31,NOV:30,DES:31 };
+const MONTH_ORDER = ['JAN','FEB','MAR','APR','MEI','JUN','JUL','AGU','SEP','OKT','NOV','DES'];
+const MONTH_FULL_NAME = { JAN:'Januari',FEB:'Februari',MAR:'Maret',APR:'April',MEI:'Mei',JUN:'Juni',JUL:'Juli',AGU:'Agustus',SEP:'September',OKT:'Oktober',NOV:'November',DES:'Desember' };
 
 // Unit ESA yang sementara disembunyikan
 const HIDDEN_UNITS = [
@@ -303,6 +305,9 @@ export default function Scoreboard() {
   const bulanLabel  = bulan.replace('_', ' ');
   const monthKey    = bulan.split('_')[0];
   const totalDays   = DAYS_IN_MONTH[monthKey] || 30;
+  const currMonthName = MONTH_FULL_NAME[monthKey] || monthKey;
+  const prevMonthKey  = MONTH_ORDER[Math.max(MONTH_ORDER.indexOf(monthKey) - 1, 0)];
+  const prevMonthName = MONTH_FULL_NAME[prevMonthKey] || prevMonthKey;
   const daysLeft    = Math.max(totalDays - daysElapsed, 1);
 
   // Hitung ulang summary dari data yang sudah difilter (Business Retail only)
@@ -393,11 +398,11 @@ export default function Scoreboard() {
         <>
           {/* ── Summary ── */}
           <div className="sum-grid">
-            <SumCard label="REVENUE JUNI" main={fmtRev(s.revenue_juni)}
-              sub={s.delta_vs_mei ? fmtRevShort(s.delta_vs_mei)+' vs Mei' : null}
+            <SumCard label={`REVENUE ${currMonthName.toUpperCase()}`} main={fmtRev(s.revenue_juni)}
+              sub={s.delta_vs_mei ? `${fmtRevShort(s.delta_vs_mei)} vs ${prevMonthName}` : null}
               subColor={s.delta_vs_mei>=0?'#1D9E75':'#EF4444'} />
             <SumCard label="AVG REV / HARI" main={fmtRev(s.avg_rev_hari)} sub={`${daysElapsed} hari berjalan`} />
-            <SumCard label="EST % KPI JUNI"
+            <SumCard label={`EST % KPI ${currMonthName.toUpperCase()}`}
               main={<span style={{color:s.est_kpi_juni>=100?'#1D9E75':'#EF4444'}}>{s.est_kpi_juni?.toFixed(2)}%</span>}
               sub={s.est_kpi_juni>=100?'↗ Di atas target':'↘ Di bawah target'}
               subColor={s.est_kpi_juni>=100?'#1D9E75':'#EF4444'} />
@@ -507,8 +512,8 @@ export default function Scoreboard() {
               <table className="ranking-table">
                 <thead>
                   <tr>
-                    <th>POIN / UNIT</th><th>REV JUNI</th><th>TARGET RKAP</th>
-                    <th>EST REV JUNI</th><th>REAL KPI</th>
+                    <th>POIN / UNIT</th><th>REV {currMonthName.toUpperCase()}</th><th>TARGET RKAP</th>
+                    <th>EST REV {currMonthName.toUpperCase()}</th><th>REAL KPI</th>
                     <th style={{minWidth:120}}>PROGRES</th><th>EST KPI</th><th>STATUS</th>
                   </tr>
                 </thead>
@@ -576,7 +581,8 @@ export default function Scoreboard() {
           )}
         </>
       )}
-      <UnitModal unit={selectedUnit} daysLeft={daysLeft} onClose={() => setSelectedUnit(null)} />
+      <UnitModal unit={selectedUnit} daysLeft={daysLeft} onClose={() => setSelectedUnit(null)}
+        currMonthName={currMonthName} prevMonthName={prevMonthName} />
     </Layout>
   );
 }

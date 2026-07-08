@@ -25,6 +25,7 @@ function pillClass(status) {
 }
 
 const BULAN_OPTIONS = ['JAN_2026','FEB_2026','MAR_2026','APR_2026','MEI_2026','JUN_2026','JUL_2026'];
+const MONTH_FULL_NAME = { JAN:'Januari',FEB:'Februari',MAR:'Maret',APR:'April',MEI:'Mei',JUN:'Juni',JUL:'Juli',AGU:'Agustus',SEP:'September',OKT:'Oktober',NOV:'November',DES:'Desember' };
 
 /* ── Chart component ── */
 function TrenChart({ tren }) {
@@ -146,6 +147,7 @@ export default function WinmeInstaqris() {
   };
 
   const bulanLabel = bulan.replace('_', ' ');
+  const currMonthName = MONTH_FULL_NAME[bulan.split('_')[0]] || bulan.split('_')[0];
 
   return (
     <Layout syncedAt={data?.synced_at} bulan={bulan}>
@@ -249,7 +251,7 @@ export default function WinmeInstaqris() {
                     </div>
                     <div className="prod-meta">
                       <div>
-                        <div className="meta-item">Rev Juni aktual</div>
+                        <div className="meta-item">Rev {currMonthName} aktual</div>
                         <div className="meta-val">{fmtRev(p.juni)}</div>
                       </div>
                       <div>
@@ -257,7 +259,7 @@ export default function WinmeInstaqris() {
                         <div className="meta-val">{fmtRev(p.target_rkap)}</div>
                       </div>
                       <div>
-                        <div className="meta-item">Est Rev Juni</div>
+                        <div className="meta-item">Est Rev {currMonthName}</div>
                         <div className="meta-val">{fmtRev(p.est_rev_juni)}</div>
                       </div>
                       <div>
