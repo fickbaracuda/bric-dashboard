@@ -241,7 +241,7 @@ function UnitModal({ unit, daysLeft, onClose }) {
   );
 }
 
-const BULAN_OPTIONS = ['JAN_2026','FEB_2026','MAR_2026','APR_2026','MEI_2026','JUN_2026'];
+const BULAN_OPTIONS = ['JAN_2026','FEB_2026','MAR_2026','APR_2026','MEI_2026','JUN_2026','JUL_2026'];
 const FILTERS = ['Semua','Aman','Waspada','Awas','Kritis'];
 const DAYS_IN_MONTH = { JAN:31,FEB:28,MAR:31,APR:30,MEI:31,JUN:30,JUL:31,AGU:31,SEP:30,OKT:31,NOV:30,DES:31 };
 
@@ -260,7 +260,7 @@ const HIDDEN_UNITS = [
 export default function Scoreboard() {
   const [data,         setData]         = useState(null);
   const [metric,       setMetric]       = useState('kpi');
-  const [bulan,        setBulan]        = useState('JUN_2026');
+  const [bulan,        setBulan]        = useState('JUL_2026');
   const [filter,       setFilter]       = useState('Semua');
   const [loading,      setLoading]      = useState(true);
   const [syncing,      setSyncing]      = useState(false);

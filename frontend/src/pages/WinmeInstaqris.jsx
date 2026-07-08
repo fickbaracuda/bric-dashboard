@@ -24,7 +24,7 @@ function pillClass(status) {
   return { Aman: 'pill-aman', Waspada: 'pill-waspada', Awas: 'pill-awas', Kritis: 'pill-kritis' }[status] || 'pill-kritis';
 }
 
-const BULAN_OPTIONS = ['JAN_2026','FEB_2026','MAR_2026','APR_2026','MEI_2026','JUN_2026'];
+const BULAN_OPTIONS = ['JAN_2026','FEB_2026','MAR_2026','APR_2026','MEI_2026','JUN_2026','JUL_2026'];
 
 /* ── Chart component ── */
 function TrenChart({ tren }) {
@@ -119,7 +119,7 @@ function SkeletonCards() {
 /* ── Main page ── */
 export default function WinmeInstaqris() {
   const [data,    setData]    = useState(null);
-  const [bulan,   setBulan]   = useState('JUN_2026');
+  const [bulan,   setBulan]   = useState('JUL_2026');
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState(null);
   const [syncing, setSyncing] = useState(false);

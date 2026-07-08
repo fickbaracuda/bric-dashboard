@@ -38,7 +38,7 @@ const WARNA_PACE = '#EF9F27';
 
 const BULAN_OPTIONS = [
   'JAN_2026', 'FEB_2026', 'MAR_2026', 'APR_2026',
-  'MEI_2026', 'JUN_2026'
+  'MEI_2026', 'JUN_2026', 'JUL_2026'
 ];
 
 /* ── Bar chart tren harian ── */
@@ -448,7 +448,7 @@ function PageBody({ data, bulan }) {
 /* ── Main page ── */
 export default function PaymentAgent() {
   const [data,    setData]    = useState(null);
-  const [bulan,   setBulan]   = useState('JUN_2026');
+  const [bulan,   setBulan]   = useState('JUL_2026');
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState(null);
 
