@@ -17,6 +17,7 @@ const aiRoutes            = require('./routes/ai');
 const aiContextRoutes     = require('./routes/ai-context');
 const warroomRoutes       = require('./routes/warroom');
 const ekspedisiRoutes     = require('./routes/warroom-ekspedisi');
+const ekspedisiProdukRoutes = require('./routes/warroom-ekspedisi-produk');
 const fastpayRoutes       = require('./routes/warroom-fastpay');
 const farmingRoutes       = require('./routes/warroom-farming');
 const dmFastpayRoutes     = require('./routes/warroom-dm-fastpay');
@@ -93,6 +94,10 @@ app.get('/api/warroom/ekspedisi/outlet-status',  requireAuth, ekspedisiRoutes.ou
 app.post('/api/warroom/ekspedisi/outlet-status', requireAuth, ekspedisiRoutes.updateOutletStatusHandler);
 app.get('/api/warroom/ekspedisi/notes',  requireAuth, ekspedisiRoutes.notesHandler);
 app.post('/api/warroom/ekspedisi/notes', requireAuth, ekspedisiRoutes.addNoteHandler);
+app.post('/api/warroom/ekspedisi-produk/sync', ekspedisiProdukRoutes.syncHandler);   // token auth, no JWT
+app.get('/api/warroom/ekspedisi-produk/months',    requireAuth, ekspedisiProdukRoutes.monthsHandler);
+app.get('/api/warroom/ekspedisi-produk/analytics', requireAuth, ekspedisiProdukRoutes.analyticsHandler);
+app.get('/api/warroom/ekspedisi-produk/outlets',   requireAuth, ekspedisiProdukRoutes.outletsHandler);
 app.post('/api/warroom/fastpay/sync',      fastpayRoutes.syncHandler);            // token auth, no JWT
 app.get('/api/warroom/fastpay/analytics', requireAuth, fastpayRoutes.analyticsHandler);
 app.get('/api/warroom/fastpay/outlets',   requireAuth, fastpayRoutes.outletsHandler);

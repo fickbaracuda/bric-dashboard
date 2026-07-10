@@ -246,6 +246,15 @@ export const getEkspedisiNotes = (idOutlet) =>
 export const addEkspedisiNote = (data) =>
   axios.post(`${API_URL}/api/warroom/ekspedisi/notes`, data, { headers: authHeaders() }).then(r => r.data);
 
+/* WAR-ROOM — Produk Ekspedisi (domain terpisah dari Ekspedisi di atas) */
+export const getEkspedisiProdukMonths = () =>
+  axios.get(`${API_URL}/api/warroom/ekspedisi-produk/months`, { headers: authHeaders() }).then(r => r.data);
+export const getEkspedisiProdukAnalytics = (bulan) =>
+  withCache(`ekspedisi-produk-analytics-${bulan || ''}`, () =>
+    axios.get(`${API_URL}/api/warroom/ekspedisi-produk/analytics`, { params: bulan ? { bulan } : {}, headers: authHeaders() }).then(r => r.data));
+export const getEkspedisiProdukOutlets = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/ekspedisi-produk/outlets`, { params, headers: authHeaders() }).then(r => r.data);
+
 /* WAR-ROOM — Fastpay Global */
 export const getFastpayAnalytics = (params = {}) =>
   withCache(`fastpay-analytics-${JSON.stringify(params)}`, () =>
