@@ -98,6 +98,8 @@ app.post('/api/warroom/ekspedisi-produk/sync', ekspedisiProdukRoutes.syncHandler
 app.get('/api/warroom/ekspedisi-produk/months',    requireAuth, ekspedisiProdukRoutes.monthsHandler);
 app.get('/api/warroom/ekspedisi-produk/analytics', requireAuth, ekspedisiProdukRoutes.analyticsHandler);
 app.get('/api/warroom/ekspedisi-produk/outlets',   requireAuth, ekspedisiProdukRoutes.outletsHandler);
+app.get('/api/warroom/ekspedisi-produk/product-detail', requireAuth, ekspedisiProdukRoutes.productDetailHandler);
+app.get('/api/warroom/ekspedisi-produk/outlet-detail',   requireAuth, ekspedisiProdukRoutes.outletDetailHandler);
 app.post('/api/warroom/fastpay/sync',      fastpayRoutes.syncHandler);            // token auth, no JWT
 app.get('/api/warroom/fastpay/analytics', requireAuth, fastpayRoutes.analyticsHandler);
 app.get('/api/warroom/fastpay/outlets',   requireAuth, fastpayRoutes.outletsHandler);

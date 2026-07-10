@@ -617,8 +617,19 @@ async function analyticsHandler(req, res) {
   }
 }
 
+// Whitelist sort_by -> ekspresi SQL tetap (TIDAK PERNAH menginterpolasi nilai
+// user langsung ke SQL — hanya key yang cocok whitelist ini yang dipakai).
+const OUTLET_SORT_COLUMNS = {
+  tanggal: 'tanggal',
+  id_outlet: 'id_outlet',
+  id_produk: 'id_produk',
+  jml_bill: 'jml_bill',
+  margin_fp: 'margin_fp',
+  avg_margin_per_bill: '(margin_fp / NULLIF(jml_bill, 0))',
+};
+
 // ─────────────────────────────────────────────────────────────────────────
-// GET /api/warroom/ekspedisi-produk/outlets?bulan=&id_produk=&page=&limit=&search=
+// GET /api/warroom/ekspedisi-produk/outlets?bulan=&id_produk=&page=&limit=&search=&sort_by=&sort_dir=
 // ─────────────────────────────────────────────────────────────────────────
 async function outletsHandler(req, res) {
   try {
@@ -630,6 +641,10 @@ async function outletsHandler(req, res) {
     const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 50));
     const search = nullIfEmpty(req.query.search);
     const offset = (page - 1) * limit;
+
+    const sortByKey = nullIfEmpty(req.query.sort_by);
+    const sortColumn = (sortByKey && OUTLET_SORT_COLUMNS[sortByKey]) || 'tanggal';
+    const sortDir = String(req.query.sort_dir || '').toLowerCase() === 'asc' ? 'ASC' : 'DESC';
 
     const conditions = ['bulan = $1'];
     const params = [bulan];
@@ -647,7 +662,7 @@ async function outletsHandler(req, res) {
     const rowsRes = await pool.query(
       `SELECT tanggal, id_outlet, id_produk, jml_bill, margin_fp
        FROM ekspedisi_produk_outlet WHERE ${whereClause}
-       ORDER BY tanggal DESC, id_outlet ASC
+       ORDER BY ${sortColumn} ${sortDir} NULLS LAST, id_outlet ASC
        LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params
     );
@@ -664,7 +679,7 @@ async function outletsHandler(req, res) {
     }
 
     res.json({
-      meta: { bulan, id_produk: idProduk, page, limit, total },
+      meta: { bulan, id_produk: idProduk, page, limit, total, sort_by: sortByKey && OUTLET_SORT_COLUMNS[sortByKey] ? sortByKey : 'tanggal', sort_dir: sortDir.toLowerCase() },
       rows: rowsRes.rows.map(r => {
         const jmlBill = r.jml_bill !== null ? Number(r.jml_bill) : null;
         const marginFp = r.margin_fp !== null ? Number(r.margin_fp) : null;
@@ -684,9 +699,133 @@ async function outletsHandler(req, res) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// GET /api/warroom/ekspedisi-produk/product-detail?bulan=&id_produk=
+// Dipakai modal detail produk — agregat top outlet + histori bulanan produk
+// tersebut, TANPA perlu refetch seluruh analytics di frontend.
+// ─────────────────────────────────────────────────────────────────────────
+async function productDetailHandler(req, res) {
+  try {
+    const bulan = isValidBulan(req.query.bulan) ? req.query.bulan : null;
+    const idProduk = nullIfEmpty(req.query.id_produk);
+    if (!bulan || !idProduk) return res.status(400).json({ error: 'bulan dan id_produk wajib diisi' });
+
+    const [productRes, monthlyRes, topOutletsRes] = await Promise.all([
+      pool.query('SELECT * FROM ekspedisi_produk_summary WHERE bulan = $1 AND id_produk = $2', [bulan, idProduk]),
+      pool.query('SELECT * FROM ekspedisi_produk_summary WHERE id_produk = $1 ORDER BY bulan ASC', [idProduk]),
+      pool.query(
+        `SELECT id_outlet, SUM(jml_bill) AS jml_bill, SUM(margin_fp) AS margin_fp
+         FROM ekspedisi_produk_outlet WHERE bulan = $1 AND id_produk = $2
+         GROUP BY id_outlet ORDER BY SUM(margin_fp) DESC NULLS LAST LIMIT 20`,
+        [bulan, idProduk]
+      ),
+    ]);
+
+    if (!productRes.rows.length) {
+      return res.json({ empty: true, message: 'Produk tidak ditemukan untuk bulan ini.', product: null, monthly: [], top_outlets: [], summary: {} });
+    }
+
+    const r = productRes.rows[0];
+    const mat = r.mat !== null ? Number(r.mat) : null;
+    const jmlBill = r.jml_bill !== null ? Number(r.jml_bill) : null;
+    const marginFp = r.margin_fp !== null ? Number(r.margin_fp) : null;
+
+    const product = {
+      id_produk: r.id_produk,
+      produk: r.produk,
+      bulan: r.bulan,
+      bulan_label: r.bulan_label || monthLabel(r.bulan),
+      mat, jml_bill: jmlBill, margin_fp: marginFp,
+      avg_margin_per_bill: safeDiv(marginFp, jmlBill),
+      avg_bill_per_mat: safeDiv(jmlBill, mat),
+      vs_mei: r.vs_mei !== null ? Number(r.vs_mei) : null,
+      vs_jun: r.vs_jun !== null ? Number(r.vs_jun) : null,
+    };
+
+    const monthly = monthlyRes.rows.map(m => ({
+      bulan: m.bulan,
+      bulan_label: m.bulan_label || monthLabel(m.bulan),
+      mat: m.mat !== null ? Number(m.mat) : null,
+      jml_bill: m.jml_bill !== null ? Number(m.jml_bill) : null,
+      margin_fp: m.margin_fp !== null ? Number(m.margin_fp) : null,
+    }));
+
+    const topOutlets = topOutletsRes.rows.map(o => {
+      const oJmlBill = o.jml_bill !== null ? Number(o.jml_bill) : null;
+      const oMarginFp = o.margin_fp !== null ? Number(o.margin_fp) : null;
+      return { id_outlet: o.id_outlet, jml_bill: oJmlBill, margin_fp: oMarginFp, avg_margin_per_bill: safeDiv(oMarginFp, oJmlBill) };
+    });
+
+    const summary = {
+      outlet_count: topOutlets.length,
+      total_outlet_margin: topOutlets.reduce((s, o) => s + (o.margin_fp || 0), 0),
+      total_outlet_bill: topOutlets.reduce((s, o) => s + (o.jml_bill || 0), 0),
+    };
+
+    res.json({ empty: false, product, monthly, top_outlets: topOutlets, summary });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// GET /api/warroom/ekspedisi-produk/outlet-detail?bulan=&id_outlet=
+// Dipakai modal detail outlet — agregat produk yang dipakai outlet tersebut.
+// ─────────────────────────────────────────────────────────────────────────
+async function outletDetailHandler(req, res) {
+  try {
+    const bulan = isValidBulan(req.query.bulan) ? req.query.bulan : null;
+    const idOutlet = nullIfEmpty(req.query.id_outlet);
+    if (!bulan || !idOutlet) return res.status(400).json({ error: 'bulan dan id_outlet wajib diisi' });
+
+    const productsRes = await pool.query(
+      `SELECT id_produk, SUM(jml_bill) AS jml_bill, SUM(margin_fp) AS margin_fp, MAX(tanggal) AS last_tanggal
+       FROM ekspedisi_produk_outlet WHERE bulan = $1 AND id_outlet = $2
+       GROUP BY id_produk ORDER BY SUM(margin_fp) DESC NULLS LAST`,
+      [bulan, idOutlet]
+    );
+
+    if (!productsRes.rows.length) {
+      return res.json({ empty: true, message: 'Belum ada detail outlet untuk bulan ini.', outlet: null, products: [], summary: {} });
+    }
+
+    const produkIds = productsRes.rows.map(r => r.id_produk);
+    const nameRes = await pool.query(
+      'SELECT id_produk, produk FROM ekspedisi_produk_summary WHERE bulan = $1 AND id_produk = ANY($2)',
+      [bulan, produkIds]
+    );
+    const produkNameMap = new Map(nameRes.rows.map(r => [r.id_produk, r.produk]));
+
+    const products = productsRes.rows.map(r => {
+      const jmlBill = r.jml_bill !== null ? Number(r.jml_bill) : null;
+      const marginFp = r.margin_fp !== null ? Number(r.margin_fp) : null;
+      return {
+        id_produk: r.id_produk,
+        produk: produkNameMap.get(r.id_produk) || null,
+        jml_bill: jmlBill,
+        margin_fp: marginFp,
+        avg_margin_per_bill: safeDiv(marginFp, jmlBill),
+        last_tanggal: r.last_tanggal,
+      };
+    });
+
+    const summary = {
+      product_count: products.length,
+      total_bill: products.reduce((s, p) => s + (p.jml_bill || 0), 0),
+      total_margin: products.reduce((s, p) => s + (p.margin_fp || 0), 0),
+    };
+
+    res.json({ empty: false, outlet: { id_outlet: idOutlet, bulan, bulan_label: monthLabel(bulan) }, products, summary });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+}
+
 module.exports = {
   monthsHandler,
   syncHandler,
+  productDetailHandler,
+  outletDetailHandler,
   analyticsHandler,
   outletsHandler,
   _internal: { safeNumber, safeDiv, isFormulaError, monthLabel, toIsoDate },
