@@ -236,14 +236,21 @@ function debugReconBankRawRows() {
 }
 
 /** Kirim seluruh data ke VPS (per chunk kalau data besar). */
+/**
+ * Kirim seluruh data ke VPS. Mengembalikan ringkasan hasil ({success,message,...})
+ * supaya pemanggil (doPost/trigger otomatis) tahu PERSIS apakah sync benar-benar
+ * berhasil — sebelumnya fungsi ini cuma Logger.log dan `return` polos, yang
+ * membuat doPost() tidak bisa membedakan "berhasil" vs "gagal di tengah jalan".
+ */
 function pushReconciliationOcbc() {
   const props = PropertiesService.getScriptProperties();
   const token = props.getProperty('RECONCILIATION_OCBC_SYNC_TOKEN');
   const url = props.getProperty('RECONCILIATION_OCBC_SYNC_URL') || RECON_DEFAULT_URL;
 
   if (!token) {
-    Logger.log('ERROR: Script Property RECONCILIATION_OCBC_SYNC_TOKEN belum di-set. Sync dibatalkan.');
-    return;
+    const msg = 'ERROR: Script Property RECONCILIATION_OCBC_SYNC_TOKEN belum di-set. Sync dibatalkan.';
+    Logger.log(msg);
+    return { success: false, message: msg };
   }
 
   const built = reconBuildPayloadChunks_();
@@ -263,15 +270,57 @@ function pushReconciliationOcbc() {
       const text = resp.getContentText().substring(0, 500);
       Logger.log('Chunk ' + (i + 1) + '/' + built.chunks.length + ' -> HTTP ' + code + ': ' + text);
       if (code !== 200) {
-        Logger.log('Sync berhenti karena chunk gagal. Perbaiki dulu sebelum lanjut.');
-        return;
+        const msg = 'Sync berhenti karena chunk ' + (i + 1) + ' gagal (HTTP ' + code + '): ' + text;
+        Logger.log(msg);
+        return { success: false, message: msg, chunk_failed: i + 1, chunk_total: built.chunks.length };
       }
     } catch (e) {
-      Logger.log('Error fetch pada chunk ' + (i + 1) + ': ' + e.message);
-      return;
+      const msg = 'Error fetch pada chunk ' + (i + 1) + ': ' + e.message;
+      Logger.log(msg);
+      return { success: false, message: msg, chunk_failed: i + 1, chunk_total: built.chunks.length };
     }
   }
-  Logger.log('Sync selesai untuk business_date ' + built.businessDate + '.');
+  const doneMsg = 'Sync selesai untuk business_date ' + built.businessDate + ' (' + built.fpCount + ' FP, ' + built.bankCount + ' bank).';
+  Logger.log(doneMsg);
+  return { success: true, message: doneMsg, business_date: built.businessDate, fp_count: built.fpCount, bank_count: built.bankCount };
+}
+
+/**
+ * Web App entrypoint — dipanggil dari tombol "Sync Sekarang" di dashboard
+ * BRIC (lewat backend, BUKAN langsung dari browser user). WAJIB di-deploy
+ * manual sekali: Deploy > New deployment > pilih tipe "Web app" > Execute as
+ * "Me", Who has access "Anyone". Salin URL hasil deploy (berakhiran /exec)
+ * ke env RECONCILIATION_OCBC_TRIGGER_URL di server (backend/.env).
+ *
+ * Token dikirim di BODY (bukan header — Apps Script Web App tidak
+ * mengekspos header request custom lewat objek `e`), dicocokkan dengan
+ * Script Property yang sama dengan sync biasa (RECONCILIATION_OCBC_SYNC_TOKEN).
+ *
+ * PENTING: setiap kali kode ini diubah, deployment Web App yang SUDAH ADA
+ * TIDAK otomatis ke-update — harus "Manage deployments > Edit > New version"
+ * di Apps Script Editor, kalau tidak versi lama yang tetap jalan.
+ */
+function doPost(e) {
+  let body = {};
+  try { body = JSON.parse((e && e.postData && e.postData.contents) || '{}'); } catch (err) { body = {}; }
+
+  const props = PropertiesService.getScriptProperties();
+  const expectedToken = props.getProperty('RECONCILIATION_OCBC_SYNC_TOKEN');
+  const token = body.token || (e && e.parameter && e.parameter.token) || '';
+
+  if (!expectedToken || token !== expectedToken) {
+    return ContentService.createTextOutput(JSON.stringify({ success: false, error: 'Unauthorized' }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
+  try {
+    const result = pushReconciliationOcbc();
+    return ContentService.createTextOutput(JSON.stringify(result))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({ success: false, error: err.message }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
 }
 
 /** Trigger default tiap 5 menit. */

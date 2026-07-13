@@ -157,6 +157,7 @@ app.get('/api/warroom/reconciliation/transactions', requireAuth, reconciliationR
 app.get('/api/warroom/reconciliation/export',       requireAuth, reconciliationRoutes.exportHandler);
 app.post('/api/warroom/reconciliation/:id/resolve', requireAuth, reconciliationRoutes.resolveHandler);
 app.get('/api/warroom/reconciliation/:id/logs',     requireAuth, reconciliationRoutes.actionLogsHandler);
+app.post('/api/warroom/reconciliation/trigger-sync', requireAuth, reconciliationRoutes.triggerSyncHandler);
 app.use('/api/warroom',        requireAuth, warroomRoutes);
 
 app.post('/api/data-raw/outlet/sync',    dataRawRoutes.outletSyncHandler);    // token auth, no JWT

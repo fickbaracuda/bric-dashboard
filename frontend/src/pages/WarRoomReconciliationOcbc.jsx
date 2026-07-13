@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import Layout from '../components/Layout';
 import {
   getReconciliationAnalytics, getReconciliationTransactions, exportReconciliationCsv,
-  resolveReconciliation, getReconciliationLogs,
+  resolveReconciliation, getReconciliationLogs, triggerReconciliationSync,
 } from '../services/api';
 
 const COLOR = '#DC2626';
@@ -495,6 +495,8 @@ export default function WarRoomReconciliationOcbc() {
   const [activeTab, setActiveTab] = useState('summary');
   const [auditId, setAuditId] = useState(null);
   const [exporting, setExporting] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMessage, setSyncMessage] = useState(null);
 
   const loadAnalytics = useCallback((d) => {
     setLoading(true); setError(null);
@@ -520,6 +522,21 @@ export default function WarRoomReconciliationOcbc() {
       .finally(() => setExporting(false));
   };
 
+  // Backend merespons segera (fire-and-forget) — Apps Script baca Google
+  // Sheet + proses balik ke /sync bisa makan waktu 15-40 detik di belakang
+  // layar. Auto-refresh sekali setelah jeda supaya data baru langsung
+  // kelihatan tanpa user harus ingat klik Refresh manual.
+  const handleTriggerSync = () => {
+    setSyncing(true); setSyncMessage(null); setError(null);
+    triggerReconciliationSync()
+      .then(res => {
+        setSyncMessage(res.message || 'Sync dipicu di background.');
+        setTimeout(() => { loadAnalytics(date); setSyncMessage(null); }, 25000);
+      })
+      .catch(e => setError(e.response?.data?.error || e.message || 'Gagal memicu sync'))
+      .finally(() => setSyncing(false));
+  };
+
   const isEmpty = !loading && !error && analytics?.empty === true;
   const recentBatches = analytics?.recent_batches || [];
 
@@ -543,11 +560,21 @@ export default function WarRoomReconciliationOcbc() {
               </select>
             )}
             <button className="wrr-btn" onClick={handleRefresh}><i className="ti ti-refresh" /> Refresh</button>
+            <button className="wrr-btn wrr-btn-primary" onClick={handleTriggerSync} disabled={syncing}>
+              <i className={'ti ' + (syncing ? 'ti-loader-2 wrr-spin' : 'ti-cloud-upload')} /> {syncing ? 'Memicu...' : 'Sync Sekarang'}
+            </button>
             {analytics?.meta?.last_sync && (
               <span className="wrr-badge wrr-badge-sync"><i className="ti ti-plug-connected" /> Sync: {fmtDateTime(analytics.meta.last_sync)}</span>
             )}
           </div>
         </div>
+
+        {syncMessage && (
+          <div className="wrr-warning-banner" style={{ borderLeftColor: '#059669' }}>
+            <i className="ti ti-circle-check" style={{ color: '#059669' }} />
+            <div>{syncMessage}</div>
+          </div>
+        )}
 
         {loading && <div className="wrr-loading"><i className="ti ti-loader-2 wrr-spin" /> Memuat data...</div>}
         {!loading && error && <div className="wrr-error"><i className="ti ti-alert-circle" /> {error}</div>}

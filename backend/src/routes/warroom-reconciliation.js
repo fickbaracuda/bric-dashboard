@@ -807,6 +807,47 @@ async function actionLogsHandler(req, res) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// POST /api/warroom/reconciliation/trigger-sync — tombol "Sync Sekarang" di
+// dashboard. Backend TIDAK bisa baca Google Sheet langsung (tidak ada
+// credential Google API di server) — jadi endpoint ini memanggil Apps
+// Script yang di-deploy sbg Web App (lihat doPost() di
+// apps-script-reconciliation-ocbc.js), yang lalu menjalankan
+// pushReconciliationOcbc() dan mem-POST hasilnya balik ke /sync seperti
+// biasa. Respons dikirim SEGERA (fire-and-forget) karena rangkaian
+// Apps Script baca sheet + POST balik bisa makan waktu >30 detik — proses
+// Node tidak berhenti sampai request ini benar-benar selesai, jadi aman
+// dibiarkan lanjut di background setelah res.json() terkirim.
+// ─────────────────────────────────────────────────────────────────────────
+async function triggerSyncHandler(req, res) {
+  const triggerUrl = process.env.RECONCILIATION_OCBC_TRIGGER_URL;
+  const token = process.env.APPS_SCRIPT_TOKEN;
+
+  if (!triggerUrl || !token) {
+    return res.status(503).json({
+      error: 'Sync trigger belum dikonfigurasi di server (env RECONCILIATION_OCBC_TRIGGER_URL belum di-set, atau Apps Script belum di-deploy sebagai Web App).',
+    });
+  }
+
+  res.json({
+    success: true,
+    message: 'Sync dipicu, sedang berjalan di background (baca Google Sheet + proses bisa memakan waktu 15-40 detik). Klik Refresh setelah beberapa saat.',
+    triggered_at: new Date().toISOString(),
+  });
+
+  try {
+    const resp = await fetch(triggerUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    });
+    const text = await resp.text();
+    console.log('reconciliation trigger-sync (background) selesai, HTTP', resp.status, '-', text.slice(0, 300));
+  } catch (err) {
+    console.error('reconciliation trigger-sync (background) gagal:', err.message);
+  }
+}
+
 module.exports = {
   syncHandler,
   analyticsHandler,
@@ -814,6 +855,7 @@ module.exports = {
   exportHandler,
   resolveHandler,
   actionLogsHandler,
+  triggerSyncHandler,
   // exported untuk unit test (backend/scripts/test-reconciliation-ocbc.js)
   reconcileTransactions,
   parseDescriptionFallback,

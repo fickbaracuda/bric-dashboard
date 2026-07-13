@@ -65,11 +65,42 @@ relevan. Resync data yang sama tidak pernah menggandakan baris atau batch.
 | `GET /api/warroom/reconciliation/export?...` | JWT | CSV (di-fetch sbg blob di frontend krn butuh header Authorization) |
 | `POST /api/warroom/reconciliation/:id/resolve` | JWT | Body `{status, notes}`, tercatat di `recon_action_logs` |
 | `GET /api/warroom/reconciliation/:id/logs` | JWT | Riwayat audit 1 baris hasil |
+| `POST /api/warroom/reconciliation/trigger-sync` | JWT | Tombol "Sync Sekarang" — fire-and-forget, memanggil Apps Script Web App (lihat di bawah) |
+
+## Sync manual dari dashboard ("Sync Sekarang")
+Backend **tidak punya credential Google API** untuk baca Sheet langsung, jadi
+tombol "Sync Sekarang" bekerja dengan memanggil Apps Script yang di-deploy
+sebagai **Web App** — bukan dengan integrasi Google Sheets API baru. Alurnya:
+
+```
+Klik tombol (browser) -> POST /reconciliation/trigger-sync (JWT)
+  -> backend fire-and-forget POST ke Web App URL (env RECONCILIATION_OCBC_TRIGGER_URL)
+    -> Apps Script doPost() -> pushReconciliationOcbc() -> baca Sheet -> POST ke /sync seperti biasa
+```
+
+Endpoint `trigger-sync` merespons SEGERA ke browser (tidak menunggu Apps
+Script selesai, bisa 15-40 detik) — frontend auto-refresh sekali setelah 25
+detik. Tidak perlu tuning timeout Nginx karena request browser->backend
+selesai dalam hitungan milidetik.
+
+**Setup sekali (manual, wajib dilakukan pemilik akun Google — AI tidak
+punya akses browser/Google account):**
+1. Di Apps Script Editor (project yang sama dengan `apps-script-reconciliation-ocbc.js`):
+   Deploy > New deployment > pilih tipe **Web app**.
+2. Execute as: **Me**. Who has access: **Anyone**.
+3. Deploy, salin URL yang berakhiran `/exec`.
+4. Set env di server: `RECONCILIATION_OCBC_TRIGGER_URL=<url tsb>` di `backend/.env`, lalu `pm2 reload bric-backend` (atau lewat `safe_deploy.py` di deploy berikutnya).
+5. **Setiap kali kode Apps Script diubah**, deployment Web App yang sudah ada TIDAK auto-update — harus "Manage deployments > Edit (ikon pensil) > New version" supaya perubahan kepakai.
+
+Keamanan: `doPost()` mencocokkan token di BODY request (bukan header — Web App
+Apps Script tidak mengekspos header custom) dengan Script Property
+`RECONCILIATION_OCBC_SYNC_TOKEN` yang sama dipakai sync biasa.
 
 ## Apps Script (`apps-script-reconciliation-ocbc.js`)
 Fungsi: `testReconciliationOcbc()` (dry-run, tidak kirim), `pushReconciliationOcbc()`
-(kirim, chunk 1500 baris), `setupReconciliationOcbcTrigger()` (tiap 5 menit),
-`removeReconciliationOcbcTrigger()`.
+(kirim, chunk 1500 baris, sekarang return `{success,message,...}`),
+`setupReconciliationOcbcTrigger()` (tiap 5 menit), `removeReconciliationOcbcTrigger()`,
+`doPost(e)` (entrypoint Web App, lihat bagian "Sync manual dari dashboard" di atas).
 
 Script Properties:
 - `RECONCILIATION_OCBC_SYNC_TOKEN` — **harus sama dengan `APPS_SCRIPT_TOKEN` di server** (token yang sama dipakai war-room lain)

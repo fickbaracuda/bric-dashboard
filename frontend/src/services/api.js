@@ -380,6 +380,8 @@ export const resolveReconciliation = (id, data) =>
   axios.post(`${API_URL}/api/warroom/reconciliation/${id}/resolve`, data, { headers: authHeaders() }).then(r => r.data);
 export const getReconciliationLogs = (id) =>
   axios.get(`${API_URL}/api/warroom/reconciliation/${id}/logs`, { headers: authHeaders() }).then(r => r.data);
+export const triggerReconciliationSync = () =>
+  axios.post(`${API_URL}/api/warroom/reconciliation/trigger-sync`, {}, { headers: authHeaders() }).then(r => r.data);
 
 /* WAR-ROOM — QRIS Issuance Control Tower */
 export const getQrisControlTowerAnalytics = () =>
