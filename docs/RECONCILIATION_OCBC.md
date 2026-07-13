@@ -309,3 +309,31 @@ Jalankan di server (Node lokal Windows tidak tersedia).
   Postgres menolak string itu sbg DATE. Insiden nyata pernah terjadi pada
   `value_date`; fix permanen: selalu cast `::text` di setiap `SELECT` yang
   membaca kolom DATE (pola yang sama seperti `transaction_date`/`business_date`).
+- **Match rate kolaps mendadak, `recon_status` didominasi `DUPLICATE_BANK`,
+  `recon_bank_archive` membengkak jauh melebihi `bank_row_count` (mis. 10.000
+  padahal source_limit 5.000)**: insiden nyata — `computeBankRowFingerprint()`
+  sempat ikut memakai kolom `balance`. Running balance OCBC utk 1 mutasi yang
+  SAMA bisa berubah antar sync (transaksi lain yang clear belakangan menggeser
+  saldo berjalan yang dilaporkan bank utk baris lama), sehingga baris bank yang
+  identik (bank_code/account_no/reference_no/description/debit/credit sama
+  persis) menghasilkan `row_fingerprint` BARU tiap kali di-sync ulang — archive
+  tidak pernah ter-upsert ke baris yang sama, terus menumpuk duplikat, dan
+  grouping by `reference_no` di engine menemukan >1 "principal" utk referensi
+  yang sama -> `DUPLICATE_BANK` mendominasi, match rate anjlok. Fix permanen:
+  `balance` DIKELUARKAN dari fingerprint (tetap disimpan di kolom archive,
+  di-refresh via `ON CONFLICT ... SET balance = EXCLUDED.balance`, hanya tidak
+  lagi jadi bagian identitas). Kalau archive sudah kadung membengkak sebelum
+  fix ini di-deploy, dan seluruh baris arsip masih dalam window snapshot bank
+  yang masih hidup (belum tergeser keluar 5.000 baris), aman untuk
+  `TRUNCATE recon_bank_snapshots CASCADE;` (ikut mengosongkan
+  `recon_bank_archive`) lalu memicu 1x sync baru (Sync Now/reactive trigger)
+  supaya archive terbangun ulang bersih dari fingerprint yang sudah benar.
+  Jangan truncate kalau ada kemungkinan baris arsip lama sudah tergeser keluar
+  snapshot hidup — itu akan menghilangkan histori yang justru menjadi tujuan
+  utama Rolling Bank Archive.
+  Catatan tambahan: kalau 1 `reference_no` punya lebih dari 2 baris arsip
+  (principal+fee), itu BUKAN otomatis bug — BI-FAST OCBC bisa memakai ulang
+  `reference_no` yang sama utk transaksi asli + reversal-nya (debit pair +
+  credit pair), dan itu memang tugas cascade `REVERSAL` di
+  `reconcileTransactions()`/`reconcileTransactionsWithCoverage()` utk
+  mengenalinya, bukan tanda archive rusak.
