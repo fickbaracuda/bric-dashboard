@@ -6,7 +6,7 @@
 
 const assert = require('assert');
 const {
-  reconcileTransactions, parseDescriptionFallback, cleanNum, numEq,
+  reconcileTransactions, parseDescriptionFallback, cleanNum, numEq, toIsoDate,
 } = require('../src/routes/warroom-reconciliation');
 
 const tests = [];
@@ -33,6 +33,24 @@ test('cleanNum: kosong/"-" -> null', () => {
   assert.strictEqual(cleanNum(''), null);
   assert.strictEqual(cleanNum('-'), null);
   assert.strictEqual(cleanNum(null), null);
+});
+
+// ── toIsoDate — regresi: hari/bulan sempat tertukar (13/07/2026 jadi
+// 2026-13-07, ditolak Postgres karena bulan 13 tidak valid) ──────────────
+test('toIsoDate: DD/MM/YYYY tidak tertukar hari/bulan', () => {
+  assert.strictEqual(toIsoDate('13/07/2026'), '2026-07-13');
+  assert.strictEqual(toIsoDate('01/12/2026'), '2026-12-01');
+});
+test('toIsoDate: DD/MM/YYYY dgn waktu (format asli OCBC "Transaction Date") tetap benar', () => {
+  assert.strictEqual(toIsoDate('13/07/2026 10:27'), '2026-07-13');
+});
+test('toIsoDate: ISO passthrough', () => {
+  assert.strictEqual(toIsoDate('2026-07-13'), '2026-07-13');
+  assert.strictEqual(toIsoDate('2026-07-13T10:27:00.000Z'), '2026-07-13');
+});
+test('toIsoDate: kosong/null -> null', () => {
+  assert.strictEqual(toIsoDate(''), null);
+  assert.strictEqual(toIsoDate(null), null);
 });
 
 // ── parseDescriptionFallback ────────────────────────────────────────────

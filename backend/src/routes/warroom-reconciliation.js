@@ -65,12 +65,21 @@ function cleanNum(value) {
   return Number.isFinite(n) ? n : null;
 }
 
+/**
+ * "DD/MM/YYYY" atau "DD/MM/YYYY HH:mm" (format OCBC apa adanya, kolom
+ * Transaction Date/Value Date sering berupa TEXT bukan Date object di
+ * sheet) -> "YYYY-MM-DD". PENTING: m[1]=hari, m[2]=bulan — jangan tertukar
+ * (insiden: sempat kebalik jadi YYYY-DD-MM, contoh "13/07/2026" jadi
+ * "2026-13-07" yang ditolak Postgres karena bulan 13 tidak valid).
+ * Regex TANPA jangkar `$` di akhir supaya trailing jam ("HH:mm") diabaikan,
+ * bukan malah gagal match dan jatuh ke new Date() yang ambigu.
+ */
 function toIsoDate(value) {
   const s = nullIfEmpty(value);
   if (!s) return null;
   if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
-  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s);
-  if (m) return `${m[3]}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`;
+  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})/.exec(s);
+  if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
   const d = new Date(s);
   return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
 }
