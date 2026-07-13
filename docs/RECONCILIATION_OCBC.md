@@ -98,9 +98,34 @@ Apps Script tidak mengekspos header custom) dengan Script Property
 
 ## Apps Script (`apps-script-reconciliation-ocbc.js`)
 Fungsi: `testReconciliationOcbc()` (dry-run, tidak kirim), `pushReconciliationOcbc()`
-(kirim, chunk 1500 baris, sekarang return `{success,message,...}`),
-`setupReconciliationOcbcTrigger()` (tiap 5 menit), `removeReconciliationOcbcTrigger()`,
-`doPost(e)` (entrypoint Web App, lihat bagian "Sync manual dari dashboard" di atas).
+(kirim, chunk 1500 baris, return `{success,message,...}`),
+`setupReconciliationOcbcTrigger()`, `removeReconciliationOcbcTrigger()`,
+`doPost(e)` (entrypoint Web App — **saat ini tidak dipakai**, lihat catatan di bawah).
+
+### Auto-sync reaktif (bukan cuma interval tetap)
+Tombol "Sync Sekarang" dari dashboard (via Web App) **tidak bisa dipakai** —
+deployment Web App di domain Google Workspace `bm.co.id` mewajibkan login
+Google untuk request eksternal (`Who has access: Anyone within <domain>`,
+bukan publik), dan ini kebijakan admin Workspace, bukan sesuatu yang bisa
+di-bypass dari sisi kode. Solusi yang dipakai sebagai gantinya: trigger
+2 lapis di Apps Script supaya sync jalan otomatis segera setelah ada
+perubahan di Sheet, TANPA perlu tombol dari dashboard:
+
+1. **`reconOnChangeTrigger_`** — installable trigger terpasang ke event
+   `onChange` spreadsheet. HANYA menandai timestamp "ada perubahan" di
+   Script Properties (`RECON_DIRTY_SINCE`) — sangat ringan, bukan sync
+   langsung (kalau langsung sync di setiap onChange, edit/paste beruntun
+   dari tim bisa memicu banyak sync yang tumpang tindih saling menghapus
+   data batch yang sama, dan cepat menghabiskan kuota harian Apps Script).
+2. **`checkAndSyncIfDirtyReconciliationOcbc`** — time-based trigger tiap
+   1 menit. Baru menjalankan `pushReconciliationOcbc()` kalau: ada dirty
+   flag, sudah lewat 30 detik (`RECON_DEBOUNCE_MS`) sejak edit terakhir
+   (supaya tidak nyambar saat tim masih input), dan tidak ada sync lain
+   yang sedang berjalan (lock `RECON_SYNC_IN_PROGRESS`).
+
+Hasil: data ter-update otomatis ~30-90 detik setelah perubahan terakhir di
+Sheet. Pasang sekali lewat `setupReconciliationOcbcTrigger()` (memasang
+KEDUA trigger di atas), lepas dengan `removeReconciliationOcbcTrigger()`.
 
 Script Properties:
 - `RECONCILIATION_OCBC_SYNC_TOKEN` — **harus sama dengan `APPS_SCRIPT_TOKEN` di server** (token yang sama dipakai war-room lain)

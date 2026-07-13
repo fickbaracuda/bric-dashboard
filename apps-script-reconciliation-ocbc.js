@@ -323,21 +323,77 @@ function doPost(e) {
   }
 }
 
-/** Trigger default tiap 5 menit. */
+// ═══════════════════════════════════════════════════════════════════════
+// Auto-sync REAKTIF terhadap perubahan Sheet (bukan cuma interval tetap).
+//
+// SENGAJA TIDAK langsung sync di setiap event onChange — kalau tim
+// mengetik/paste beruntun, itu bisa memicu banyak sync yang tumpang tindih
+// dalam hitungan detik (saling menghapus/menulis ulang batch yang sama) dan
+// cepat menghabiskan kuota harian Apps Script. Polanya jadi 2 lapis:
+//   1. onChange (installable trigger) HANYA menandai "ada perubahan" (flag
+//      timestamp di Script Properties) - sangat ringan, hampir tanpa kuota.
+//   2. Time-based trigger tiap 1 menit MENGECEK flag itu - baru benar-benar
+//      menjalankan pushReconciliationOcbc() kalau sudah lewat masa tunggu
+//      (debounce) sejak edit TERAKHIR, dan tidak ada sync lain yang sedang
+//      berjalan (lock). Hasil: data ter-update otomatis ~30-90 detik
+//      setelah perubahan terakhir, tanpa risiko sync saling tabrakan.
+// ═══════════════════════════════════════════════════════════════════════
+const RECON_DIRTY_FLAG_KEY = 'RECON_DIRTY_SINCE';
+const RECON_SYNC_LOCK_KEY = 'RECON_SYNC_IN_PROGRESS';
+const RECON_DEBOUNCE_MS = 30 * 1000; // tunggu 30 detik sejak edit terakhir sebelum sync
+const RECON_CHECK_INTERVAL_MINUTES = 1;
+
+/** Installable trigger (onChange) — HANYA menandai, TIDAK sync langsung. */
+function reconOnChangeTrigger_(e) {
+  PropertiesService.getScriptProperties().setProperty(RECON_DIRTY_FLAG_KEY, String(Date.now()));
+}
+
+/** Dipanggil time-based trigger tiap 1 menit. Sync HANYA jalan kalau ada
+ * perubahan (dirty flag) DAN sudah lewat masa tunggu sejak edit terakhir,
+ * DAN tidak ada sync lain yang sedang berjalan (lock). */
+function checkAndSyncIfDirtyReconciliationOcbc() {
+  const props = PropertiesService.getScriptProperties();
+  const dirtySince = Number(props.getProperty(RECON_DIRTY_FLAG_KEY) || 0);
+  if (!dirtySince) return; // tidak ada perubahan sejak sync terakhir
+
+  if (Date.now() - dirtySince < RECON_DEBOUNCE_MS) return; // masih dalam masa tunggu, tim mungkin masih input
+
+  if (props.getProperty(RECON_SYNC_LOCK_KEY) === 'true') {
+    Logger.log('Sync sebelumnya masih berjalan, lewati siklus ini.');
+    return;
+  }
+
+  props.setProperty(RECON_SYNC_LOCK_KEY, 'true');
+  try {
+    // Hapus dirty flag SEBELUM push — kalau ada edit baru masuk selagi sync
+    // berjalan, flag akan otomatis ke-set ulang oleh reconOnChangeTrigger_
+    // dan tertangkap di siklus berikutnya (bukan hilang begitu saja).
+    props.deleteProperty(RECON_DIRTY_FLAG_KEY);
+    pushReconciliationOcbc();
+  } finally {
+    props.deleteProperty(RECON_SYNC_LOCK_KEY);
+  }
+}
+
+/** Pasang trigger auto-sync reaktif (onChange + pengecekan tiap 1 menit). */
 function setupReconciliationOcbcTrigger() {
   removeReconciliationOcbcTrigger();
-  ScriptApp.newTrigger('pushReconciliationOcbc')
+  const ss = SpreadsheetApp.openById(RECON_SHEET_ID);
+  ScriptApp.newTrigger('reconOnChangeTrigger_').forSpreadsheet(ss).onChange().create();
+  ScriptApp.newTrigger('checkAndSyncIfDirtyReconciliationOcbc')
     .timeBased()
-    .everyMinutes(5)
+    .everyMinutes(RECON_CHECK_INTERVAL_MINUTES)
     .create();
-  Logger.log('Trigger set: pushReconciliationOcbc setiap 5 menit.');
+  Logger.log('Trigger dipasang: sync otomatis berjalan ~' + (RECON_DEBOUNCE_MS / 1000) +
+    ' detik setelah ada perubahan di Sheet (dicek tiap ' + RECON_CHECK_INTERVAL_MINUTES + ' menit).');
 }
 
 function removeReconciliationOcbcTrigger() {
   ScriptApp.getProjectTriggers().forEach(t => {
-    if (t.getHandlerFunction() === 'pushReconciliationOcbc') {
+    const fn = t.getHandlerFunction();
+    if (fn === 'pushReconciliationOcbc' || fn === 'reconOnChangeTrigger_' || fn === 'checkAndSyncIfDirtyReconciliationOcbc') {
       ScriptApp.deleteTrigger(t);
-      Logger.log('Trigger lama dihapus.');
+      Logger.log('Trigger lama dihapus: ' + fn);
     }
   });
 }
