@@ -180,18 +180,20 @@ export default function Sidebar({ onClose }) {
 
   const [winmeOpen, setWinmeOpen] = useState(isWinmePath || isWinmeTimPath || isWRIqCcPath || isWRQw3Path || isWRIQRawPath || isWRQrisPath || isWRTrxOutPath || isWRQrisCtlPath || isDataRawPath);
   const [timOpen,   setTimOpen]   = useState(isWinmeTimPath);
-  const [paOpen,    setPAOpen]    = useState(isPABasePath || isPATimPath || isWREkspPath || isWREkspProdukPath || isWRFPPath || isWRFarmPath || isWRPAProduk || isWRDMFPPath || isWRDmCtPath || isWRPaAsdpPath || isWRPaLpdPath || isWRBumdesPath || isWRMgmPath || isWRHunterPath || isWRReconOcbcPath);
+  const [paOpen,    setPAOpen]    = useState(isPABasePath || isPATimPath || isWREkspPath || isWREkspProdukPath || isWRFPPath || isWRFarmPath || isWRPAProduk || isWRDMFPPath || isWRDmCtPath || isWRPaAsdpPath || isWRPaLpdPath || isWRBumdesPath || isWRMgmPath || isWRHunterPath);
   const [paTimOpen, setPATimOpen] = useState(isPATimPath);
   const [ddOpen,    setDDOpen]    = useState(isDDPath || isSCTimPath || isWRSCPath);
   const [scTimOpen, setSCTimOpen] = useState(isSCTimPath);
+  const [rekonOpen, setRekonOpen] = useState(isWRReconOcbcPath);
 
   useEffect(() => {
     if (isWinmePath || isWinmeTimPath || isWRIqCcPath || isWRQw3Path || isWRIQRawPath || isDataRawPath || isWRTrxOutPath || isWRQrisCtlPath) setWinmeOpen(true);
     if (isWinmeTimPath) setTimOpen(true);
-    if (isPABasePath || isPATimPath || isWREkspPath || isWREkspProdukPath || isWRFPPath || isWRFarmPath || isWRPAProduk || isWRDMFPPath || isWRDmCtPath || isWRPaAsdpPath || isWRPaLpdPath || isWRBumdesPath || isWRMgmPath || isWRHunterPath || isWRReconOcbcPath) setPAOpen(true);
+    if (isPABasePath || isPATimPath || isWREkspPath || isWREkspProdukPath || isWRFPPath || isWRFarmPath || isWRPAProduk || isWRDMFPPath || isWRDmCtPath || isWRPaAsdpPath || isWRPaLpdPath || isWRBumdesPath || isWRMgmPath || isWRHunterPath) setPAOpen(true);
     if (isPATimPath) setPATimOpen(true);
     if (isDDPath || isSCTimPath || isWRSCPath) setDDOpen(true);
     if (isSCTimPath) setSCTimOpen(true);
+    if (isWRReconOcbcPath) setRekonOpen(true);
   }, [location.pathname, members, membersPA, membersSC]);
 
   const loadAllMembers = () => {
@@ -594,17 +596,6 @@ export default function Sidebar({ onClose }) {
                 <span className="sidebar-warroom-badge" style={{ background: '#F97316' }}>HNT</span>
               </NavLink>
               <NavLink
-                to="/war-room/rekonsiliasi-ocbc"
-                onClick={onClose}
-                className={({ isActive }) =>
-                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
-                }
-              >
-                <i className="ti ti-building-bank" style={{ color: '#DC2626' }} aria-hidden="true" />
-                <span>Rekonsiliasi OCBC</span>
-                <span className="sidebar-warroom-badge" style={{ background: '#DC2626' }}>REK</span>
-              </NavLink>
-              <NavLink
                 to="/war-room/dm-fastpay"
                 onClick={onClose}
                 className={({ isActive }) =>
@@ -760,6 +751,44 @@ export default function Sidebar({ onClose }) {
                 <span>WAR-ROOM Speedcash</span>
               </NavLink>
 
+            </div>
+          </Accordion>
+        </div>
+
+        <div className="sidebar-menu-sep" />
+
+        {/* ── Rekonsiliasi — level 1 accordion ── */}
+        <div className="sidebar-accordion-wrap">
+          <NavLink
+            to="/war-room/rekonsiliasi-ocbc"
+            onClick={() => { setRekonOpen(o => !o); onClose(); }}
+            className={({ isActive }) =>
+              'sidebar-link sidebar-link-accordion' +
+              (isActive || isWRReconOcbcPath ? ' sidebar-link--active' : '')
+            }
+          >
+            <i className="ti ti-building-bank" aria-hidden="true" />
+            <span style={{ flex: 1 }}>Rekonsiliasi</span>
+            <i
+              className={'ti ti-chevron-down sidebar-chevron' + (rekonOpen ? ' sidebar-chevron--open' : '')}
+              onClick={e => { e.preventDefault(); e.stopPropagation(); setRekonOpen(o => !o); }}
+              aria-hidden="true"
+            />
+          </NavLink>
+
+          <Accordion open={rekonOpen}>
+            <div className="sidebar-submenu">
+              <NavLink
+                to="/war-room/rekonsiliasi-ocbc"
+                onClick={onClose}
+                className={({ isActive }) =>
+                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                }
+              >
+                <i className="ti ti-building-bank" style={{ color: '#DC2626' }} aria-hidden="true" />
+                <span>Rekonsiliasi OCBC</span>
+                <span className="sidebar-warroom-badge" style={{ background: '#DC2626' }}>REK</span>
+              </NavLink>
             </div>
           </Accordion>
         </div>
