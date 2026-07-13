@@ -80,27 +80,39 @@ function reconMdrToStringId_(value) {
  * bulan menghasilkan tanggal valid DAN tidak lagi di masa depan), tukar
  * hari<->bulan. Kalau tidak memenuhi syarat itu, dikirim apa adanya (lebih
  * baik salah tanggal yang sudah ada daripada menebak salah arah).
+ *
+ * TIDAK log per-baris (bisa ribuan baris tiap sync tiap 5 menit — beresiko
+ * memenuhi kuota Execution Log). Caller (reconMdrReadBank_) mengumpulkan
+ * status.corrected/status.uncorrectable dan melaporkan SATU baris ringkasan
+ * di akhir lewat reconMdrLogPostDateSummary_().
  */
 function reconMdrFixPostDateSwap_(dateObj) {
-  if (!(Object.prototype.toString.call(dateObj) === '[object Date]' && !isNaN(dateObj))) return dateObj;
+  if (!(Object.prototype.toString.call(dateObj) === '[object Date]' && !isNaN(dateObj))) {
+    return { value: dateObj, status: 'unchanged' };
+  }
   const now = new Date();
-  if (dateObj.getTime() <= now.getTime()) return dateObj; // bukan masa depan -> tidak perlu dikoreksi
+  if (dateObj.getTime() <= now.getTime()) return { value: dateObj, status: 'unchanged' }; // bukan masa depan -> tidak perlu dikoreksi
 
   const parts = Utilities.formatDate(dateObj, 'Asia/Jakarta', 'yyyy,MM,dd,HH,mm,ss').split(',');
   const y = parts[0], mo = Number(parts[1]), d = Number(parts[2]), h = parts[3], mi = parts[4], s = parts[5];
   if (d > 12) {
-    Logger.log('WARNING: PostDate ' + dateObj.toISOString() + ' di masa depan tapi tidak bisa dikoreksi (hari>12, pertukaran hari/bulan tidak valid). Dikirim apa adanya — cek manual sheet DATA Mandiri.');
-    return dateObj;
+    return { value: dateObj, status: 'uncorrectable' };
   }
   const swapped = new Date(y + '-' + String(d).padStart(2, '0') + '-' + String(mo).padStart(2, '0') + 'T' + h + ':' + mi + ':' + s + '+07:00');
   if (isNaN(swapped) || swapped.getTime() > now.getTime()) {
-    Logger.log('WARNING: PostDate ' + dateObj.toISOString() + ' di masa depan, percobaan tukar hari/bulan tetap tidak valid. Dikirim apa adanya — cek manual sheet DATA Mandiri.');
-    return dateObj;
+    return { value: dateObj, status: 'uncorrectable' };
   }
-  Logger.log('INFO: PostDate dikoreksi (hari/bulan tertukar akibat locale sheet) dari ' +
-    Utilities.formatDate(dateObj, 'Asia/Jakarta', 'yyyy-MM-dd HH:mm:ss') + ' menjadi ' +
-    Utilities.formatDate(swapped, 'Asia/Jakarta', 'yyyy-MM-dd HH:mm:ss'));
-  return swapped;
+  return { value: swapped, status: 'corrected' };
+}
+
+/** Satu baris ringkasan di Execution Log, bukan satu baris per row yang dikoreksi. */
+function reconMdrLogPostDateSummary_(stats) {
+  if (stats.corrected > 0) {
+    Logger.log('INFO: ' + stats.corrected + ' PostDate dikoreksi (hari/bulan tertukar akibat locale sheet, mutasi bank tidak mungkin bertanggal masa depan).');
+  }
+  if (stats.uncorrectable > 0) {
+    Logger.log('WARNING: ' + stats.uncorrectable + ' PostDate di masa depan TAPI tidak bisa dikoreksi otomatis (hari>12 atau hasil tukar tetap tidak valid). Cek manual sheet DATA Mandiri (lihat source_row di raw_data).');
+  }
 }
 
 /**
@@ -178,6 +190,7 @@ function reconMdrReadBank_() {
   const headerIndex = reconMdrHeaderIndex_(values[0]);
 
   const rows = [];
+  const postDateStats = { corrected: 0, uncorrectable: 0 };
   for (let r = 1; r < values.length; r++) {
     const row = values[r];
     const remarks = String(reconMdrCol_(row, headerIndex, 'remarks', 3) || '').trim();
@@ -188,12 +201,14 @@ function reconMdrReadBank_() {
     if (!remarks && !additionalDesc && creditAmount === null && debitAmount === null) continue; // baris kosong
 
     const rawPostDate = reconMdrCol_(row, headerIndex, 'postdate', 2);
-    const fixedPostDate = reconMdrFixPostDateSwap_(rawPostDate);
+    const postDateFix = reconMdrFixPostDateSwap_(rawPostDate);
+    if (postDateFix.status === 'corrected') postDateStats.corrected++;
+    else if (postDateFix.status === 'uncorrectable') postDateStats.uncorrectable++;
 
     rows.push({
       account_no: reconMdrToStringId_(reconMdrCol_(row, headerIndex, 'accountno', 0)),
       ccy: String(reconMdrCol_(row, headerIndex, 'ccy', 1) || '').trim() || null,
-      post_date: reconMdrToIso_(fixedPostDate),
+      post_date: reconMdrToIso_(postDateFix.value),
       remarks: remarks || null,
       additional_desc: additionalDesc || null,
       credit_amount: creditAmount,
@@ -206,6 +221,7 @@ function reconMdrReadBank_() {
       },
     });
   }
+  reconMdrLogPostDateSummary_(postDateStats);
   return rows;
 }
 
