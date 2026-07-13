@@ -120,13 +120,33 @@ DATE — supaya presisi jam-menit tidak hilang), `recon_sync_batches.scope_mode`
 
 ## Apps Script (`apps-script-reconciliation-mandiri.js`)
 Fungsi: `testReconciliationMandiri()` (dry-run), `pushReconciliationMandiri()`
-(kirim, chunk 1500 baris), `setupReconciliationMandiriTrigger()` (time-based
-tiap 5 menit + `LockService` supaya tidak overlap),
+(kirim, chunk 1500 baris), `setupReconciliationMandiriTrigger()`,
 `removeReconciliationMandiriTrigger()`, `getReconciliationMandiriStatus()`
 (lihat ringkasan sync terakhir tanpa buka Execution Log).
 
 Header sheet dibaca **by NAME** (bukan index hardcode) — kolom boleh
 berpindah posisi asal nama header sesuai spek.
+
+### Auto-sync REAKTIF (bukan interval tetap)
+Sama seperti Rekonsiliasi OCBC, sync mengandalkan trigger 2 lapis supaya
+data ter-update otomatis segera setelah ada perubahan di Sheet — BUKAN
+menunggu interval tetap (mis. 5 menit):
+
+1. **`reconMdrOnChangeTrigger_`** — installable trigger terpasang ke event
+   `onChange` spreadsheet. HANYA menandai timestamp "ada perubahan" di
+   Script Properties (`RECON_MDR_DIRTY_SINCE`) — sangat ringan, bukan sync
+   langsung (kalau langsung sync di setiap onChange, edit/paste beruntun
+   dari tim bisa memicu banyak sync yang tumpang tindih saling menghapus
+   data batch yang sama, dan cepat menghabiskan kuota harian Apps Script).
+2. **`checkAndSyncIfDirtyReconciliationMandiri`** — time-based trigger tiap
+   1 menit. Baru menjalankan `pushReconciliationMandiri()` kalau: ada dirty
+   flag, sudah lewat 30 detik (`RECON_MDR_DEBOUNCE_MS`) sejak edit terakhir
+   (supaya tidak nyambar saat tim masih input), dan tidak ada sync lain
+   yang sedang berjalan (lock `RECON_MDR_SYNC_IN_PROGRESS`).
+
+Hasil: data ter-update otomatis ~30-90 detik setelah perubahan terakhir di
+Sheet. Pasang sekali lewat `setupReconciliationMandiriTrigger()` (memasang
+KEDUA trigger di atas), lepas dengan `removeReconciliationMandiriTrigger()`.
 
 ### Setup
 1. Buka spreadsheet `1iGDzKsoDdcaL2Hfk2_q1y0N50KEMm2c6auaT9DhKPFc` →
@@ -137,7 +157,8 @@ berpindah posisi asal nama header sesuai spek.
    - `BRIC_API_BASE_URL` = `https://bmsretail.my.id` (opsional, ini defaultnya)
 4. Jalankan `testReconciliationMandiri()` dulu — cek Execution Log.
 5. Jalankan `pushReconciliationMandiri()` untuk sync manual pertama kali.
-6. Jalankan `setupReconciliationMandiriTrigger()` untuk sync otomatis tiap 5 menit.
+6. Jalankan `setupReconciliationMandiriTrigger()` untuk sync otomatis reaktif
+   (~30-90 detik setelah ada perubahan apa pun di Sheet).
 
 ## Troubleshooting
 - **401 saat sync**: cek `BRIC_SYNC_TOKEN` di Script Properties sama dengan `APPS_SCRIPT_TOKEN` server.

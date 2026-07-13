@@ -14,8 +14,10 @@
 //   4. Jalankan testReconciliationMandiri() dulu (Logger.log, TIDAK
 //      mengirim apa pun) — cek jumlah baris FP/Mandiri terbaca benar.
 //   5. Kalau sudah OK, jalankan pushReconciliationMandiri() untuk sync manual.
-//   6. Jalankan setupReconciliationMandiriTrigger() untuk sync otomatis
-//      tiap 5 menit. removeReconciliationMandiriTrigger() untuk stop.
+//   6. Jalankan setupReconciliationMandiriTrigger() untuk sync OTOMATIS
+//      REAKTIF — jalan ~30-90 detik setelah ada perubahan apa pun di Sheet
+//      (bukan menunggu interval tetap). removeReconciliationMandiriTrigger()
+//      untuk stop.
 //   7. getReconciliationMandiriStatus() -> lihat ringkasan sync terakhir.
 // ═══════════════════════════════════════════════════════════════════════
 
@@ -26,6 +28,24 @@ const RECON_MDR_DEFAULT_BASE_URL = 'https://bmsretail.my.id';
 const RECON_MDR_BANK_CODE = 'MANDIRI';
 const RECON_MDR_CHUNK_SIZE = 1500;
 const RECON_MDR_LAST_STATUS_KEY = 'RECON_MDR_LAST_STATUS';
+
+// Auto-sync REAKTIF (bukan interval tetap) — pola sama dengan Rekonsiliasi
+// OCBC (lihat apps-script-reconciliation-ocbc.js). SENGAJA TIDAK sync
+// langsung di setiap event onChange — kalau tim mengetik/paste beruntun,
+// itu bisa memicu banyak sync tumpang tindih dalam hitungan detik (saling
+// menghapus/menulis ulang batch yang sama) dan cepat menghabiskan kuota
+// harian Apps Script. Polanya 2 lapis:
+//   1. onChange (installable trigger) HANYA menandai "ada perubahan" (flag
+//      timestamp di Script Properties) — sangat ringan, hampir tanpa kuota.
+//   2. Time-based trigger tiap 1 menit MENGECEK flag itu — baru benar-benar
+//      menjalankan pushReconciliationMandiri() kalau sudah lewat masa tunggu
+//      (debounce) sejak edit TERAKHIR, dan tidak ada sync lain yang sedang
+//      berjalan (lock). Hasil: data ter-update otomatis ~30-90 detik setelah
+//      perubahan terakhir di Sheet.
+const RECON_MDR_DIRTY_FLAG_KEY = 'RECON_MDR_DIRTY_SINCE';
+const RECON_MDR_SYNC_LOCK_KEY = 'RECON_MDR_SYNC_IN_PROGRESS';
+const RECON_MDR_DEBOUNCE_MS = 30 * 1000; // tunggu 30 detik sejak edit terakhir sebelum sync
+const RECON_MDR_CHECK_INTERVAL_MINUTES = 1;
 
 /**
  * Parser angka aman — WAJIB cek typeof number DULU (insiden Speedcash: titik
@@ -353,39 +373,57 @@ function getReconciliationMandiriStatus() {
   return status;
 }
 
+/** Installable trigger (onChange) — HANYA menandai, TIDAK sync langsung. */
+function reconMdrOnChangeTrigger_(e) {
+  PropertiesService.getScriptProperties().setProperty(RECON_MDR_DIRTY_FLAG_KEY, String(Date.now()));
+}
+
 /**
- * Pasang trigger time-based tiap 5 menit (default spek). LockService dipakai
- * DI DALAM handler trigger (bukan di sini) supaya kalau eksekusi sebelumnya
- * masih berjalan (misal data besar/lambat), eksekusi berikutnya tidak
- * tumpang tindih menulis batch yang sama.
+ * Dipanggil time-based trigger tiap 1 menit. Sync HANYA jalan kalau ada
+ * perubahan (dirty flag) DAN sudah lewat masa tunggu sejak edit terakhir,
+ * DAN tidak ada sync lain yang sedang berjalan (lock).
  */
-function reconMdrTriggerHandler_() {
-  const lock = LockService.getScriptLock();
-  const gotLock = lock.tryLock(5000); // tunggu maks 5 detik utk dapat lock
-  if (!gotLock) {
-    Logger.log('Sync Mandiri sebelumnya masih berjalan, lewati siklus trigger ini.');
+function checkAndSyncIfDirtyReconciliationMandiri() {
+  const props = PropertiesService.getScriptProperties();
+  const dirtySince = Number(props.getProperty(RECON_MDR_DIRTY_FLAG_KEY) || 0);
+  if (!dirtySince) return; // tidak ada perubahan sejak sync terakhir
+
+  if (Date.now() - dirtySince < RECON_MDR_DEBOUNCE_MS) return; // masih dalam masa tunggu, tim mungkin masih input
+
+  if (props.getProperty(RECON_MDR_SYNC_LOCK_KEY) === 'true') {
+    Logger.log('Sync Mandiri sebelumnya masih berjalan, lewati siklus ini.');
     return;
   }
+
+  props.setProperty(RECON_MDR_SYNC_LOCK_KEY, 'true');
   try {
+    // Hapus dirty flag SEBELUM push — kalau ada edit baru masuk selagi sync
+    // berjalan, flag akan otomatis ke-set ulang oleh reconMdrOnChangeTrigger_
+    // dan tertangkap di siklus berikutnya (bukan hilang begitu saja).
+    props.deleteProperty(RECON_MDR_DIRTY_FLAG_KEY);
     pushReconciliationMandiri();
   } finally {
-    lock.releaseLock();
+    props.deleteProperty(RECON_MDR_SYNC_LOCK_KEY);
   }
 }
 
+/** Pasang trigger auto-sync reaktif (onChange + pengecekan tiap 1 menit). */
 function setupReconciliationMandiriTrigger() {
   removeReconciliationMandiriTrigger();
-  ScriptApp.newTrigger('reconMdrTriggerHandler_')
+  const ss = SpreadsheetApp.openById(RECON_MDR_SHEET_ID);
+  ScriptApp.newTrigger('reconMdrOnChangeTrigger_').forSpreadsheet(ss).onChange().create();
+  ScriptApp.newTrigger('checkAndSyncIfDirtyReconciliationMandiri')
     .timeBased()
-    .everyMinutes(5)
+    .everyMinutes(RECON_MDR_CHECK_INTERVAL_MINUTES)
     .create();
-  Logger.log('Trigger dipasang: sync otomatis Rekonsiliasi Mandiri tiap 5 menit.');
+  Logger.log('Trigger dipasang: sync otomatis berjalan ~' + (RECON_MDR_DEBOUNCE_MS / 1000) +
+    ' detik setelah ada perubahan di Sheet (dicek tiap ' + RECON_MDR_CHECK_INTERVAL_MINUTES + ' menit).');
 }
 
 function removeReconciliationMandiriTrigger() {
   ScriptApp.getProjectTriggers().forEach(t => {
     const fn = t.getHandlerFunction();
-    if (fn === 'reconMdrTriggerHandler_' || fn === 'pushReconciliationMandiri') {
+    if (fn === 'reconMdrTriggerHandler_' || fn === 'reconMdrOnChangeTrigger_' || fn === 'checkAndSyncIfDirtyReconciliationMandiri' || fn === 'pushReconciliationMandiri') {
       ScriptApp.deleteTrigger(t);
       Logger.log('Trigger lama dihapus: ' + fn);
     }
