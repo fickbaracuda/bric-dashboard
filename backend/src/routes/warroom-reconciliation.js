@@ -795,7 +795,7 @@ async function runOcbcEngineAndPersist(client, { batchId, bankCode, accountNo, s
   let archiveWhere = 'bank_code = $1';
   if (accountNo) { archiveParams.push(accountNo); archiveWhere += ` AND account_no = $${archiveParams.length}`; }
   const archiveRes = await client.query(
-    `SELECT *, business_date::text AS business_date FROM recon_bank_archive WHERE ${archiveWhere}`,
+    `SELECT *, business_date::text AS business_date, value_date::text AS value_date FROM recon_bank_archive WHERE ${archiveWhere}`,
     archiveParams
   );
   const bankForEngine = archiveRes.rows.map(r => ({
@@ -1030,7 +1030,7 @@ async function syncHandler(req, res) {
     // Chunk terakhir -> ambil SELURUH snapshot batch ini (transaction_date_time
     // presisi penuh) utk (1) hitung statistik cakupan, (2) upsert ke archive.
     const bankSnapshotRes = await client.query(
-      `SELECT *, transaction_date::text AS transaction_date FROM recon_bank_transactions WHERE batch_id = $1`,
+      `SELECT *, transaction_date::text AS transaction_date, value_date::text AS value_date FROM recon_bank_transactions WHERE batch_id = $1`,
       [batchId]
     );
     const bankSnapshotRows = bankSnapshotRes.rows.map(r => ({
