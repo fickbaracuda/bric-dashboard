@@ -832,11 +832,19 @@ module.exports = {
   resolveHandler,
   actionLogsHandler,
   // exported untuk unit test (backend/scripts/test-reconciliation-ocbc.js)
+  // dan untuk dipakai ulang oleh adapter bank lain (warroom-reconciliation-mandiri.js)
+  // supaya helper dasar (parsing angka/tanggal, extractToken, csvEscape, dst)
+  // tidak diduplikasi dan berisiko divergen antar bank.
   reconcileTransactions,
   parseDescriptionFallback,
+  extractToken,
+  nullIfEmpty,
   cleanNum,
   toIsoDate,
+  parseTimeResponse,
   numEq,
+  safeDiv,
+  csvEscape,
   isValidIdTransaksi,
   RECON_STATUSES,
   EXCEPTION_STATUSES,

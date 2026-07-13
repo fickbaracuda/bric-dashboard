@@ -34,6 +34,7 @@ const dmCtRoutes          = require('./routes/warroom-dm-control-tower');
 const iqCcRoutes          = require('./routes/warroom-instaqris-command-center');
 const quickWinQ3Routes    = require('./routes/warroom-quick-win-q3');
 const reconciliationRoutes = require('./routes/warroom-reconciliation');
+const reconciliationMandiriRoutes = require('./routes/warroom-reconciliation-mandiri');
 const systemRoutes        = require('./routes/system');
 const requireAuth         = require('./middleware/auth');
 
@@ -157,6 +158,15 @@ app.get('/api/warroom/reconciliation/transactions', requireAuth, reconciliationR
 app.get('/api/warroom/reconciliation/export',       requireAuth, reconciliationRoutes.exportHandler);
 app.post('/api/warroom/reconciliation/:id/resolve', requireAuth, reconciliationRoutes.resolveHandler);
 app.get('/api/warroom/reconciliation/:id/logs',     requireAuth, reconciliationRoutes.actionLogsHandler);
+app.post('/api/warroom/reconciliation/mandiri/sync',        reconciliationMandiriRoutes.syncHandler); // token auth (APPS_SCRIPT_TOKEN), no JWT
+app.get('/api/warroom/reconciliation/mandiri/analytics',    requireAuth, reconciliationMandiriRoutes.analyticsHandler);
+app.get('/api/warroom/reconciliation/mandiri/transactions', requireAuth, reconciliationMandiriRoutes.transactionsHandler);
+app.get('/api/warroom/reconciliation/mandiri/raw-bank',     requireAuth, reconciliationMandiriRoutes.rawBankHandler);
+app.get('/api/warroom/reconciliation/mandiri/raw-fp',       requireAuth, reconciliationMandiriRoutes.rawFpHandler);
+app.get('/api/warroom/reconciliation/mandiri/resolution-history', requireAuth, reconciliationMandiriRoutes.resolutionHistoryHandler);
+app.get('/api/warroom/reconciliation/mandiri/export',       requireAuth, reconciliationMandiriRoutes.exportHandler);
+app.post('/api/warroom/reconciliation/mandiri/:id/resolve', requireAuth, reconciliationMandiriRoutes.resolveHandler);
+app.get('/api/warroom/reconciliation/mandiri/:id/logs',     requireAuth, reconciliationMandiriRoutes.actionLogsHandler);
 app.use('/api/warroom',        requireAuth, warroomRoutes);
 
 app.post('/api/data-raw/outlet/sync',    dataRawRoutes.outletSyncHandler);    // token auth, no JWT

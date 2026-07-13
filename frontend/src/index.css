@@ -5428,3 +5428,40 @@ body {
   .wrr-tab-btn { padding: 8px 10px; font-size: 12px; }
   .wrr-modal { max-width: calc(100vw - 24px); }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Rekonsiliasi Mandiri — elemen BARU yang tidak ada di Rekonsiliasi OCBC.
+   Layout umum (page/tabs/kpi/table/modal/pagination) SENGAJA reuse class
+   wrr-* di atas (generik, tidak spesifik OCBC) — hanya bagian baru di
+   halaman ini yang dapat prefix wrrm-*. Tema navy (#003D79) + aksen kuning
+   (#F4C430) di-set inline lewat prop `style` di komponen, bukan di sini.
+   ═══════════════════════════════════════════════════════════════════════ */
+.wrrm-balance-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; font-size: 13px; color: var(--text-2); }
+.wrrm-balance-badge { padding: 4px 12px; border-radius: 10px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+.wrrm-balance-badge--balanced { background: #DCFCE7; color: #059669; }
+.wrrm-balance-badge--unbalanced { background: #FEE2E2; color: #DC2626; }
+.wrrm-balance-badge--balance_check_undetermined { background: #F3F4F6; color: #6B7280; }
+
+.wrrm-time-bucket-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.wrrm-time-bucket-card {
+  padding: 14px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg-elevated);
+  text-align: center;
+}
+.wrrm-time-bucket-label { font-size: 11px; color: var(--text-3); font-weight: 600; margin-bottom: 6px; }
+.wrrm-time-bucket-value { font-size: 22px; font-weight: 700; color: var(--text-1); }
+.wrrm-time-bucket-card--normal .wrrm-time-bucket-value { color: #059669; }
+.wrrm-time-bucket-card--warning .wrrm-time-bucket-value { color: #B45309; }
+.wrrm-time-bucket-card--delayed .wrrm-time-bucket-value { color: #EA580C; }
+.wrrm-time-bucket-card--exception .wrrm-time-bucket-value { color: #DC2626; }
+
+.wrrm-subtabs { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
+.wrrm-subtab-btn {
+  padding: 7px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-card);
+  color: var(--text-2); font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit;
+}
+.wrrm-subtab-btn:hover { background: var(--bg-hover); }
+.wrrm-subtab-btn--active { background: #003D79; border-color: #003D79; color: #fff; }
+
+@media (max-width: 900px) {
+  .wrrm-time-bucket-grid { grid-template-columns: repeat(2, 1fr); }
+}

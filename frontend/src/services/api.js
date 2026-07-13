@@ -381,6 +381,24 @@ export const resolveReconciliation = (id, data) =>
 export const getReconciliationLogs = (id) =>
   axios.get(`${API_URL}/api/warroom/reconciliation/${id}/logs`, { headers: authHeaders() }).then(r => r.data);
 
+/* WAR-ROOM — Rekonsiliasi FP vs Bank Mandiri (TIDAK di-cache — data operasional, harus selalu fresh) */
+export const getReconciliationMandiriAnalytics = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/mandiri/analytics`, { params, headers: authHeaders() }).then(r => r.data);
+export const getReconciliationMandiriTransactions = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/mandiri/transactions`, { params, headers: authHeaders() }).then(r => r.data);
+export const getReconciliationMandiriRawBank = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/mandiri/raw-bank`, { params, headers: authHeaders() }).then(r => r.data);
+export const getReconciliationMandiriRawFp = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/mandiri/raw-fp`, { params, headers: authHeaders() }).then(r => r.data);
+export const getReconciliationMandiriResolutionHistory = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/mandiri/resolution-history`, { params, headers: authHeaders() }).then(r => r.data);
+export const exportReconciliationMandiriCsv = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/mandiri/export`, { params, headers: authHeaders(), responseType: 'blob' }).then(r => r.data);
+export const resolveReconciliationMandiri = (id, data) =>
+  axios.post(`${API_URL}/api/warroom/reconciliation/mandiri/${id}/resolve`, data, { headers: authHeaders() }).then(r => r.data);
+export const getReconciliationMandiriLogs = (id) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/mandiri/${id}/logs`, { headers: authHeaders() }).then(r => r.data);
+
 /* WAR-ROOM — QRIS Issuance Control Tower */
 export const getQrisControlTowerAnalytics = () =>
   withCache('qris-control-tower-analytics', () =>

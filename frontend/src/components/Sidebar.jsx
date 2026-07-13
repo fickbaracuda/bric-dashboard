@@ -177,6 +177,7 @@ export default function Sidebar({ onClose }) {
   const isWRMgmPath    = location.pathname === '/war-room/mgm-pa';
   const isWRHunterPath = location.pathname === '/war-room/hunter';
   const isWRReconOcbcPath = location.pathname === '/war-room/rekonsiliasi-ocbc';
+  const isWRReconMandiriPath = location.pathname === '/war-room/rekonsiliasi/mandiri';
 
   const [winmeOpen, setWinmeOpen] = useState(isWinmePath || isWinmeTimPath || isWRIqCcPath || isWRQw3Path || isWRIQRawPath || isWRQrisPath || isWRTrxOutPath || isWRQrisCtlPath || isDataRawPath);
   const [timOpen,   setTimOpen]   = useState(isWinmeTimPath);
@@ -184,7 +185,7 @@ export default function Sidebar({ onClose }) {
   const [paTimOpen, setPATimOpen] = useState(isPATimPath);
   const [ddOpen,    setDDOpen]    = useState(isDDPath || isSCTimPath || isWRSCPath);
   const [scTimOpen, setSCTimOpen] = useState(isSCTimPath);
-  const [rekonOpen, setRekonOpen] = useState(isWRReconOcbcPath);
+  const [rekonOpen, setRekonOpen] = useState(isWRReconOcbcPath || isWRReconMandiriPath);
 
   useEffect(() => {
     if (isWinmePath || isWinmeTimPath || isWRIqCcPath || isWRQw3Path || isWRIQRawPath || isDataRawPath || isWRTrxOutPath || isWRQrisCtlPath) setWinmeOpen(true);
@@ -193,7 +194,7 @@ export default function Sidebar({ onClose }) {
     if (isPATimPath) setPATimOpen(true);
     if (isDDPath || isSCTimPath || isWRSCPath) setDDOpen(true);
     if (isSCTimPath) setSCTimOpen(true);
-    if (isWRReconOcbcPath) setRekonOpen(true);
+    if (isWRReconOcbcPath || isWRReconMandiriPath) setRekonOpen(true);
   }, [location.pathname, members, membersPA, membersSC]);
 
   const loadAllMembers = () => {
@@ -764,7 +765,7 @@ export default function Sidebar({ onClose }) {
             onClick={() => { setRekonOpen(o => !o); onClose(); }}
             className={({ isActive }) =>
               'sidebar-link sidebar-link-accordion' +
-              (isActive || isWRReconOcbcPath ? ' sidebar-link--active' : '')
+              (isActive || isWRReconOcbcPath || isWRReconMandiriPath ? ' sidebar-link--active' : '')
             }
           >
             <i className="ti ti-building-bank" aria-hidden="true" />
@@ -788,6 +789,17 @@ export default function Sidebar({ onClose }) {
                 <i className="ti ti-building-bank" style={{ color: '#DC2626' }} aria-hidden="true" />
                 <span>Rekonsiliasi OCBC</span>
                 <span className="sidebar-warroom-badge" style={{ background: '#DC2626' }}>REK</span>
+              </NavLink>
+              <NavLink
+                to="/war-room/rekonsiliasi/mandiri"
+                onClick={onClose}
+                className={({ isActive }) =>
+                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                }
+              >
+                <i className="ti ti-building-bank" style={{ color: '#003D79' }} aria-hidden="true" />
+                <span>Rekonsiliasi Mandiri</span>
+                <span className="sidebar-warroom-badge" style={{ background: '#003D79' }}>MDR</span>
               </NavLink>
             </div>
           </Accordion>
