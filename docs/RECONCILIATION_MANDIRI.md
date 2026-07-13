@@ -146,3 +146,17 @@ berpindah posisi asal nama header sesuai spek.
   regex di `extractMandiriRow()` (`mandiriAdapter.js`) terhadap contoh Remarks terbaru.
 - **BANK_ONLY membludak**: kemungkinan scope_mode perlu `FULL_BUSINESS_DATE`
   atau toleransi coverage window (`coverageToleranceMinutes`) perlu diperbesar.
+- **PostDate hasil dry-run tidak masuk akal (mis. bulan jauh berbeda dari
+  DATA FP, atau di masa depan)**: insiden nyata — kolom PostDate di sheet
+  `DATA Mandiri` sudah ter-parse jadi Date object oleh Google Sheets dengan
+  urutan hari/bulan yang TERTUKAR (tergantung locale spreadsheet vs format
+  asli export bank, mis. `07/10/2026` dibaca Oktober alih-alih Juli). Begitu
+  Sheets sudah mengonversi jadi Date, teks aslinya tidak bisa direkonstruksi
+  lagi. `reconMdrFixPostDateSwap_()` di Apps Script otomatis mendeteksi &
+  mengoreksi ini — SATU-SATUNYA syarat koreksi jalan: tanggal hasil parse
+  Sheets ada di **masa depan** (mustahil utk mutasi yang sudah settle) DAN
+  hari≤12 (supaya pertukaran hari/bulan menghasilkan tanggal valid). Kalau
+  Execution Log masih menunjukkan `WARNING: PostDate ... tidak bisa
+  dikoreksi (hari>12...)`, cek manual sheet DATA Mandiri baris tsb — berarti
+  hari aslinya >12 sehingga tidak bisa ditukar otomatis, kemungkinan data
+  sumbernya sendiri yang salah/perlu diperbaiki manual di sheet.

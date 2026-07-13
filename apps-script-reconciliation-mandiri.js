@@ -67,6 +67,43 @@ function reconMdrToStringId_(value) {
 }
 
 /**
+ * PostDate Mandiri: Google Sheets kadang salah menafsir teks tanggal hasil
+ * paste dari export bank sebagai MM/DD alih-alih DD/MM (atau sebaliknya),
+ * tergantung locale spreadsheet — begitu ter-parse jadi Date object oleh
+ * Sheets, teks aslinya sudah TIDAK BISA direkonstruksi lagi (insiden nyata:
+ * PostDate muncul sebagai Oktober padahal transaksinya Juli, berdekatan
+ * dengan tanggal DATA FP yang benar).
+ *
+ * Guard yang AMAN (tidak menyentuh tanggal yang sudah benar): mutasi bank
+ * yang SUDAH SETTLE mustahil bertanggal MASA DEPAN. Kalau hasil parse
+ * Sheets ternyata di masa depan DAN hari<=12 (sehingga pertukaran hari<->
+ * bulan menghasilkan tanggal valid DAN tidak lagi di masa depan), tukar
+ * hari<->bulan. Kalau tidak memenuhi syarat itu, dikirim apa adanya (lebih
+ * baik salah tanggal yang sudah ada daripada menebak salah arah).
+ */
+function reconMdrFixPostDateSwap_(dateObj) {
+  if (!(Object.prototype.toString.call(dateObj) === '[object Date]' && !isNaN(dateObj))) return dateObj;
+  const now = new Date();
+  if (dateObj.getTime() <= now.getTime()) return dateObj; // bukan masa depan -> tidak perlu dikoreksi
+
+  const parts = Utilities.formatDate(dateObj, 'Asia/Jakarta', 'yyyy,MM,dd,HH,mm,ss').split(',');
+  const y = parts[0], mo = Number(parts[1]), d = Number(parts[2]), h = parts[3], mi = parts[4], s = parts[5];
+  if (d > 12) {
+    Logger.log('WARNING: PostDate ' + dateObj.toISOString() + ' di masa depan tapi tidak bisa dikoreksi (hari>12, pertukaran hari/bulan tidak valid). Dikirim apa adanya — cek manual sheet DATA Mandiri.');
+    return dateObj;
+  }
+  const swapped = new Date(y + '-' + String(d).padStart(2, '0') + '-' + String(mo).padStart(2, '0') + 'T' + h + ':' + mi + ':' + s + '+07:00');
+  if (isNaN(swapped) || swapped.getTime() > now.getTime()) {
+    Logger.log('WARNING: PostDate ' + dateObj.toISOString() + ' di masa depan, percobaan tukar hari/bulan tetap tidak valid. Dikirim apa adanya — cek manual sheet DATA Mandiri.');
+    return dateObj;
+  }
+  Logger.log('INFO: PostDate dikoreksi (hari/bulan tertukar akibat locale sheet) dari ' +
+    Utilities.formatDate(dateObj, 'Asia/Jakarta', 'yyyy-MM-dd HH:mm:ss') + ' menjadi ' +
+    Utilities.formatDate(swapped, 'Asia/Jakarta', 'yyyy-MM-dd HH:mm:ss'));
+  return swapped;
+}
+
+/**
  * Ambil { headerIndex } dari baris 1 sebuah sheet: map NAMA KOLOM (trim,
  * lowercase) -> index kolom (0-based). Dipakai supaya urutan kolom di sheet
  * tidak wajib persis A-F/A-H — asalkan nama header sesuai spek.
@@ -150,10 +187,13 @@ function reconMdrReadBank_() {
     const closeBalance = reconMdrCleanNum_(reconMdrCol_(row, headerIndex, 'close balance', 7));
     if (!remarks && !additionalDesc && creditAmount === null && debitAmount === null) continue; // baris kosong
 
+    const rawPostDate = reconMdrCol_(row, headerIndex, 'postdate', 2);
+    const fixedPostDate = reconMdrFixPostDateSwap_(rawPostDate);
+
     rows.push({
       account_no: reconMdrToStringId_(reconMdrCol_(row, headerIndex, 'accountno', 0)),
       ccy: String(reconMdrCol_(row, headerIndex, 'ccy', 1) || '').trim() || null,
-      post_date: reconMdrToIso_(reconMdrCol_(row, headerIndex, 'postdate', 2)),
+      post_date: reconMdrToIso_(fixedPostDate),
       remarks: remarks || null,
       additional_desc: additionalDesc || null,
       credit_amount: creditAmount,
