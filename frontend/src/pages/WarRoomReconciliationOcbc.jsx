@@ -76,10 +76,16 @@ const STATUS_META = {
 function statusMeta(s) { return STATUS_META[s] || STATUS_META.NEED_REVIEW; }
 
 /* ─── UI atoms ─── */
-function KPICard({ label, value, sub, alert }) {
+function InfoIcon({ text }) {
+  if (!text) return null;
+  return (
+    <span className="wrr-info-icon" tabIndex={0} role="img" aria-label="Info" title={text}>i</span>
+  );
+}
+function KPICard({ label, value, sub, alert, info }) {
   return (
     <div className={'wrr-kpi-card' + (alert ? ' wrr-kpi-card--alert' : '')}>
-      <div className="wrr-kpi-label">{label}</div>
+      <div className="wrr-kpi-label">{label}<InfoIcon text={info} /></div>
       <div className="wrr-kpi-value">{value}</div>
       {sub && <div className="wrr-kpi-sub">{sub}</div>}
     </div>
@@ -141,22 +147,37 @@ function SummaryTab({ analytics }) {
   return (
     <>
       <div className="wrr-kpi-grid">
-        <KPICard label="Total Transaksi FP" value={fmtN(s?.total_transaksi_fp)} />
-        <KPICard label="Total Nominal FP" value={fmtRp(s?.total_nominal_fp)} />
-        <KPICard label="Reference Bank Unik" value={fmtN(s?.reference_bank_unik)} />
-        <KPICard label="Matched Transaksi" value={fmtN(s?.matched_transaksi)} />
-        <KPICard label="Matched Nominal" value={fmtRp(s?.matched_nominal)} />
-        <KPICard label="Pending Bank" value={fmtN(s?.pending_bank_count)} alert={(s?.pending_bank_count || 0) > 0} />
-        <KPICard label="FP Only" value={fmtN(s?.fp_only_count)} alert={(s?.fp_only_count || 0) > 0} />
-        <KPICard label="Bank Only" value={fmtN(s?.bank_only_count)} alert={(s?.bank_only_count || 0) > 0} />
-        <KPICard label="Nominal Mismatch" value={fmtN(s?.nominal_mismatch_count)} alert={(s?.nominal_mismatch_count || 0) > 0} />
-        <KPICard label="Total Fee Bank" value={fmtRp(s?.total_fee_bank)} />
-        <KPICard label="Match Rate Transaksi" value={fmtPct(s?.match_rate_transaksi)} />
-        <KPICard label="Match Rate Nominal" value={fmtPct(s?.match_rate_nominal)} />
+        <KPICard label="Total Transaksi FP" value={fmtN(s?.total_transaksi_fp)}
+          info="Jumlah total transaksi dari sheet DATA FP untuk tanggal yang dipilih." />
+        <KPICard label="Total Nominal FP" value={fmtRp(s?.total_nominal_fp)}
+          info="Total nilai (Rupiah) seluruh transaksi FP untuk tanggal ini." />
+        <KPICard label="Reference Bank Unik" value={fmtN(s?.reference_bank_unik)}
+          info="Jumlah Reference No. unik di mutasi Bank OCBC. Satu reference biasanya punya 2 baris (principal + fee), jadi angka ini bisa lebih kecil dari jumlah baris mentah di sheet bank." />
+        <KPICard label="Matched Transaksi" value={fmtN(s?.matched_transaksi)}
+          info="Jumlah transaksi FP yang principal-nya cocok dengan debit di bank (status MATCHED atau MATCHED_NO_FEE)." />
+        <KPICard label="Matched Nominal" value={fmtRp(s?.matched_nominal)}
+          info="Total nominal FP dari transaksi yang berhasil dicocokkan ke bank." />
+        <KPICard label="Pending Bank" value={fmtN(s?.pending_bank_count)} alert={(s?.pending_bank_count || 0) > 0}
+          info="Transaksi FP yang belum ditemukan di bank, TAPI masih dalam masa tunggu (grace period, default 30 menit) — belum tentu bermasalah, mungkin bank belum posting." />
+        <KPICard label="FP Only" value={fmtN(s?.fp_only_count)} alert={(s?.fp_only_count || 0) > 0}
+          info="Transaksi FP yang TIDAK ditemukan di bank SETELAH masa tunggu selesai — perlu dicek, kemungkinan gagal transfer atau salah catat." />
+        <KPICard label="Bank Only" value={fmtN(s?.bank_only_count)} alert={(s?.bank_only_count || 0) > 0}
+          info="Mutasi di bank yang punya pola reference/outlet FP tapi tidak ditemukan padanannya di DATA FP — kemungkinan transaksi tidak tercatat di sistem FP." />
+        <KPICard label="Nominal Mismatch" value={fmtN(s?.nominal_mismatch_count)} alert={(s?.nominal_mismatch_count || 0) > 0}
+          info="Reference cocok, tapi tidak ada debit bank yang nilainya sama dengan nominal FP — kemungkinan salah input nominal di salah satu sisi." />
+        <KPICard label="Total Fee Bank" value={fmtRp(s?.total_fee_bank)}
+          info="Total biaya (fee BI-FAST) yang terpotong bank dari seluruh transaksi yang matched." />
+        <KPICard label="Match Rate Transaksi" value={fmtPct(s?.match_rate_transaksi)}
+          info="Persentase JUMLAH transaksi FP yang berhasil dicocokkan, dari total transaksi FP." />
+        <KPICard label="Match Rate Nominal" value={fmtPct(s?.match_rate_nominal)}
+          info="Persentase NILAI (Rupiah) transaksi yang berhasil dicocokkan, dari total nominal FP." />
       </div>
 
       <div className="wrr-panel">
-        <div className="wrr-panel-title"><i className="ti ti-building-bank" style={{ color: COLOR }} /> Validasi Rekening</div>
+        <div className="wrr-panel-title">
+          <i className="ti ti-building-bank" style={{ color: COLOR }} /> Validasi Rekening
+          <InfoIcon text="Mengecek konsistensi saldo yang DILAPORKAN BANK SENDIRI (dari summary di sheet DATA BANK OCBC): Saldo Awal + Total Credit − Total Debit harus sama dengan Saldo Akhir. Ini BUKAN verifikasi terhadap baris-baris transaksi yang sudah kita import satu per satu, murni cek angka ringkasan resmi dari bank." />
+        </div>
         {!sv || (sv.opening_balance === null && sv.closing_balance === null) ? (
           <div className="wrr-empty-sub">Summary rekening belum tersedia dari Apps Script (opsional).</div>
         ) : (<>
@@ -186,7 +207,10 @@ function SummaryTab({ analytics }) {
       </div>
 
       <div className="wrr-panel">
-        <div className="wrr-panel-title"><i className="ti ti-chart-donut" style={{ color: COLOR }} /> Distribusi Status</div>
+        <div className="wrr-panel-title">
+          <i className="ti ti-chart-donut" style={{ color: COLOR }} /> Distribusi Status
+          <InfoIcon text="Rincian jumlah & nominal transaksi FP per status hasil rekonsiliasi. Lihat tab Exception Queue untuk daftar detail status yang butuh perhatian (semua kecuali MATCHED/MATCHED_NO_FEE)." />
+        </div>
         <div className="wrr-table-wrap">
           <table className="wrr-table">
             <thead><tr><th>Status</th><th>Jumlah Transaksi</th><th>Nominal FP</th></tr></thead>
@@ -410,11 +434,16 @@ function FeeAnalysisTab({ analytics }) {
   return (
     <>
       <div className="wrr-kpi-grid">
-        <KPICard label="Expected Fee" value={fmtRpFull(fa.expected_fee)} />
-        <KPICard label="Actual Fee (Total)" value={fmtRp(fa.actual_fee_total)} />
-        <KPICard label="Actual Fee (Rata-rata)" value={fmtRp(fa.actual_fee_avg)} />
-        <KPICard label="Transaksi dengan Fee" value={fmtN(fa.transaction_with_fee_count)} />
-        <KPICard label="Fee Variance" value={fmtN(fa.fee_variance_count)} alert={(fa.fee_variance_count || 0) > 0} />
+        <KPICard label="Expected Fee" value={fmtRpFull(fa.expected_fee)}
+          info="Nominal fee BI-FAST yang seharusnya dikenakan bank per transaksi (default Rp25, bisa dikonfigurasi)." />
+        <KPICard label="Actual Fee (Total)" value={fmtRp(fa.actual_fee_total)}
+          info="Total fee yang benar-benar terpotong di bank dari seluruh transaksi matched." />
+        <KPICard label="Actual Fee (Rata-rata)" value={fmtRp(fa.actual_fee_avg)}
+          info="Rata-rata fee per transaksi yang benar-benar terpotong di bank." />
+        <KPICard label="Transaksi dengan Fee" value={fmtN(fa.transaction_with_fee_count)}
+          info="Jumlah transaksi yang datanya lengkap (principal + fee ditemukan di bank), sehingga fee-nya bisa dihitung." />
+        <KPICard label="Fee Variance" value={fmtN(fa.fee_variance_count)} alert={(fa.fee_variance_count || 0) > 0}
+          info="Jumlah transaksi dengan fee yang TIDAK sama dengan Expected Fee (status FEE_MISMATCH) — perlu dicek, kemungkinan bank kenakan biaya beda dari biasanya." />
       </div>
       <div className="wrr-panel">
         <div className="wrr-panel-title"><i className="ti ti-chart-bar" style={{ color: COLOR }} /> Distribusi Fee</div>
