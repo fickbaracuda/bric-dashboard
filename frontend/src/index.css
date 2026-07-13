@@ -5226,7 +5226,7 @@ body {
 
 /* ══════════════════════════════════════════════════════════════════
    Rekonsiliasi OCBC (War Room Payment Agent > Rekonsiliasi OCBC) — wrr-*
-   Aksen utama #DC2626, struktur sama pola eprod-*/qw3-* (tab, panel,
+   Aksen utama #DC2626, struktur sama pola eprod- dan qw3- (tab, panel,
    tabel sortable, modal, pagination) supaya konsisten dgn War Room lain.
    ══════════════════════════════════════════════════════════════════ */
 .wrr-page { padding: 0 20px 40px; }
