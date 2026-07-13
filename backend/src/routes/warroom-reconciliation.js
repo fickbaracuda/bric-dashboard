@@ -890,7 +890,7 @@ async function syncHandler(req, res) {
     // ═══════════════════════════════════════════════════════════════════
     if (syncMode === 'BACKFILL') {
       const batchRes = await client.query(
-        'SELECT id FROM recon_sync_batches WHERE business_date = $1 AND bank_code = $2',
+        'SELECT id, account_no FROM recon_sync_batches WHERE business_date = $1 AND bank_code = $2',
         [businessDate, bankCode]
       );
       if (!batchRes.rows.length) {
@@ -898,10 +898,14 @@ async function syncHandler(req, res) {
         return res.status(400).json({ error: `Backfill gagal: belum ada batch SNAPSHOT utk business_date ${businessDate} bank ${bankCode}. Jalankan sync SNAPSHOT dulu.` });
       }
       const batchId = batchRes.rows[0].id;
+      // Pakai account_no yang SUDAH TERSIMPAN di batch (stabil lintas chunk/
+      // sync), BUKAN body.bank_summary request ini -- lihat catatan panjang
+      // di cabang SNAPSHOT soal insiden account_no NULL utk mayoritas baris.
+      const stableAccountNo = nullIfEmpty(batchRes.rows[0].account_no) || accountNo;
 
       const archiveRows = buildOcbcBankArchiveRows(
         bankRowsRaw.map(row => ({
-          bankCode, accountNo,
+          bankCode, accountNo: stableAccountNo,
           transactionDateTime: row.transaction_date_time ? parseTimeResponse(row.transaction_date_time) : parseTimeResponse(row.transaction_date),
           transactionDate: toIsoDate(row.transaction_date),
           valueDate: toIsoDate(row.value_date),
@@ -939,7 +943,7 @@ async function syncHandler(req, res) {
       };
 
       const { fpRowCount, resultCount } = await runOcbcEngineAndPersist(client, {
-        batchId, bankCode, accountNo, snapshotMeta, configOverride, now: new Date(),
+        batchId, bankCode, accountNo: stableAccountNo, snapshotMeta, configOverride, now: new Date(),
       });
 
       await client.query('COMMIT');
@@ -965,7 +969,7 @@ async function syncHandler(req, res) {
          account_no = COALESCE(EXCLUDED.account_no, recon_sync_batches.account_no),
          synced_at = NOW(), created_by = EXCLUDED.created_by, status = 'pending',
          raw_summary = CASE WHEN $9::jsonb <> '{}'::jsonb THEN $9::jsonb ELSE recon_sync_batches.raw_summary END
-       RETURNING id`,
+       RETURNING id, account_no`,
       [
         batchNo, businessDate, bankCode, nullIfEmpty(body.spreadsheet_id),
         nullIfEmpty(body.fp_sheet_name) || 'DATA FP', nullIfEmpty(body.bank_sheet_name) || 'DATA BANK OCBC',
@@ -974,6 +978,19 @@ async function syncHandler(req, res) {
       ]
     );
     const batchId = batchRes.rows[0].id;
+    // INSIDEN: Apps Script hanya mengirim bank_summary.account_number di
+    // CHUNK TERAKHIR (supaya tidak mengulang info yang sama tiap chunk).
+    // Kalau kode di bawah pakai `accountNo` mentah (dari body request INI
+    // SAJA), maka baris bank chunk 1..N-1 tersimpan dgn account_no NULL,
+    // dan query archive di runOcbcEngineAndPersist (yang MEMFILTER by
+    // account_no kalau ada nilainya) jadi HANYA melihat baris dari chunk
+    // terakhir -- mayoritas baris (mis. 4500 dari 5000) tidak pernah dipakai
+    // utk matching sama sekali, menyebabkan banyak FP salah jadi FP_ONLY/
+    // NEED_REVIEW padahal sebenarnya match. `stableAccountNo` di bawah
+    // adalah nilai yang SUDAH DI-COALESCE (dipertahankan lintas chunk &
+    // resync) dari kolom batch -- dipakai utk SEMUA insert/pencarian baris
+    // bank pada sync ini, bukan `accountNo` mentah per-request.
+    const stableAccountNo = nullIfEmpty(batchRes.rows[0].account_no) || accountNo;
 
     // Chunk pertama -> mulai fresh (hapus data mentah lama batch ini). Ini
     // yang menjamin resync tidak menggandakan row (acceptance test 9).
@@ -1014,7 +1031,7 @@ async function syncHandler(req, res) {
         [
           batchId, toIsoDate(row.transaction_date), transactionDateTime, toIsoDate(row.value_date),
           nullIfEmpty(row.reference_no), nullIfEmpty(row.cheque_no), nullIfEmpty(row.description),
-          cleanNum(row.debit), cleanNum(row.credit), cleanNum(row.balance), accountNo,
+          cleanNum(row.debit), cleanNum(row.credit), cleanNum(row.balance), stableAccountNo,
           Number.isFinite(Number(row.source_row)) ? Number(row.source_row) : null,
           JSON.stringify(row.raw_data || {}),
         ]
@@ -1034,7 +1051,7 @@ async function syncHandler(req, res) {
       [batchId]
     );
     const bankSnapshotRows = bankSnapshotRes.rows.map(r => ({
-      bankCode, accountNo: r.account_no || accountNo,
+      bankCode, accountNo: r.account_no || stableAccountNo,
       transactionDateTime: r.transaction_date_time ? new Date(r.transaction_date_time) : null,
       transactionDate: r.transaction_date, valueDate: r.value_date,
       referenceNo: r.reference_no, chequeNo: r.cheque_no, description: r.description,
@@ -1053,7 +1070,7 @@ async function syncHandler(req, res) {
        VALUES ($1,$2,$3,NOW(),$4,$5,$6,$7,$8,$9,$10,$11,$12)
        RETURNING id`,
       [
-        batchId, bankCode, accountNo, coverage.bankRowCount, uniqueRefCount, coverage.sourceLimit, coverage.isSourceTruncated,
+        batchId, bankCode, stableAccountNo, coverage.bankRowCount, uniqueRefCount, coverage.sourceLimit, coverage.isSourceTruncated,
         coverage.snapshotOldestTime, coverage.snapshotNewestTime, coverage.trustedCoverageStart, coverage.coverageEnd,
         JSON.stringify(body.bank_summary || {}),
       ]
@@ -1071,7 +1088,7 @@ async function syncHandler(req, res) {
     };
 
     const { fpRowCount, resultCount } = await runOcbcEngineAndPersist(client, {
-      batchId, bankCode, accountNo, snapshotMeta, configOverride, now: new Date(),
+      batchId, bankCode, accountNo: stableAccountNo, snapshotMeta, configOverride, now: new Date(),
     });
 
     await client.query(
