@@ -117,7 +117,7 @@ function reconReadBank_() {
     'RELEASE DATE': 'release_date', 'TANGGAL RILIS': 'release_date',
   };
   const summary = {};
-  for (let r = 0; r < Math.min(8, values.length); r++) {
+  for (let r = 0; r < Math.min(10, values.length); r++) {
     const row = values[r] || [];
     for (let c = 0; c < row.length - 1; c++) {
       const label = String(row[c] || '').trim().toUpperCase().replace(/:$/, '');
@@ -130,9 +130,20 @@ function reconReadBank_() {
     }
   }
 
-  // ── Data transaksi mulai baris 11 (idx 10) ──
+  // ── Deteksi baris header SECARA DINAMIS (bukan hardcode baris 10) — data
+  // riil menunjukkan header bisa geser 1 baris dari dokumentasi awal. Cari
+  // baris yang kolom A/C berisi "Transaction Date"/"Reference No." dst.
+  let headerRowIdx = -1;
+  for (let r = 0; r < Math.min(20, values.length); r++) {
+    const row = values[r] || [];
+    const a = String(row[0] || '').trim().toUpperCase();
+    const c = String(row[2] || '').trim().toUpperCase();
+    if (a === 'TRANSACTION DATE' || c.indexOf('REFERENCE') === 0) { headerRowIdx = r; break; }
+  }
+  const dataStartRow = headerRowIdx >= 0 ? headerRowIdx + 1 : 10; // fallback ke asumsi lama kalau header tidak ketemu
+
   const rows = [];
-  for (let r = 10; r < values.length; r++) {
+  for (let r = dataStartRow; r < values.length; r++) {
     const row = values[r];
     const reference = String(row[2] || '').trim();
     const description = String(row[4] || '').trim();
@@ -204,6 +215,19 @@ function testReconciliationOcbc() {
   Logger.log('Sample Bank (max 3): ' + JSON.stringify(built.chunks[0].bank.slice(0, 3)));
   Logger.log('=== SELESAI TEST — TIDAK ADA DATA YANG DIKIRIM ===');
   return built;
+}
+
+/**
+ * Diagnostik — dump mentah baris 1-10 sheet "DATA BANK OCBC" (bukan hasil
+ * parse) supaya layout summary rekening (baris 1-8) bisa dipastikan sebelum
+ * memperbaiki reconReadBank_(). TIDAK mengirim apa pun.
+ */
+function debugReconBankRawRows() {
+  const ss = SpreadsheetApp.openById(RECON_SHEET_ID);
+  const sheet = ss.getSheetByName(RECON_SHEET_BANK);
+  if (!sheet) { Logger.log('Sheet tidak ditemukan'); return; }
+  const values = sheet.getDataRange().getValues().slice(0, 12);
+  values.forEach((row, i) => Logger.log('Baris ' + (i + 1) + ': ' + JSON.stringify(row)));
 }
 
 /** Kirim seluruh data ke VPS (per chunk kalau data besar). */
