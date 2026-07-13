@@ -412,6 +412,11 @@ test('TEST 7b: fingerprint BEDA kalau salah satu field (mis. debit) berbeda', ()
   const rowY = { ...rowX, debit: 1001 };
   assert.notStrictEqual(computeBankRowFingerprint(rowX), computeBankRowFingerprint(rowY));
 });
+test('TEST 7c: fingerprint SAMA meski balance berbeda -- running balance OCBC bisa berubah antar sync utk mutasi yang sama (regresi insiden DUPLICATE_BANK produksi)', () => {
+  const rowX = { bankCode: 'OCBC', accountNo: '123', transactionDateTime: new Date('2026-07-10T09:00:00+07:00'), valueDate: '2026-07-10', referenceNo: 'X', description: 'ref X', debit: 1000, credit: null, balance: 5000 };
+  const rowY = { ...rowX, balance: 4871 };
+  assert.strictEqual(computeBankRowFingerprint(rowX), computeBankRowFingerprint(rowY));
+});
 
 // ── TEST 8: resolution manual + audit log tetap ada lintas resync ───────
 // (Perilaku upsert-by-natural-key SUDAH ADA sebelum perubahan ini --

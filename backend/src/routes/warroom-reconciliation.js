@@ -277,6 +277,16 @@ function normalizeDateForFingerprint(value) {
  * source_row_number (posisi baris bisa berubah begitu window 5.000 baris
  * Sheets bergeser antar sync). SHA-256 dari kombinasi field yang secara
  * bersama-sama mengidentifikasi 1 mutasi bank secara unik.
+ *
+ * SENGAJA TIDAK memakai `balance` — running balance OCBC utk 1 mutasi yang
+ * SAMA bisa berubah antar sync (transaksi lain yang clear belakangan
+ * menggeser saldo berjalan yang dilaporkan), terbukti dari insiden nyata:
+ * reference_no yang identik (bank_code, account_no, reference_no,
+ * description, debit, credit sama persis) menghasilkan balance berbeda
+ * ~20 menit kemudian, sehingga fingerprint lama meledak jadi baris arsip
+ * duplikat dan match rate kolaps jadi DUPLICATE_BANK. balance tetap
+ * disimpan di kolom archive (informational, di-refresh via ON CONFLICT),
+ * hanya tidak dipakai sebagai bagian identitas.
  */
 function computeBankRowFingerprint(row) {
   const parts = [
@@ -288,7 +298,6 @@ function computeBankRowFingerprint(row) {
     normalizeForFingerprint(row.description),
     normalizeNumForFingerprint(row.debit),
     normalizeNumForFingerprint(row.credit),
-    normalizeNumForFingerprint(row.balance),
   ];
   return crypto.createHash('sha256').update(parts.join('|')).digest('hex');
 }
