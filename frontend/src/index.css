@@ -5272,6 +5272,11 @@ body {
   margin-bottom: 16px;
 }
 
+.wrr-warning-banner-amber { border-left-color: #F59E0B; }
+.wrr-warning-banner-amber i { color: #F59E0B; font-size: 15px; margin-top: 1px; flex-shrink: 0; }
+.wrr-warning-banner-title { font-size: 13px; font-weight: 700; color: #B45309; margin-bottom: 4px; }
+[data-theme="dark"] .wrr-warning-banner-title { color: #FBBF24; }
+
 .wrr-tabs {
   display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 1px solid var(--border);
   overflow-x: auto;

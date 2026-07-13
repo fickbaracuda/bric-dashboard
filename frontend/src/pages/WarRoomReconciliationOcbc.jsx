@@ -164,15 +164,16 @@ function SummaryTab({ analytics, onSelectStatus }) {
   return (
     <>
       {isTruncated && (
-        <div className="wrr-panel" style={{ borderLeft: '4px solid #B45309', background: '#FFFBEB' }}>
-          <div className="wrr-panel-title" style={{ color: '#B45309' }}>
-            <i className="ti ti-alert-triangle" /> Data OCBC Terbatas
+        <div className="wrr-warning-banner wrr-warning-banner-amber">
+          <i className="ti ti-alert-triangle" />
+          <div>
+            <div className="wrr-warning-banner-title">Data OCBC Terbatas</div>
+            <p style={{ margin: 0 }}>
+              OCBC hanya menyediakan 5.000 baris mutasi terbaru. Hasil rekonsiliasi dihitung berdasarkan transaksi FP
+              yang berada dalam cakupan data bank yang tersedia. Transaksi FP di luar cakupan tidak dianggap gagal dan
+              tidak masuk Exception Queue.
+            </p>
           </div>
-          <p style={{ margin: 0, fontSize: 13.5, color: 'var(--text-2)' }}>
-            OCBC hanya menyediakan 5.000 baris mutasi terbaru. Hasil rekonsiliasi dihitung berdasarkan transaksi FP
-            yang berada dalam cakupan data bank yang tersedia. Transaksi FP di luar cakupan tidak dianggap gagal dan
-            tidak masuk Exception Queue.
-          </p>
         </div>
       )}
 
