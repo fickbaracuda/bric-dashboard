@@ -141,7 +141,7 @@ function downloadBlob(blob, filename) {
 /* ═══════════════════════════════════════════════════════════════════════
    TAB 1 — Executive Summary
    ═══════════════════════════════════════════════════════════════════════ */
-function SummaryTab({ analytics }) {
+function SummaryTab({ analytics, onSelectStatus }) {
   const s = analytics?.summary;
   const sv = analytics?.statement_validation;
   return (
@@ -211,12 +211,15 @@ function SummaryTab({ analytics }) {
           <i className="ti ti-chart-donut" style={{ color: COLOR }} /> Distribusi Status
           <InfoIcon text="Rincian jumlah & nominal transaksi FP per status hasil rekonsiliasi. Lihat tab Exception Queue untuk daftar detail status yang butuh perhatian (semua kecuali MATCHED/MATCHED_NO_FEE)." />
         </div>
+        <div className="wrr-empty-sub" style={{ marginBottom: 8 }}>Klik baris untuk lihat daftar transaksinya.</div>
         <div className="wrr-table-wrap">
           <table className="wrr-table">
             <thead><tr><th>Status</th><th>Jumlah Transaksi</th><th>Nominal FP</th></tr></thead>
             <tbody>
               {(analytics?.status_distribution || []).filter(d => d.count > 0).map((d, i) => (
-                <tr key={i}><td><StatusBadge status={d.status} /></td><td>{fmtN(d.count)}</td><td>{fmtRp(d.nominal)}</td></tr>
+                <tr key={i} className="wrr-row-clickable" onClick={() => onSelectStatus?.(d.status)}>
+                  <td><StatusBadge status={d.status} /></td><td>{fmtN(d.count)}</td><td>{fmtRp(d.nominal)}</td>
+                </tr>
               ))}
             </tbody>
           </table>
@@ -229,9 +232,9 @@ function SummaryTab({ analytics }) {
 /* ═══════════════════════════════════════════════════════════════════════
    Tabel bersama — dipakai Tab 2 (Hasil Rekonsiliasi) & Tab 3 (Exception Queue)
    ═══════════════════════════════════════════════════════════════════════ */
-function ReconTable({ date, scope, onOpenAudit }) {
+function ReconTable({ date, scope, onOpenAudit, initialStatus }) {
   const isException = scope === 'exception';
-  const [statusFilter, setStatusFilter] = useState('semua');
+  const [statusFilter, setStatusFilter] = useState(initialStatus || 'semua');
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState({ key: 'updated_at', dir: 'desc' });
   const [page, setPage] = useState(1);
@@ -523,6 +526,17 @@ export default function WarRoomReconciliationOcbc() {
   const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState('summary');
   const [auditId, setAuditId] = useState(null);
+  const [jumpStatus, setJumpStatus] = useState(null);
+
+  // Klik baris di Distribusi Status (tab Executive Summary) -> lompat ke tab
+  // yang relevan, sudah ter-filter ke status itu. MATCHED/MATCHED_NO_FEE ada
+  // di tab Hasil Rekonsiliasi (Exception Queue sengaja tidak menampilkan
+  // status "aman" ini), status lainnya semua ada di Exception Queue.
+  const handleSelectStatus = useCallback((status) => {
+    const targetTab = (status === 'MATCHED' || status === 'MATCHED_NO_FEE') ? 'hasil' : 'exception';
+    setJumpStatus(status);
+    setActiveTab(targetTab);
+  }, []);
   const [exporting, setExporting] = useState(false);
 
   const loadAnalytics = useCallback((d) => {
@@ -590,15 +604,15 @@ export default function WarRoomReconciliationOcbc() {
         {!loading && !error && !isEmpty && analytics && (<>
           <div className="wrr-tabs">
             {TABS.map(t => (
-              <button key={t.key} className={'wrr-tab-btn' + (activeTab === t.key ? ' wrr-tab-btn--active' : '')} onClick={() => setActiveTab(t.key)}>
+              <button key={t.key} className={'wrr-tab-btn' + (activeTab === t.key ? ' wrr-tab-btn--active' : '')} onClick={() => { setJumpStatus(null); setActiveTab(t.key); }}>
                 <i className={`ti ${t.icon}`} /> {t.label}
               </button>
             ))}
           </div>
 
-          {activeTab === 'summary' && <SummaryTab analytics={analytics} />}
-          {activeTab === 'hasil' && <ReconTable date={date} scope="all" onOpenAudit={setAuditId} />}
-          {activeTab === 'exception' && <ReconTable date={date} scope="exception" onOpenAudit={setAuditId} />}
+          {activeTab === 'summary' && <SummaryTab analytics={analytics} onSelectStatus={handleSelectStatus} />}
+          {activeTab === 'hasil' && <ReconTable date={date} scope="all" onOpenAudit={setAuditId} initialStatus={jumpStatus} />}
+          {activeTab === 'exception' && <ReconTable date={date} scope="exception" onOpenAudit={setAuditId} initialStatus={jumpStatus} />}
           {activeTab === 'fee' && <FeeAnalysisTab analytics={analytics} />}
           {activeTab === 'raw' && <RawDataTab analytics={analytics} date={date} onExport={handleExport} exporting={exporting} />}
         </>)}

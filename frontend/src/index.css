@@ -5348,6 +5348,7 @@ body {
 .wrr-table td { padding: 7px 10px; border-bottom: 1px solid var(--border); color: var(--text-2); white-space: nowrap; }
 .wrr-table tbody tr:hover td { background: var(--bg-table-hover, var(--bg-hover)); }
 .wrr-table tbody tr:last-child td { border-bottom: none; }
+.wrr-row-clickable { cursor: pointer; }
 
 .wrr-row-actions { display: flex; flex-direction: column; gap: 4px; }
 .wrr-link-btn {
