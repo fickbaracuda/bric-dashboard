@@ -97,6 +97,47 @@ function parseTimeResponse(value) {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+/**
+ * Fallback ekstrak jam presisi transaksi bank OCBC dari `raw_data` mentah
+ * (dump kolom sheet apa adanya) ketika Apps Script yang TERPASANG belum
+ * mengirim `transaction_date_time` eksplisit. Kolom "A" pada raw_data OCBC
+ * SELALU berisi "DD/MM/YYYY HH:mm" (WIB) — sudah tersedia hari ini juga,
+ * TANPA perlu menunggu update manual Apps Script (insiden nyata: tanpa
+ * fallback ini, `calculateOcbcCoverage()` tidak bisa menghitung
+ * `trusted_coverage_start`, sehingga SEMUA transaksi FP lama yang bank-nya
+ * sudah tergeser keluar window 5.000 baris salah diklasifikasi
+ * IN_BANK_COVERAGE + actionable -> match rate live jatuh drastis, misal
+ * FP_ONLY meledak jadi ratusan padahal seharusnya 0).
+ * Di-anchor ke Asia/Jakarta (+07:00) via konstruksi ISO manual — BUKAN
+ * `new Date(string)` langsung, karena V8 salah tafsir "13/07/2026" sbg
+ * MM/DD/YYYY (invalid utk tanggal>12, salah senyap utk tanggal<=12).
+ */
+function parseOcbcRawDateTimeFallback(rawData) {
+  if (!rawData || typeof rawData !== 'object') return null;
+  const candidates = [rawData.A, ...Object.values(rawData)];
+  for (const val of candidates) {
+    if (typeof val !== 'string') continue;
+    const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(val.trim());
+    if (!m) continue;
+    const [, d, mo, y, h, mi, se] = m;
+    const iso = `${y}-${mo.padStart(2, '0')}-${d.padStart(2, '0')}T${h.padStart(2, '0')}:${mi.padStart(2, '0')}:${(se || '0').padStart(2, '0')}+07:00`;
+    const dt = new Date(iso);
+    if (!Number.isNaN(dt.getTime())) return dt;
+  }
+  return null;
+}
+
+/**
+ * Resolusi tunggal jam presisi transaksi bank OCBC, dipakai di SEMUA jalur
+ * (SNAPSHOT insert & BACKFILL): eksplisit dari Apps Script kalau ada (masa
+ * depan) > fallback raw_data.A (aktif SEKARANG) > null (date-only, tidak
+ * ada presisi jam -- coverage classification default aman ke IN_BANK_COVERAGE).
+ */
+function resolveOcbcTransactionDateTime(row) {
+  if (row.transaction_date_time) return parseTimeResponse(row.transaction_date_time);
+  return parseOcbcRawDateTimeFallback(row.raw_data) || parseTimeResponse(row.transaction_date);
+}
+
 function numEq(a, b) {
   return typeof a === 'number' && typeof b === 'number' && Math.abs(a - b) < NUM_EPS;
 }
@@ -915,7 +956,7 @@ async function syncHandler(req, res) {
       const archiveRows = buildOcbcBankArchiveRows(
         bankRowsRaw.map(row => ({
           bankCode, accountNo: stableAccountNo,
-          transactionDateTime: row.transaction_date_time ? parseTimeResponse(row.transaction_date_time) : parseTimeResponse(row.transaction_date),
+          transactionDateTime: resolveOcbcTransactionDateTime(row),
           transactionDate: toIsoDate(row.transaction_date),
           valueDate: toIsoDate(row.value_date),
           referenceNo: nullIfEmpty(row.reference_no), chequeNo: nullIfEmpty(row.cheque_no), description: nullIfEmpty(row.description),
@@ -1033,7 +1074,7 @@ async function syncHandler(req, res) {
 
     let bankInserted = 0;
     for (const row of bankRowsRaw) {
-      const transactionDateTime = row.transaction_date_time ? parseTimeResponse(row.transaction_date_time) : parseTimeResponse(row.transaction_date);
+      const transactionDateTime = resolveOcbcTransactionDateTime(row);
       await client.query(
         `INSERT INTO recon_bank_transactions (batch_id, transaction_date, transaction_date_time, value_date, reference_no, cheque_no, description, debit, credit, balance, account_no, source_row_number, raw_data)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
@@ -1639,5 +1680,7 @@ module.exports = {
   isCompleteOcbcGroup,
   buildOcbcBankArchiveRows,
   computeBankRowFingerprint,
+  parseOcbcRawDateTimeFallback,
+  resolveOcbcTransactionDateTime,
   DEFAULT_SOURCE_LIMIT,
 };

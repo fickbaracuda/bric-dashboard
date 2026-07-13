@@ -9,6 +9,7 @@ const {
   reconcileTransactions, parseDescriptionFallback, cleanNum, numEq, toIsoDate, isValidIdTransaksi,
   reconcileTransactionsWithCoverage, calculateOcbcCoverage, classifyFpCoverage, isCompleteOcbcGroup,
   buildOcbcBankArchiveRows, computeBankRowFingerprint,
+  parseOcbcRawDateTimeFallback, resolveOcbcTransactionDateTime,
 } = require('../src/routes/warroom-reconciliation');
 
 const tests = [];
@@ -416,6 +417,33 @@ test('TEST 7c: fingerprint SAMA meski balance berbeda -- running balance OCBC bi
   const rowX = { bankCode: 'OCBC', accountNo: '123', transactionDateTime: new Date('2026-07-10T09:00:00+07:00'), valueDate: '2026-07-10', referenceNo: 'X', description: 'ref X', debit: 1000, credit: null, balance: 5000 };
   const rowY = { ...rowX, balance: 4871 };
   assert.strictEqual(computeBankRowFingerprint(rowX), computeBankRowFingerprint(rowY));
+});
+
+// ── TEST 12: fallback jam presisi dari raw_data.A (regresi insiden FP_ONLY meledak) ──
+test('TEST 12a: parseOcbcRawDateTimeFallback -- baca kolom A "DD/MM/YYYY HH:mm" WIB, hasil instant benar', () => {
+  const dt = parseOcbcRawDateTimeFallback({ A: '13/07/2026 19:48', B: '13/07/2026', C: '3556773504' });
+  assert.ok(dt instanceof Date && !Number.isNaN(dt.getTime()));
+  // 19:48 WIB (+07:00) == 12:48 UTC
+  assert.strictEqual(dt.toISOString(), '2026-07-13T12:48:00.000Z');
+});
+test('TEST 12b: parseOcbcRawDateTimeFallback -- tanggal>12 tidak salah tafsir MM/DD (insiden new Date() langsung)', () => {
+  const dt = parseOcbcRawDateTimeFallback({ A: '25/12/2026 08:05' });
+  assert.strictEqual(dt.toISOString(), '2026-12-25T01:05:00.000Z');
+});
+test('TEST 12c: parseOcbcRawDateTimeFallback -- raw_data kosong/tanpa kolom cocok -> null', () => {
+  assert.strictEqual(parseOcbcRawDateTimeFallback(null), null);
+  assert.strictEqual(parseOcbcRawDateTimeFallback({}), null);
+  assert.strictEqual(parseOcbcRawDateTimeFallback({ B: '13/07/2026' }), null);
+});
+test('TEST 12d: resolveOcbcTransactionDateTime -- prioritas: transaction_date_time eksplisit > raw_data.A > date-only', () => {
+  const explicit = resolveOcbcTransactionDateTime({ transaction_date_time: '2026-07-13T10:00:00+07:00', raw_data: { A: '13/07/2026 19:48' }, transaction_date: '13/07/2026' });
+  assert.strictEqual(explicit.toISOString(), '2026-07-13T03:00:00.000Z');
+  const viaRawData = resolveOcbcTransactionDateTime({ transaction_date_time: null, raw_data: { A: '13/07/2026 19:48' }, transaction_date: '13/07/2026' });
+  assert.strictEqual(viaRawData.toISOString(), '2026-07-13T12:48:00.000Z');
+  // tanpa raw_data.A yang cocok, jatuh ke parseTimeResponse(transaction_date) apa adanya
+  // (perilaku lama, termasuk keterbatasannya utk string non-ISO -- bukan cakupan fallback ini)
+  const dateOnly = resolveOcbcTransactionDateTime({ transaction_date_time: null, raw_data: {}, transaction_date: '2026-07-13' });
+  assert.ok(dateOnly instanceof Date && !Number.isNaN(dateOnly.getTime()));
 });
 
 // ── TEST 8: resolution manual + audit log tetap ada lintas resync ───────
