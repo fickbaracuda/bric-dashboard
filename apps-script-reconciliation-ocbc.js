@@ -101,46 +101,51 @@ function reconReadBank_() {
 
   const values = sheet.getDataRange().getValues();
 
-  // ── Summary rekening (baris 1-8) — scan label:value fleksibel ──
-  const summaryLabelMap = {
-    'PERIOD': 'period', 'PERIODE': 'period',
-    'ACCOUNT NUMBER': 'account_number', 'NO REKENING': 'account_number', 'NOMOR REKENING': 'account_number',
-    'ACCOUNT NAME': 'account_name', 'NAMA REKENING': 'account_name',
-    'TOTAL DEBIT COUNT': 'total_debit_count', 'JUMLAH DEBIT': 'total_debit_count',
-    'TOTAL DEBIT AMOUNT': 'total_debit_amount', 'TOTAL DEBIT': 'total_debit_amount',
-    'TOTAL CREDIT COUNT': 'total_credit_count', 'JUMLAH KREDIT': 'total_credit_count',
-    'TOTAL CREDIT AMOUNT': 'total_credit_amount', 'TOTAL CREDIT': 'total_credit_amount',
-    'OPENING BALANCE': 'opening_balance', 'SALDO AWAL': 'opening_balance',
-    'CLOSING BALANCE': 'closing_balance', 'SALDO AKHIR': 'closing_balance',
-    'LEDGER BALANCE': 'ledger_balance',
-    'AVAILABLE BALANCE': 'available_balance', 'SALDO TERSEDIA': 'available_balance',
-    'RELEASE DATE': 'release_date', 'TANGGAL RILIS': 'release_date',
-  };
-  const summary = {};
-  for (let r = 0; r < Math.min(10, values.length); r++) {
-    const row = values[r] || [];
-    for (let c = 0; c < row.length - 1; c++) {
-      const label = String(row[c] || '').trim().toUpperCase().replace(/:$/, '');
-      if (summaryLabelMap[label] && row[c + 1] !== '') {
-        const key = summaryLabelMap[label];
-        summary[key] = (key.indexOf('balance') !== -1 || key.indexOf('amount') !== -1 || key.indexOf('count') !== -1)
-          ? reconCleanNum_(row[c + 1])
-          : String(row[c + 1]).trim();
-      }
-    }
+  // ── Summary rekening — layout PERSIS dikonfirmasi dari data riil (baris
+  // 1-5, sisanya 6-8 kosong): 2 pasang label:value per baris (kolom A/B dan
+  // G/H), KECUALI baris TOTAL DEBIT/CREDIT yang punya count di B dan amount
+  // di C. Label asli pakai " :" (spasi + titik dua), contoh "PERIOD :".
+  //   Baris1: PERIOD : <period>           | RELEASE DATE : <date>
+  //   Baris2: ACCOUNT NO : <no>            | OPENING BALANCE : <val>
+  //   Baris3: ACCOUNT NAME : <name>        | CLOSING BALANCE : <val>
+  //   Baris4: TOTAL DEBIT : <count> <amt>  | LEDGER BALANCE : <val>
+  //   Baris5: TOTAL CREDIT : <count> <amt> | AVAILABLE BALANCE : <val>
+  let summary = {};
+  const row1 = values[0] || [], row2 = values[1] || [], row3 = values[2] || [], row4 = values[3] || [], row5 = values[4] || [];
+  const looksRight = String(row1[0] || '').trim().toUpperCase().indexOf('PERIOD') === 0;
+  if (looksRight) {
+    summary = {
+      period: String(row1[1] || '').trim() || null,
+      release_date: String(row1[7] || '').trim() || null,
+      account_number: String(row2[1] || '').trim() || null,
+      opening_balance: reconCleanNum_(row2[7]),
+      account_name: String(row3[1] || '').trim() || null,
+      closing_balance: reconCleanNum_(row3[7]),
+      total_debit_count: reconCleanNum_(row4[1]),
+      total_debit_amount: reconCleanNum_(row4[2]),
+      ledger_balance: reconCleanNum_(row4[7]),
+      total_credit_count: reconCleanNum_(row5[1]),
+      total_credit_amount: reconCleanNum_(row5[2]),
+      available_balance: reconCleanNum_(row5[7]),
+    };
+  } else {
+    Logger.log('WARNING: layout summary rekening tidak seperti yang diharapkan (baris 1 kolom A bukan "PERIOD"). Summary dikosongkan, cek manual dgn debugReconBankRawRows().');
   }
 
   // ── Deteksi baris header SECARA DINAMIS (bukan hardcode baris 10) — data
-  // riil menunjukkan header bisa geser 1 baris dari dokumentasi awal. Cari
-  // baris yang kolom A/C berisi "Transaction Date"/"Reference No." dst.
-  let headerRowIdx = -1;
-  for (let r = 0; r < Math.min(20, values.length); r++) {
-    const row = values[r] || [];
+  // riil menunjukkan bisa ADA LEBIH DARI SATU baris header berturut-turut
+  // (baris 10 & 11 sama-sama berisi "Transaction Date"). Cari baris header
+  // TERAKHIR (bukan yang pertama) dalam 20 baris pertama, data mulai
+  // tepat setelahnya.
+  function isHeaderLikeRow(row) {
     const a = String(row[0] || '').trim().toUpperCase();
     const c = String(row[2] || '').trim().toUpperCase();
-    if (a === 'TRANSACTION DATE' || c.indexOf('REFERENCE') === 0) { headerRowIdx = r; break; }
+    return a === 'TRANSACTION DATE' || c.indexOf('REFERENCE') === 0;
   }
-  const dataStartRow = headerRowIdx >= 0 ? headerRowIdx + 1 : 10; // fallback ke asumsi lama kalau header tidak ketemu
+  let dataStartRow = 10; // fallback kalau tidak ada baris header yang cocok sama sekali
+  for (let r = 0; r < Math.min(20, values.length); r++) {
+    if (isHeaderLikeRow(values[r] || [])) dataStartRow = r + 1;
+  }
 
   const rows = [];
   for (let r = dataStartRow; r < values.length; r++) {
