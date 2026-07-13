@@ -60,30 +60,51 @@ relevan. Resync data yang sama tidak pernah menggandakan baris atau batch.
 | Endpoint | Auth | Keterangan |
 |---|---|---|
 | `POST /api/warroom/reconciliation/sync` | `APPS_SCRIPT_TOKEN` (token SHARED, bukan token baru) | Terima chunk FP/bank, jalankan engine di chunk terakhir |
+| `GET /api/warroom/reconciliation/sync-request-status?bank_code=` | `APPS_SCRIPT_TOKEN` | Dipanggil Apps Script tiap 1 menit — cek apakah tombol "Sync Now" ditekan sejak sync terakhir |
 | `GET /api/warroom/reconciliation/analytics?date=&bank_code=` | JWT | Summary, distribusi status, validasi rekening, fee analysis, recent batches |
 | `GET /api/warroom/reconciliation/transactions?date=&status=&id_outlet=&id_produk=&search=&page=&limit=&sort=&order=` | JWT | List berpaginasi; `status` boleh comma-separated utk exception queue |
 | `GET /api/warroom/reconciliation/export?...` | JWT | CSV (di-fetch sbg blob di frontend krn butuh header Authorization) |
+| `POST /api/warroom/reconciliation/request-sync` | JWT | Tombol "Sync Now" — body `{bank_code}`, generik utk OCBC & Mandiri, hanya mencatat permintaan di `recon_sync_requests` |
 | `POST /api/warroom/reconciliation/:id/resolve` | JWT | Body `{status, notes}`, tercatat di `recon_action_logs` |
 | `GET /api/warroom/reconciliation/:id/logs` | JWT | Riwayat audit 1 baris hasil |
 
-## Tidak ada tombol "Sync Sekarang" di dashboard (dicoba, dibatalkan)
-Sempat dicoba: tombol di dashboard yang memanggil Apps Script lewat Web App
-deployment (`doPost()` di `apps-script-reconciliation-ocbc.js` + endpoint
-backend `trigger-sync`). **Tidak jalan** — deployment Web App di domain
-Google Workspace `bm.co.id` mewajibkan login Google untuk request eksternal
-(`Who has access: Anyone within <domain>`, bukan publik), dan ini kebijakan
-admin Workspace yang tidak bisa/boleh di-bypass dari sisi kode. Alternatif
-yang butuh Service Account + Google Sheets API langsung dari backend juga
-dipertimbangkan tapi diputuskan terlalu ribet untuk kebutuhan saat ini
-(butuh Google Cloud project baru, service account, kredensial baru, dan
-duplikasi logic parsing sheet di Node.js).
+## Tombol "Sync Now" — kompromi, BUKAN sync instan
+Percobaan PERTAMA: tombol yang memanggil Apps Script langsung lewat Web App
+deployment (`doPost()` + endpoint backend `trigger-sync`). **Tidak jalan**
+— deployment Web App di domain Google Workspace `bm.co.id` mewajibkan login
+Google untuk request eksternal (`Who has access: Anyone within <domain>`,
+bukan publik), dan ini kebijakan admin Workspace yang tidak bisa/boleh
+di-bypass dari sisi kode. Endpoint `trigger-sync`, fungsi `doPost()` versi
+lama, dan tombolnya waktu itu **sudah dihapus** karena selalu melapor
+"berhasil" padahal diam-diam gagal.
 
-Endpoint `trigger-sync`, fungsi `doPost()`, dan tombolnya di frontend
-**sudah dihapus** dari kode (bukan cuma dinonaktifkan) supaya tidak ada
-fitur yang diam-diam gagal tapi terlihat "berhasil" di UI. `doPost()` di
-Apps Script memang masih ada sebagai fungsi (harmless, tidak dipanggil
-otomatis) — boleh dihapus juga kalau mau beres-beres total, tapi tidak
-wajib.
+Solusi kedua yang JALAN (dipakai sekarang): manfaatkan arah komunikasi yang
+TIDAK diblokir — panggilan KELUAR dari Apps Script ke backend kita (itu
+persis cara sync biasa bekerja) selalu boleh, hanya panggilan MASUK ke Web
+App Apps Script dari luar yang diblokir kebijakan Workspace. Jadi:
+
+1. Tombol "Sync Now" di dashboard memanggil `POST .../reconciliation/request-sync`
+   (JWT, endpoint biasa BRIC) — HANYA mencatat baris baru di tabel
+   `recon_sync_requests` (`bank_code`, `requested_at`, `requested_by`).
+   Tidak menyentuh Apps Script sama sekali.
+2. Trigger checker Apps Script yang SUDAH jalan tiap 1 menit
+   (`checkAndSyncIfDirtyReconciliationOcbc`) SEKARANG JUGA memanggil
+   `GET .../reconciliation/sync-request-status?bank_code=OCBC` (token,
+   fungsi `reconCheckForceSyncRequested_`) di setiap siklusnya. Kalau ada
+   permintaan yang lebih baru dari sync sukses terakhir, ia sync SEKARANG
+   juga (skip debounce 30 detik).
+
+Realistis: **~1-2 menit** dari klik tombol sampai data ter-update (menunggu
+siklus checker berikutnya + waktu sync itu sendiri) — BUKAN instan.
+`pending` di `sync-request-status` otomatis balik `false` begitu sync
+berikutnya selesai (`synced_at` jadi lebih baru dari `requested_at`), tanpa
+perlu langkah "consume/clear" terpisah.
+
+Alternatif Service Account + Google Sheets API langsung dari backend (yang
+benar-benar bisa instan) masih belum dipakai — butuh Google Cloud project
+baru, service account + kredensial baru, dan duplikasi logic parsing sheet
+di Node.js. Dipertimbangkan tapi diputuskan terlalu besar scope-nya untuk
+kebutuhan saat ini.
 
 ## Apps Script (`apps-script-reconciliation-ocbc.js`)
 Fungsi: `testReconciliationOcbc()` (dry-run, tidak kirim), `pushReconciliationOcbc()`
@@ -91,10 +112,9 @@ Fungsi: `testReconciliationOcbc()` (dry-run, tidak kirim), `pushReconciliationOc
 `setupReconciliationOcbcTrigger()`, `removeReconciliationOcbcTrigger()`.
 
 ### Auto-sync reaktif (bukan cuma interval tetap)
-Karena tombol manual tidak bisa dipakai (lihat di atas), sync sepenuhnya
-mengandalkan trigger 2 lapis di Apps Script supaya data tetap segar tanpa
-tombol maupun campur tangan manual, otomatis segera setelah ada perubahan
-di Sheet:
+Sync mengandalkan trigger 2 lapis di Apps Script supaya data tetap segar
+otomatis segera setelah ada perubahan di Sheet ATAU setelah tombol "Sync
+Now" ditekan:
 
 1. **`reconOnChangeTrigger_`** — installable trigger terpasang ke event
    `onChange` spreadsheet. HANYA menandai timestamp "ada perubahan" di
@@ -103,14 +123,16 @@ di Sheet:
    dari tim bisa memicu banyak sync yang tumpang tindih saling menghapus
    data batch yang sama, dan cepat menghabiskan kuota harian Apps Script).
 2. **`checkAndSyncIfDirtyReconciliationOcbc`** — time-based trigger tiap
-   1 menit. Baru menjalankan `pushReconciliationOcbc()` kalau: ada dirty
-   flag, sudah lewat 30 detik (`RECON_DEBOUNCE_MS`) sejak edit terakhir
-   (supaya tidak nyambar saat tim masih input), dan tidak ada sync lain
-   yang sedang berjalan (lock `RECON_SYNC_IN_PROGRESS`).
+   1 menit. Menjalankan `pushReconciliationOcbc()` kalau: (ada dirty flag
+   DAN sudah lewat 30 detik debounce sejak edit terakhir) ATAU ada
+   permintaan "Sync Now" dari dashboard (`reconCheckForceSyncRequested_`,
+   skip debounce) — DAN tidak ada sync lain yang sedang berjalan (lock
+   `RECON_SYNC_IN_PROGRESS`).
 
 Hasil: data ter-update otomatis ~30-90 detik setelah perubahan terakhir di
-Sheet. Pasang sekali lewat `setupReconciliationOcbcTrigger()` (memasang
-KEDUA trigger di atas), lepas dengan `removeReconciliationOcbcTrigger()`.
+Sheet, atau ~1-2 menit setelah tombol "Sync Now" ditekan. Pasang sekali
+lewat `setupReconciliationOcbcTrigger()` (memasang KEDUA trigger di atas),
+lepas dengan `removeReconciliationOcbcTrigger()`.
 
 Script Properties:
 - `RECONCILIATION_OCBC_SYNC_TOKEN` — **harus sama dengan `APPS_SCRIPT_TOKEN` di server** (token yang sama dipakai war-room lain)

@@ -3,7 +3,7 @@ import Layout from '../components/Layout';
 import {
   getReconciliationMandiriAnalytics, getReconciliationMandiriTransactions, exportReconciliationMandiriCsv,
   resolveReconciliationMandiri, getReconciliationMandiriLogs, getReconciliationMandiriRawBank,
-  getReconciliationMandiriRawFp, getReconciliationMandiriResolutionHistory,
+  getReconciliationMandiriRawFp, getReconciliationMandiriResolutionHistory, requestReconciliationSync,
 } from '../services/api';
 
 // Halaman ini REUSE layout/komponen generik "wrr-*" yang sudah dibangun untuk
@@ -745,6 +745,8 @@ export default function WarRoomReconciliationMandiri() {
   const [auditId, setAuditId] = useState(null);
   const [jumpStatus, setJumpStatus] = useState(null);
   const [exporting, setExporting] = useState(false);
+  const [syncRequesting, setSyncRequesting] = useState(false);
+  const [syncRequestMsg, setSyncRequestMsg] = useState(null);
 
   const handleSelectStatus = useCallback((status) => {
     const targetTab = (status === 'MATCHED' || status === 'MATCHED_NO_FEE') ? 'hasil' : 'exception';
@@ -776,6 +778,18 @@ export default function WarRoomReconciliationMandiri() {
       .finally(() => setExporting(false));
   };
 
+  // Bukan sync instan — Apps Script Web App tidak bisa dipanggil langsung
+  // dari browser (kebijakan Google Workspace). Ini hanya mencatat
+  // permintaan; trigger checker Apps Script (jalan tiap 1 menit) yang
+  // benar-benar sync dalam ~1-2 menit berikutnya.
+  const handleSyncNow = () => {
+    setSyncRequesting(true); setSyncRequestMsg(null);
+    requestReconciliationSync('MANDIRI')
+      .then(res => setSyncRequestMsg(res.message || 'Permintaan sync terkirim.'))
+      .catch(e => setSyncRequestMsg(e.response?.data?.error || e.message || 'Gagal mengirim permintaan sync.'))
+      .finally(() => setSyncRequesting(false));
+  };
+
   const isEmpty = !loading && !error && analytics?.empty === true;
   const recentBatches = analytics?.recent_batches || [];
 
@@ -798,12 +812,21 @@ export default function WarRoomReconciliationMandiri() {
                 ))}
               </select>
             )}
+            <button
+              className="wrr-btn"
+              onClick={handleSyncNow}
+              disabled={syncRequesting}
+              title='Bukan sync instan — Apps Script Web App tidak bisa dipanggil langsung dari browser (kebijakan Google Workspace). Ini hanya memicu sync lebih cepat (~1-2 menit), bukan seketika.'
+            >
+              <i className="ti ti-refresh-alert" /> {syncRequesting ? 'Mengirim...' : 'Sync Now'}
+            </button>
             <button className="wrr-btn" onClick={handleRefresh}><i className="ti ti-refresh" /> Refresh</button>
             {analytics?.meta?.last_sync && (
               <span className="wrr-badge wrr-badge-sync" style={{ background: ACCENT, color: '#111827' }}><i className="ti ti-plug-connected" /> Sync: {fmtDateTime(analytics.meta.last_sync)}</span>
             )}
           </div>
         </div>
+        {syncRequestMsg && <div className="wrr-empty-sub" style={{ marginBottom: 12 }}>{syncRequestMsg}</div>}
 
         {loading && <div className="wrr-loading"><i className="ti ti-loader-2 wrr-spin" /> Memuat data...</div>}
         {!loading && error && <div className="wrr-error"><i className="ti ti-alert-circle" /> {error}</div>}

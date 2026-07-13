@@ -379,16 +379,41 @@ function reconMdrOnChangeTrigger_(e) {
 }
 
 /**
- * Dipanggil time-based trigger tiap 1 menit. Sync HANYA jalan kalau ada
+ * Cek tombol "Sync Now" di dashboard — Web App Apps Script TIDAK BISA
+ * dipanggil langsung dari browser (kebijakan Google Workspace), jadi
+ * tombol itu hanya mencatat permintaan di database BRIC. Panggilan KELUAR
+ * dari Apps Script ke backend (arah ini) selalu boleh, tidak kena
+ * pembatasan yang sama. TIDAK PERNAH melempar error ke pemanggil — kalau
+ * gagal cek, anggap saja tidak ada permintaan (fallback ke jadwal normal).
+ */
+function reconMdrCheckForceSyncRequested_() {
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const token = props.getProperty('BRIC_SYNC_TOKEN');
+    const baseUrl = props.getProperty('BRIC_API_BASE_URL') || RECON_MDR_DEFAULT_BASE_URL;
+    const statusUrl = baseUrl.replace(/\/+$/, '') + '/api/warroom/reconciliation/sync-request-status?bank_code=' + RECON_MDR_BANK_CODE;
+    const resp = UrlFetchApp.fetch(statusUrl, { headers: { 'x-sync-token': token }, muteHttpExceptions: true });
+    if (resp.getResponseCode() !== 200) return false;
+    return !!JSON.parse(resp.getContentText()).pending;
+  } catch (e) {
+    Logger.log('WARNING: gagal cek status tombol Sync Now: ' + e.message);
+    return false;
+  }
+}
+
+/**
+ * Dipanggil time-based trigger tiap 1 menit. Sync jalan kalau: ada
  * perubahan (dirty flag) DAN sudah lewat masa tunggu sejak edit terakhir,
- * DAN tidak ada sync lain yang sedang berjalan (lock).
+ * ATAU ada permintaan "Sync Now" dari dashboard (skip debounce) — DAN
+ * tidak ada sync lain yang sedang berjalan (lock).
  */
 function checkAndSyncIfDirtyReconciliationMandiri() {
   const props = PropertiesService.getScriptProperties();
   const dirtySince = Number(props.getProperty(RECON_MDR_DIRTY_FLAG_KEY) || 0);
-  if (!dirtySince) return; // tidak ada perubahan sejak sync terakhir
+  const forceRequested = reconMdrCheckForceSyncRequested_();
+  if (!dirtySince && !forceRequested) return; // tidak ada perubahan & tidak ada permintaan manual
 
-  if (Date.now() - dirtySince < RECON_MDR_DEBOUNCE_MS) return; // masih dalam masa tunggu, tim mungkin masih input
+  if (!forceRequested && Date.now() - dirtySince < RECON_MDR_DEBOUNCE_MS) return; // masih dalam masa tunggu, tim mungkin masih input
 
   if (props.getProperty(RECON_MDR_SYNC_LOCK_KEY) === 'true') {
     Logger.log('Sync Mandiri sebelumnya masih berjalan, lewati siklus ini.');
@@ -401,6 +426,7 @@ function checkAndSyncIfDirtyReconciliationMandiri() {
     // berjalan, flag akan otomatis ke-set ulang oleh reconMdrOnChangeTrigger_
     // dan tertangkap di siklus berikutnya (bukan hilang begitu saja).
     props.deleteProperty(RECON_MDR_DIRTY_FLAG_KEY);
+    if (forceRequested) Logger.log('Sync Mandiri dipicu oleh tombol "Sync Now" di dashboard.');
     pushReconciliationMandiri();
   } finally {
     props.deleteProperty(RECON_MDR_SYNC_LOCK_KEY);

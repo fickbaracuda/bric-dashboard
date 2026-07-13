@@ -357,15 +357,40 @@ function reconOnChangeTrigger_(e) {
   PropertiesService.getScriptProperties().setProperty(RECON_DIRTY_FLAG_KEY, String(Date.now()));
 }
 
-/** Dipanggil time-based trigger tiap 1 menit. Sync HANYA jalan kalau ada
+/**
+ * Cek tombol "Sync Now" di dashboard — Web App Apps Script TIDAK BISA
+ * dipanggil langsung dari browser (kebijakan Google Workspace), jadi
+ * tombol itu hanya mencatat permintaan di database BRIC. Panggilan KELUAR
+ * dari Apps Script ke backend (arah ini) selalu boleh, tidak kena
+ * pembatasan yang sama. TIDAK PERNAH melempar error ke pemanggil — kalau
+ * gagal cek, anggap saja tidak ada permintaan (fallback ke jadwal normal).
+ */
+function reconCheckForceSyncRequested_() {
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const token = props.getProperty('RECONCILIATION_OCBC_SYNC_TOKEN');
+    const syncUrl = props.getProperty('RECONCILIATION_OCBC_SYNC_URL') || RECON_DEFAULT_URL;
+    const statusUrl = syncUrl.replace(/\/sync$/, '/sync-request-status') + '?bank_code=' + RECON_BANK_CODE;
+    const resp = UrlFetchApp.fetch(statusUrl, { headers: { 'x-sync-token': token }, muteHttpExceptions: true });
+    if (resp.getResponseCode() !== 200) return false;
+    return !!JSON.parse(resp.getContentText()).pending;
+  } catch (e) {
+    Logger.log('WARNING: gagal cek status tombol Sync Now: ' + e.message);
+    return false;
+  }
+}
+
+/** Dipanggil time-based trigger tiap 1 menit. Sync jalan kalau: ada
  * perubahan (dirty flag) DAN sudah lewat masa tunggu sejak edit terakhir,
- * DAN tidak ada sync lain yang sedang berjalan (lock). */
+ * ATAU ada permintaan "Sync Now" dari dashboard (skip debounce) — DAN
+ * tidak ada sync lain yang sedang berjalan (lock). */
 function checkAndSyncIfDirtyReconciliationOcbc() {
   const props = PropertiesService.getScriptProperties();
   const dirtySince = Number(props.getProperty(RECON_DIRTY_FLAG_KEY) || 0);
-  if (!dirtySince) return; // tidak ada perubahan sejak sync terakhir
+  const forceRequested = reconCheckForceSyncRequested_();
+  if (!dirtySince && !forceRequested) return; // tidak ada perubahan & tidak ada permintaan manual
 
-  if (Date.now() - dirtySince < RECON_DEBOUNCE_MS) return; // masih dalam masa tunggu, tim mungkin masih input
+  if (!forceRequested && Date.now() - dirtySince < RECON_DEBOUNCE_MS) return; // masih dalam masa tunggu, tim mungkin masih input
 
   if (props.getProperty(RECON_SYNC_LOCK_KEY) === 'true') {
     Logger.log('Sync sebelumnya masih berjalan, lewati siklus ini.');
@@ -378,6 +403,7 @@ function checkAndSyncIfDirtyReconciliationOcbc() {
     // berjalan, flag akan otomatis ke-set ulang oleh reconOnChangeTrigger_
     // dan tertangkap di siklus berikutnya (bukan hilang begitu saja).
     props.deleteProperty(RECON_DIRTY_FLAG_KEY);
+    if (forceRequested) Logger.log('Sync dipicu oleh tombol "Sync Now" di dashboard.');
     pushReconciliationOcbc();
   } finally {
     props.deleteProperty(RECON_SYNC_LOCK_KEY);

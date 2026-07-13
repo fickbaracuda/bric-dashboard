@@ -811,6 +811,54 @@ async function resolveHandler(req, res) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// "Sync Now" (kompromi) — Apps Script Web App TIDAK BISA dipanggil langsung
+// dari dashboard (kebijakan Google Workspace, lihat migration
+// create_recon_sync_requests.sql). Tombol ini HANYA mencatat "ada
+// permintaan sync"; trigger checker Apps Script yang sudah jalan tiap 1
+// menit (checkAndSyncIfDirtyReconciliation{Ocbc,Mandiri}) yang membaca
+// status ini dan memutuskan utk sync SEKARANG (skip debounce normal).
+// Generik utk kedua bank (bank_code dari body/query) — TIDAK diduplikasi
+// per bank, dipakai baik dari route OCBC maupun Mandiri.
+// ─────────────────────────────────────────────────────────────────────────
+async function requestSyncHandler(req, res) {
+  try {
+    const bankCode = nullIfEmpty(req.body?.bank_code) || 'OCBC';
+    const username = req.user?.username || null;
+    await pool.query('INSERT INTO recon_sync_requests (bank_code, requested_by) VALUES ($1,$2)', [bankCode, username]);
+    res.json({
+      success: true,
+      message: 'Permintaan sync tercatat. Apps Script akan sync dalam ~1-2 menit (tidak instan — lihat dokumentasi soal batasan Google Workspace).',
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+}
+
+// GET /api/warroom/reconciliation/sync-request-status?bank_code=OCBC|MANDIRI
+// Dipanggil Apps Script (token auth, BUKAN JWT — sama seperti endpoint sync).
+async function syncRequestStatusHandler(req, res) {
+  try {
+    const token = extractToken(req);
+    if (!SYNC_TOKEN || token !== SYNC_TOKEN) return res.status(401).json({ error: 'Unauthorized' });
+    const bankCode = nullIfEmpty(req.query.bank_code) || 'OCBC';
+    const [reqRes, batchRes] = await Promise.all([
+      pool.query('SELECT MAX(requested_at) AS latest FROM recon_sync_requests WHERE bank_code = $1', [bankCode]),
+      pool.query('SELECT MAX(synced_at) AS latest FROM recon_sync_batches WHERE bank_code = $1', [bankCode]),
+    ]);
+    const requestedAt = reqRes.rows[0]?.latest || null;
+    const syncedAt = batchRes.rows[0]?.latest || null;
+    // Pending kalau ada permintaan yang lebih baru dari sync SUKSES terakhir
+    // (atau belum pernah sync sama sekali) -- begitu sync berikutnya selesai,
+    // synced_at otomatis lebih baru dari requested_at, pending balik ke false
+    // TANPA perlu langkah "consume/clear" terpisah.
+    const pending = !!requestedAt && (!syncedAt || new Date(requestedAt).getTime() > new Date(syncedAt).getTime());
+    res.json({ pending, requested_at: requestedAt, last_synced_at: syncedAt });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // GET /api/warroom/reconciliation/:id/logs — riwayat audit 1 baris hasil
 // ─────────────────────────────────────────────────────────────────────────
 async function actionLogsHandler(req, res) {
@@ -831,6 +879,8 @@ module.exports = {
   exportHandler,
   resolveHandler,
   actionLogsHandler,
+  requestSyncHandler,
+  syncRequestStatusHandler,
   // exported untuk unit test (backend/scripts/test-reconciliation-ocbc.js)
   // dan untuk dipakai ulang oleh adapter bank lain (warroom-reconciliation-mandiri.js)
   // supaya helper dasar (parsing angka/tanggal, extractToken, csvEscape, dst)

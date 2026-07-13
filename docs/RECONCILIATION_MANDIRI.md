@@ -98,6 +98,8 @@ DATE — supaya presisi jam-menit tidak hilang), `recon_sync_batches.scope_mode`
 | Endpoint | Auth | Keterangan |
 |---|---|---|
 | `POST /api/warroom/reconciliation/mandiri/sync` | `APPS_SCRIPT_TOKEN` (token SHARED) | Chunk FP/Mandiri, jalankan adapter+engine di chunk terakhir |
+| `GET /api/warroom/reconciliation/sync-request-status?bank_code=MANDIRI` | `APPS_SCRIPT_TOKEN` | Endpoint GENERIK (bukan di bawah `/mandiri`) — dipanggil Apps Script Mandiri tiap 1 menit, cek tombol "Sync Now" |
+| `POST /api/warroom/reconciliation/request-sync` | JWT | Endpoint GENERIK (bukan di bawah `/mandiri`) — tombol "Sync Now", body `{bank_code: 'MANDIRI'}` |
 | `GET /api/warroom/reconciliation/mandiri/analytics?date=` | JWT | Summary, status distribution, fee analysis, time analysis, balance validation |
 | `GET /api/warroom/reconciliation/mandiri/transactions?...` | JWT | List berpaginasi (status boleh comma-separated) |
 | `GET /api/warroom/reconciliation/mandiri/raw-bank?date=` | JWT | Raw baris mutasi Mandiri + hasil ekstraksi |
@@ -127,10 +129,20 @@ Fungsi: `testReconciliationMandiri()` (dry-run), `pushReconciliationMandiri()`
 Header sheet dibaca **by NAME** (bukan index hardcode) — kolom boleh
 berpindah posisi asal nama header sesuai spek.
 
+### Tombol "Sync Now" — kompromi, BUKAN sync instan
+Sama seperti Rekonsiliasi OCBC (lihat `docs/RECONCILIATION_OCBC.md` bagian
+"Tombol Sync Now" utk penjelasan lengkap kenapa Web App Apps Script tidak
+bisa dipanggil langsung dari browser). Ringkasnya: tombol di dashboard
+HANYA mencatat permintaan lewat `POST .../reconciliation/request-sync`
+(endpoint generik, dipakai bareng dengan OCBC); trigger checker Apps Script
+Mandiri yang sudah jalan tiap 1 menit ikut mengecek permintaan itu lewat
+`reconMdrCheckForceSyncRequested_()` dan sync SEKARANG kalau ada. Realistis
+~1-2 menit dari klik sampai data ter-update, bukan instan.
+
 ### Auto-sync REAKTIF (bukan interval tetap)
-Sama seperti Rekonsiliasi OCBC, sync mengandalkan trigger 2 lapis supaya
-data ter-update otomatis segera setelah ada perubahan di Sheet — BUKAN
-menunggu interval tetap (mis. 5 menit):
+Sync mengandalkan trigger 2 lapis supaya data ter-update otomatis segera
+setelah ada perubahan di Sheet ATAU setelah tombol "Sync Now" ditekan —
+BUKAN menunggu interval tetap (mis. 5 menit):
 
 1. **`reconMdrOnChangeTrigger_`** — installable trigger terpasang ke event
    `onChange` spreadsheet. HANYA menandai timestamp "ada perubahan" di
@@ -139,10 +151,10 @@ menunggu interval tetap (mis. 5 menit):
    dari tim bisa memicu banyak sync yang tumpang tindih saling menghapus
    data batch yang sama, dan cepat menghabiskan kuota harian Apps Script).
 2. **`checkAndSyncIfDirtyReconciliationMandiri`** — time-based trigger tiap
-   1 menit. Baru menjalankan `pushReconciliationMandiri()` kalau: ada dirty
-   flag, sudah lewat 30 detik (`RECON_MDR_DEBOUNCE_MS`) sejak edit terakhir
-   (supaya tidak nyambar saat tim masih input), dan tidak ada sync lain
-   yang sedang berjalan (lock `RECON_MDR_SYNC_IN_PROGRESS`).
+   1 menit. Menjalankan `pushReconciliationMandiri()` kalau: (ada dirty
+   flag DAN sudah lewat 30 detik debounce sejak edit terakhir) ATAU ada
+   permintaan "Sync Now" dari dashboard (skip debounce) — DAN tidak ada
+   sync lain yang sedang berjalan (lock `RECON_MDR_SYNC_IN_PROGRESS`).
 
 Hasil: data ter-update otomatis ~30-90 detik setelah perubahan terakhir di
 Sheet. Pasang sekali lewat `setupReconciliationMandiriTrigger()` (memasang

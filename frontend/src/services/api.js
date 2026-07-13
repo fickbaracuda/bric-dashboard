@@ -380,6 +380,12 @@ export const resolveReconciliation = (id, data) =>
   axios.post(`${API_URL}/api/warroom/reconciliation/${id}/resolve`, data, { headers: authHeaders() }).then(r => r.data);
 export const getReconciliationLogs = (id) =>
   axios.get(`${API_URL}/api/warroom/reconciliation/${id}/logs`, { headers: authHeaders() }).then(r => r.data);
+// Tombol "Sync Now" — generik utk OCBC & Mandiri (bank_code di body). TIDAK
+// memicu sync instan (Apps Script Web App tak bisa dipanggil langsung dari
+// browser, kebijakan Google Workspace) — hanya mencatat permintaan, checker
+// Apps Script (jalan tiap 1 menit) yang sync dalam ~1-2 menit berikutnya.
+export const requestReconciliationSync = (bankCode) =>
+  axios.post(`${API_URL}/api/warroom/reconciliation/request-sync`, { bank_code: bankCode }, { headers: authHeaders() }).then(r => r.data);
 
 /* WAR-ROOM — Rekonsiliasi FP vs Bank Mandiri (TIDAK di-cache — data operasional, harus selalu fresh) */
 export const getReconciliationMandiriAnalytics = (params = {}) =>
