@@ -385,7 +385,11 @@ async function syncHandler(req, res) {
     // Chunk terakhir -> jalankan engine atas SELURUH data batch ini
     const [fpAllRes, bankAllRes] = await Promise.all([
       client.query('SELECT * FROM recon_fp_transactions WHERE batch_id = $1', [batchId]),
-      client.query('SELECT * FROM recon_bank_transactions WHERE batch_id = $1', [batchId]),
+      // transaction_date::text -> HINDARI node-pg mem-parse kolom DATE jadi
+      // objek Date (lihat catatan besar di toIsoDate() soal timezone server
+      // yang BUKAN UTC — round-trip Date object utk kolom DATE bisa geser
+      // 1 hari). Simpan sbg string apa adanya sepanjang pipeline.
+      client.query('SELECT *, transaction_date::text AS transaction_date FROM recon_bank_transactions WHERE batch_id = $1', [batchId]),
     ]);
 
     const fpForEngine = fpAllRes.rows.map(r => ({
@@ -462,16 +466,22 @@ async function analyticsHandler(req, res) {
   try {
     const bankCode = nullIfEmpty(req.query.bank_code) || 'OCBC';
     let date = /^\d{4}-\d{2}-\d{2}$/.test(req.query.date || '') ? req.query.date : null;
+    // business_date::text di semua query berikut -> HINDARI node-pg mem-parse
+    // kolom DATE jadi objek Date lalu di-serialize balik pakai .toISOString()
+    // (selalu UTC). Server ini timezone-nya Asia/Shanghai (UTC+8, BUKAN UTC),
+    // jadi round-trip Date object utk kolom DATE bisa geser mundur 1 hari
+    // begitu melewati tengah malam UTC. Insiden nyata: tanggal batch
+    // "2026-07-13" tampil sebagai "2026-07-12" di dashboard.
     if (!date) {
       const latest = await pool.query(
-        'SELECT business_date FROM recon_sync_batches WHERE bank_code = $1 ORDER BY business_date DESC LIMIT 1',
+        'SELECT business_date::text AS business_date FROM recon_sync_batches WHERE bank_code = $1 ORDER BY business_date DESC LIMIT 1',
         [bankCode]
       );
-      date = latest.rows[0] ? latest.rows[0].business_date.toISOString().slice(0, 10) : null;
+      date = latest.rows[0] ? latest.rows[0].business_date : null;
     }
 
     const recentBatchesRes = await pool.query(
-      `SELECT batch_no, business_date, bank_code, fp_row_count, bank_row_count, synced_at, status
+      `SELECT batch_no, business_date::text AS business_date, bank_code, fp_row_count, bank_row_count, synced_at, status
        FROM recon_sync_batches WHERE bank_code = $1 ORDER BY business_date DESC LIMIT 14`,
       [bankCode]
     );
@@ -661,7 +671,8 @@ async function transactionsHandler(req, res) {
 
     const rowParams = [...params, limit, offset];
     const rowsRes = await pool.query(
-      `SELECT r.*, b.business_date FROM recon_results r JOIN recon_sync_batches b ON b.id = r.batch_id
+      `SELECT r.*, b.business_date::text AS business_date, r.bank_transaction_date::text AS bank_transaction_date
+       FROM recon_results r JOIN recon_sync_batches b ON b.id = r.batch_id
        WHERE ${whereClause} ORDER BY ${sortColumn} ${sortDir} NULLS LAST
        LIMIT $${rowParams.length - 1} OFFSET $${rowParams.length}`,
       rowParams
@@ -714,7 +725,8 @@ async function exportHandler(req, res) {
   try {
     const { whereClause, params } = buildTransactionsQuery(req);
     const rowsRes = await pool.query(
-      `SELECT r.*, b.business_date FROM recon_results r JOIN recon_sync_batches b ON b.id = r.batch_id
+      `SELECT r.*, b.business_date::text AS business_date, r.bank_transaction_date::text AS bank_transaction_date
+       FROM recon_results r JOIN recon_sync_batches b ON b.id = r.batch_id
        WHERE ${whereClause} ORDER BY r.updated_at DESC LIMIT 20000`,
       params
     );
