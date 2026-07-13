@@ -14,7 +14,7 @@ const assert = require('assert');
 const {
   extractMandiriRow, reconcileMandiriTransactions, validateMandiriBalance,
 } = require('../src/reconciliation/mandiriAdapter');
-const { parseFlexibleDateTime, timeDelayBucket } = require('../src/routes/warroom-reconciliation-mandiri');
+const { parseFlexibleDateTime, timeDelayBucket, formatDateJakarta } = require('../src/routes/warroom-reconciliation-mandiri');
 
 const tests = [];
 function test(name, fn) { tests.push({ name, fn }); }
@@ -265,6 +265,25 @@ test('parseFlexibleDateTime: di-anchor ke Asia/Jakarta (+07:00), bukan timezone 
 test('parseFlexibleDateTime: kosong/null -> null', () => {
   assert.strictEqual(parseFlexibleDateTime(''), null);
   assert.strictEqual(parseFlexibleDateTime(null), null);
+});
+
+// ── formatDateJakarta — regresi: kolom DATE tersimpan mundur 1 hari utk jam
+// dini hari WIB (00:00-06:59), karena diekstrak pakai komponen UTC alih-alih
+// Asia/Jakarta (02:02 WIB = 19:02 UTC HARI SEBELUMNYA). Insiden nyata:
+// dashboard menampilkan 08/07/2026 padahal sheet semua 09/07/2026. ─────────
+test('formatDateJakarta: jam dini hari WIB TIDAK mundur ke hari sebelumnya', () => {
+  // 2026-07-09 02:02:00 WIB (+07:00) = 2026-07-08T19:02:00.000Z
+  const d = new Date('2026-07-08T19:02:00.000Z');
+  assert.strictEqual(formatDateJakarta(d), '2026-07-09');
+});
+test('formatDateJakarta: jam sore/malam WIB tanggalnya sama dgn ekstraksi UTC (bukan kasus ambigu)', () => {
+  // 2026-07-09 14:00:00 WIB (+07:00) = 2026-07-09T07:00:00.000Z
+  const d = new Date('2026-07-09T07:00:00.000Z');
+  assert.strictEqual(formatDateJakarta(d), '2026-07-09');
+});
+test('formatDateJakarta: null/invalid -> null', () => {
+  assert.strictEqual(formatDateJakarta(null), null);
+  assert.strictEqual(formatDateJakarta(new Date('invalid')), null);
 });
 
 // ── timeDelayBucket (section 8) ──────────────────────────────────────────────

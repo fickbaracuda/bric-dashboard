@@ -56,6 +56,21 @@ function parseFlexibleDateTime(value) {
   return Number.isNaN(generic.getTime()) ? null : generic;
 }
 
+/**
+ * Format sebuah instant (Date) sebagai "YYYY-MM-DD" dalam Asia/Jakarta —
+ * BUKAN `.toISOString().slice(0,10)` yang selalu UTC, dan BUKAN pula
+ * membiarkan node-pg menerima objek Date mentah utk kolom DATE (pg
+ * meng-encode parameter Date pakai komponen UTC, bukan timezone lokal).
+ * Insiden nyata: PostDate WIB dini hari (00:00–06:59) tersimpan sebagai
+ * tanggal SEBELUMNYA di kolom DATE, karena 02:02 WIB = 19:02 UTC hari
+ * sebelumnya. Dipakai tiap kali menulis ke recon_bank_transactions.
+ * transaction_date / recon_results.bank_transaction_date.
+ */
+function formatDateJakarta(date) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return null;
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
+}
+
 function timeDelayBucket(minutes) {
   if (minutes === null || minutes === undefined || !Number.isFinite(minutes)) return null;
   const abs = Math.abs(minutes);
@@ -161,7 +176,7 @@ async function syncHandler(req, res) {
             extracted_transaction_id, bank_row_type, extraction_method)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
         [
-          batchId, postDateTime ? postDateTime.toISOString().slice(0, 10) : null, postDateTime,
+          batchId, formatDateJakarta(postDateTime), postDateTime,
           remarks, additionalDesc, debitAmount, creditAmount, cleanNum(row.close_balance),
           Number.isFinite(Number(row.source_row)) ? Number(row.source_row) : null,
           JSON.stringify(row.raw_data || {}),
@@ -217,7 +232,7 @@ async function syncHandler(req, res) {
            aging_minutes = EXCLUDED.aging_minutes, notes = EXCLUDED.notes, updated_at = NOW()`,
         [
           batchId, BANK_CODE, r.idTransaksi, r.referenceNo, r.idOutlet, r.idProduk, r.idBiller, r.fpNominal, r.fpTimeResponse,
-          r.bankTransactionDate, r.bankPrincipal, r.bankFee, r.bankCredit, r.bankTotalDebit,
+          formatDateJakarta(r.bankTransactionDate), r.bankPrincipal, r.bankFee, r.bankCredit, r.bankTotalDebit,
           r.variancePrincipal, r.varianceFee, r.timeDifferenceMinutes, r.matchingMethod, r.reconStatus, r.agingMinutes, r.notes,
         ]
       );
@@ -292,7 +307,7 @@ async function analyticsHandler(req, res) {
     }
 
     const [resultsRes, fpCountRes, bankIdCountRes] = await Promise.all([
-      pool.query('SELECT * FROM recon_results WHERE batch_id = $1 AND bank_code = $2', [batch.id, BANK_CODE]),
+      pool.query('SELECT *, bank_transaction_date::text AS bank_transaction_date FROM recon_results WHERE batch_id = $1 AND bank_code = $2', [batch.id, BANK_CODE]),
       pool.query('SELECT COUNT(*) AS c, COALESCE(SUM(nominal),0) AS s FROM recon_fp_transactions WHERE batch_id = $1', [batch.id]),
       pool.query('SELECT COUNT(DISTINCT extracted_transaction_id) AS c FROM recon_bank_transactions WHERE batch_id = $1 AND extracted_transaction_id IS NOT NULL', [batch.id]),
     ]);
@@ -480,7 +495,8 @@ async function transactionsHandler(req, res) {
 
     const rowParams = [...params, limit, offset];
     const rowsRes = await pool.query(
-      `SELECT r.*, b.business_date::text AS business_date, b.account_no AS batch_account_no
+      `SELECT r.*, b.business_date::text AS business_date, b.account_no AS batch_account_no,
+              r.bank_transaction_date::text AS bank_transaction_date
        FROM recon_results r JOIN recon_sync_batches b ON b.id = r.batch_id
        WHERE ${whereClause} ORDER BY ${sortColumn} ${sortDir} NULLS LAST
        LIMIT $${rowParams.length - 1} OFFSET $${rowParams.length}`,
@@ -583,7 +599,8 @@ async function exportHandler(req, res) {
   try {
     const { whereClause, params } = buildTransactionsQuery(req);
     const rowsRes = await pool.query(
-      `SELECT r.*, b.business_date::text AS business_date, b.account_no AS batch_account_no
+      `SELECT r.*, b.business_date::text AS business_date, b.account_no AS batch_account_no,
+              r.bank_transaction_date::text AS bank_transaction_date
        FROM recon_results r JOIN recon_sync_batches b ON b.id = r.batch_id
        WHERE ${whereClause} ORDER BY r.updated_at DESC LIMIT 20000`,
       params
@@ -703,4 +720,5 @@ module.exports = {
   // exported untuk unit test (backend/scripts/test-reconciliation-mandiri.js)
   parseFlexibleDateTime,
   timeDelayBucket,
+  formatDateJakarta,
 };
