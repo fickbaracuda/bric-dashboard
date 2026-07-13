@@ -367,6 +367,20 @@ export const getQuickWinQ3Periods = () =>
 export const getQuickWinQ3Analytics = (periode) =>
   axios.get(`${API_URL}/api/warroom/quick-win-q3/analytics`, { params: periode ? { periode } : {}, headers: authHeaders() }).then(r => r.data);
 
+/* WAR-ROOM — Rekonsiliasi FP vs Bank OCBC (TIDAK di-cache — data operasional, harus selalu fresh) */
+export const getReconciliationAnalytics = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/analytics`, { params, headers: authHeaders() }).then(r => r.data);
+export const getReconciliationTransactions = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/transactions`, { params, headers: authHeaders() }).then(r => r.data);
+// Export butuh Authorization header (JWT) -> tidak bisa lewat <a href> biasa,
+// fetch sebagai blob lalu trigger download manual di komponen pemanggil.
+export const exportReconciliationCsv = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/export`, { params, headers: authHeaders(), responseType: 'blob' }).then(r => r.data);
+export const resolveReconciliation = (id, data) =>
+  axios.post(`${API_URL}/api/warroom/reconciliation/${id}/resolve`, data, { headers: authHeaders() }).then(r => r.data);
+export const getReconciliationLogs = (id) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/${id}/logs`, { headers: authHeaders() }).then(r => r.data);
+
 /* WAR-ROOM — QRIS Issuance Control Tower */
 export const getQrisControlTowerAnalytics = () =>
   withCache('qris-control-tower-analytics', () =>

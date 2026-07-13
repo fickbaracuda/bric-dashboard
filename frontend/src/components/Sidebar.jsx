@@ -176,10 +176,11 @@ export default function Sidebar({ onClose }) {
   const isWRBumdesPath = location.pathname === '/war-room/bumdes';
   const isWRMgmPath    = location.pathname === '/war-room/mgm-pa';
   const isWRHunterPath = location.pathname === '/war-room/hunter';
+  const isWRReconOcbcPath = location.pathname === '/war-room/rekonsiliasi-ocbc';
 
   const [winmeOpen, setWinmeOpen] = useState(isWinmePath || isWinmeTimPath || isWRIqCcPath || isWRQw3Path || isWRIQRawPath || isWRQrisPath || isWRTrxOutPath || isWRQrisCtlPath || isDataRawPath);
   const [timOpen,   setTimOpen]   = useState(isWinmeTimPath);
-  const [paOpen,    setPAOpen]    = useState(isPABasePath || isPATimPath || isWREkspPath || isWREkspProdukPath || isWRFPPath || isWRFarmPath || isWRPAProduk || isWRDMFPPath || isWRDmCtPath || isWRPaAsdpPath || isWRPaLpdPath || isWRBumdesPath || isWRMgmPath || isWRHunterPath);
+  const [paOpen,    setPAOpen]    = useState(isPABasePath || isPATimPath || isWREkspPath || isWREkspProdukPath || isWRFPPath || isWRFarmPath || isWRPAProduk || isWRDMFPPath || isWRDmCtPath || isWRPaAsdpPath || isWRPaLpdPath || isWRBumdesPath || isWRMgmPath || isWRHunterPath || isWRReconOcbcPath);
   const [paTimOpen, setPATimOpen] = useState(isPATimPath);
   const [ddOpen,    setDDOpen]    = useState(isDDPath || isSCTimPath || isWRSCPath);
   const [scTimOpen, setSCTimOpen] = useState(isSCTimPath);
@@ -187,7 +188,7 @@ export default function Sidebar({ onClose }) {
   useEffect(() => {
     if (isWinmePath || isWinmeTimPath || isWRIqCcPath || isWRQw3Path || isWRIQRawPath || isDataRawPath || isWRTrxOutPath || isWRQrisCtlPath) setWinmeOpen(true);
     if (isWinmeTimPath) setTimOpen(true);
-    if (isPABasePath || isPATimPath || isWREkspPath || isWREkspProdukPath || isWRFPPath || isWRFarmPath || isWRPAProduk || isWRDMFPPath || isWRDmCtPath || isWRPaAsdpPath || isWRPaLpdPath || isWRBumdesPath || isWRMgmPath || isWRHunterPath) setPAOpen(true);
+    if (isPABasePath || isPATimPath || isWREkspPath || isWREkspProdukPath || isWRFPPath || isWRFarmPath || isWRPAProduk || isWRDMFPPath || isWRDmCtPath || isWRPaAsdpPath || isWRPaLpdPath || isWRBumdesPath || isWRMgmPath || isWRHunterPath || isWRReconOcbcPath) setPAOpen(true);
     if (isPATimPath) setPATimOpen(true);
     if (isDDPath || isSCTimPath || isWRSCPath) setDDOpen(true);
     if (isSCTimPath) setSCTimOpen(true);
@@ -591,6 +592,17 @@ export default function Sidebar({ onClose }) {
                 <i className="ti ti-crosshair" style={{ color: '#F97316' }} aria-hidden="true" />
                 <span>Hunter</span>
                 <span className="sidebar-warroom-badge" style={{ background: '#F97316' }}>HNT</span>
+              </NavLink>
+              <NavLink
+                to="/war-room/rekonsiliasi-ocbc"
+                onClick={onClose}
+                className={({ isActive }) =>
+                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                }
+              >
+                <i className="ti ti-building-bank" style={{ color: '#DC2626' }} aria-hidden="true" />
+                <span>Rekonsiliasi OCBC</span>
+                <span className="sidebar-warroom-badge" style={{ background: '#DC2626' }}>REK</span>
               </NavLink>
               <NavLink
                 to="/war-room/dm-fastpay"
