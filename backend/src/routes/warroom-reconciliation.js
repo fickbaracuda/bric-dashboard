@@ -98,19 +98,50 @@ function parseTimeResponse(value) {
 }
 
 /**
+ * Parser jam presisi TOLERAN dipakai utk `transaction_date_time` OCBC.
+ * INSIDEN NYATA: Apps Script yang TERPASANG mengirim `transaction_date_time`
+ * lewat `reconToIso_()`, tapi fungsi itu HANYA mem-format objek Date asli
+ * dari `getValues()` ke ISO -- kalau sel sheet berupa TEXT (kasus nyata utk
+ * kolom waktu OCBC), `reconToIso_()` cuma `return String(value).trim()`,
+ * alias MENGEMBALIKAN STRING MENTAH "DD/MM/YYYY HH:mm" APA ADANYA, BUKAN
+ * ISO. Kalau backend cuma percaya field ini sudah ISO lalu pakai
+ * `new Date(value)` polos, hasilnya Invalid Date utk tanggal>12 (V8 salah
+ * tafsir sbg MM/DD/YYYY) — dan KARENA field ini truthy, resolusi lama
+ * berhenti di situ TANPA pernah mencoba fallback raw_data.A, sehingga
+ * `transaction_date_time` kolom DB tetap NULL selamanya walau raw_data
+ * jelas-jelas punya jamnya. Parser ini menerima BAIK ISO (native `new
+ * Date()` bekerja) MAUPUN "DD/MM/YYYY[ HH:mm[:ss]]" mentah (di-anchor ke
+ * Asia/Jakarta +07:00 via konstruksi ISO manual — bukan `new Date(string)`
+ * langsung), dipakai jugak sbg basis fallback raw_data.
+ */
+function parseFlexibleOcbcDateTime(value) {
+  if (value === null || value === undefined || value === '') return null;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+  const s = String(value).trim();
+  if (!s) return null;
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) {
+    const d = new Date(s);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/.exec(s);
+  if (m) {
+    const [, d, mo, y, h, mi, se] = m;
+    const iso = `${y}-${mo.padStart(2, '0')}-${d.padStart(2, '0')}T${(h || '0').padStart(2, '0')}:${(mi || '0').padStart(2, '0')}:${(se || '0').padStart(2, '0')}+07:00`;
+    const dt = new Date(iso);
+    return Number.isNaN(dt.getTime()) ? null : dt;
+  }
+  const generic = new Date(s);
+  return Number.isNaN(generic.getTime()) ? null : generic;
+}
+
+/**
  * Fallback ekstrak jam presisi transaksi bank OCBC dari `raw_data` mentah
- * (dump kolom sheet apa adanya) ketika Apps Script yang TERPASANG belum
- * mengirim `transaction_date_time` eksplisit. Kolom "A" pada raw_data OCBC
- * SELALU berisi "DD/MM/YYYY HH:mm" (WIB) — sudah tersedia hari ini juga,
- * TANPA perlu menunggu update manual Apps Script (insiden nyata: tanpa
- * fallback ini, `calculateOcbcCoverage()` tidak bisa menghitung
- * `trusted_coverage_start`, sehingga SEMUA transaksi FP lama yang bank-nya
- * sudah tergeser keluar window 5.000 baris salah diklasifikasi
- * IN_BANK_COVERAGE + actionable -> match rate live jatuh drastis, misal
- * FP_ONLY meledak jadi ratusan padahal seharusnya 0).
- * Di-anchor ke Asia/Jakarta (+07:00) via konstruksi ISO manual — BUKAN
- * `new Date(string)` langsung, karena V8 salah tafsir "13/07/2026" sbg
- * MM/DD/YYYY (invalid utk tanggal>12, salah senyap utk tanggal<=12).
+ * (dump kolom sheet apa adanya) ketika field `transaction_date_time` kosong
+ * ATAU tidak bisa di-parse (lihat catatan panjang `parseFlexibleOcbcDateTime`).
+ * Kolom "A" pada raw_data OCBC SELALU berisi "DD/MM/YYYY HH:mm" (WIB) —
+ * sudah tersedia hari ini juga, TANPA perlu menunggu update manual Apps
+ * Script. Regex WAJIB komponen jam (bukan optional) supaya tidak salah
+ * ambil kolom tanggal-saja (mis. kolom "B") sbg tengah malam.
  */
 function parseOcbcRawDateTimeFallback(rawData) {
   if (!rawData || typeof rawData !== 'object') return null;
@@ -129,13 +160,15 @@ function parseOcbcRawDateTimeFallback(rawData) {
 
 /**
  * Resolusi tunggal jam presisi transaksi bank OCBC, dipakai di SEMUA jalur
- * (SNAPSHOT insert & BACKFILL): eksplisit dari Apps Script kalau ada (masa
- * depan) > fallback raw_data.A (aktif SEKARANG) > null (date-only, tidak
- * ada presisi jam -- coverage classification default aman ke IN_BANK_COVERAGE).
+ * (SNAPSHOT insert & BACKFILL): `transaction_date_time` (toleran ISO ATAU
+ * "DD/MM/YYYY HH:mm" mentah) > fallback raw_data.A > date-only (fallback
+ * terakhir, tanpa presisi jam -- coverage classification default aman ke
+ * IN_BANK_COVERAGE).
  */
 function resolveOcbcTransactionDateTime(row) {
-  if (row.transaction_date_time) return parseTimeResponse(row.transaction_date_time);
-  return parseOcbcRawDateTimeFallback(row.raw_data) || parseTimeResponse(row.transaction_date);
+  return parseFlexibleOcbcDateTime(row.transaction_date_time)
+    || parseOcbcRawDateTimeFallback(row.raw_data)
+    || parseTimeResponse(row.transaction_date);
 }
 
 function numEq(a, b) {
@@ -1681,6 +1714,7 @@ module.exports = {
   buildOcbcBankArchiveRows,
   computeBankRowFingerprint,
   parseOcbcRawDateTimeFallback,
+  parseFlexibleOcbcDateTime,
   resolveOcbcTransactionDateTime,
   DEFAULT_SOURCE_LIMIT,
 };

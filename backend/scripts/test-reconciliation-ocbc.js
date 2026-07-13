@@ -9,7 +9,7 @@ const {
   reconcileTransactions, parseDescriptionFallback, cleanNum, numEq, toIsoDate, isValidIdTransaksi,
   reconcileTransactionsWithCoverage, calculateOcbcCoverage, classifyFpCoverage, isCompleteOcbcGroup,
   buildOcbcBankArchiveRows, computeBankRowFingerprint,
-  parseOcbcRawDateTimeFallback, resolveOcbcTransactionDateTime,
+  parseOcbcRawDateTimeFallback, resolveOcbcTransactionDateTime, parseFlexibleOcbcDateTime,
 } = require('../src/routes/warroom-reconciliation');
 
 const tests = [];
@@ -444,6 +444,18 @@ test('TEST 12d: resolveOcbcTransactionDateTime -- prioritas: transaction_date_ti
   // (perilaku lama, termasuk keterbatasannya utk string non-ISO -- bukan cakupan fallback ini)
   const dateOnly = resolveOcbcTransactionDateTime({ transaction_date_time: null, raw_data: {}, transaction_date: '2026-07-13' });
   assert.ok(dateOnly instanceof Date && !Number.isNaN(dateOnly.getTime()));
+});
+test('TEST 12e: resolveOcbcTransactionDateTime -- REGRESI insiden nyata: transaction_date_time berisi string mentah "DD/MM/YYYY HH:mm" (bukan ISO, dari reconToIso_ Apps Script yang salah format utk sel TEXT) -- HARUS tetap ter-parse benar, bukan diam-diam null', () => {
+  const dt = resolveOcbcTransactionDateTime({ transaction_date_time: '13/07/2026 19:48', raw_data: { A: '13/07/2026 19:48' }, transaction_date: '13/07/2026' });
+  assert.ok(dt instanceof Date && !Number.isNaN(dt.getTime()), 'transaction_date_time string mentah HARUS ter-parse, bukan null');
+  assert.strictEqual(dt.toISOString(), '2026-07-13T12:48:00.000Z');
+});
+test('TEST 12f: parseFlexibleOcbcDateTime -- terima ISO maupun "DD/MM/YYYY[ HH:mm]" mentah, tanggal>12 tidak salah tafsir MM/DD', () => {
+  assert.strictEqual(parseFlexibleOcbcDateTime('2026-07-13T05:09:09.000Z').toISOString(), '2026-07-13T05:09:09.000Z');
+  assert.strictEqual(parseFlexibleOcbcDateTime('25/12/2026 08:05').toISOString(), '2026-12-25T01:05:00.000Z');
+  assert.strictEqual(parseFlexibleOcbcDateTime('13/07/2026').toISOString(), '2026-07-12T17:00:00.000Z'); // date-only -> tengah malam WIB
+  assert.strictEqual(parseFlexibleOcbcDateTime(''), null);
+  assert.strictEqual(parseFlexibleOcbcDateTime(null), null);
 });
 
 // ── TEST 8: resolution manual + audit log tetap ada lintas resync ───────

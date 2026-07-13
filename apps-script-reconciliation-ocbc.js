@@ -43,13 +43,34 @@ function reconCleanNum_(value) {
   return isFinite(n) ? n : null;
 }
 
-/** Terima Date object (dari getValues()) atau string tanggal, kembalikan ISO string atau null. */
+/**
+ * Terima Date object (dari getValues()) atau string tanggal, kembalikan ISO
+ * string atau null.
+ *
+ * INSIDEN NYATA: versi sebelumnya, utk value yang BUKAN Date object (kasus
+ * nyata: sel kolom waktu OCBC ke-baca sbg TEXT, bukan Date, oleh
+ * getValues()), cuma `return String(value).trim()` -- alias MENGEMBALIKAN
+ * STRING MENTAH "DD/MM/YYYY HH:mm" APA ADANYA, BUKAN ISO. Backend yang
+ * percaya field ini sudah ISO lalu `new Date(value)` polos akan salah
+ * tafsir "13/07/2026" sbg MM/DD/YYYY (Invalid Date utk tanggal>12) --
+ * akibatnya `transaction_date_time` di DB tetap NULL & coverage-aware
+ * reconciliation tidak pernah bisa menghitung trusted_coverage_start.
+ * Sekarang: parse eksplisit "DD/MM/YYYY[ HH:mm[:ss]]" jadi ISO ber-offset
+ * +07:00 (Asia/Jakarta) sebelum dikembalikan.
+ */
 function reconToIso_(value) {
   if (value === null || value === undefined || value === '') return null;
   if (Object.prototype.toString.call(value) === '[object Date]' && !isNaN(value)) {
     return Utilities.formatDate(value, 'Asia/Jakarta', "yyyy-MM-dd'T'HH:mm:ssXXX");
   }
-  return String(value).trim();
+  const s = String(value).trim();
+  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/.exec(s);
+  if (m) {
+    const d = m[1], mo = m[2], y = m[3], h = m[4] || '0', mi = m[5] || '0', se = m[6] || '0';
+    const pad = function (v) { return String(v).padStart(2, '0'); };
+    return y + '-' + pad(mo) + '-' + pad(d) + 'T' + pad(h) + ':' + pad(mi) + ':' + pad(se) + '+07:00';
+  }
+  return s;
 }
 function reconToIsoDateOnly_(value) {
   if (value === null || value === undefined || value === '') return null;
