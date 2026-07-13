@@ -7,6 +7,8 @@
 const assert = require('assert');
 const {
   reconcileTransactions, parseDescriptionFallback, cleanNum, numEq, toIsoDate, isValidIdTransaksi,
+  reconcileTransactionsWithCoverage, calculateOcbcCoverage, classifyFpCoverage, isCompleteOcbcGroup,
+  buildOcbcBankArchiveRows, computeBankRowFingerprint,
 } = require('../src/routes/warroom-reconciliation');
 
 const tests = [];
@@ -17,6 +19,12 @@ function fp(idTransaksi, nominal, opts = {}) {
 }
 function bankRow(referenceNo, { debit = null, credit = null, description = null, transactionDate = '2026-07-10' } = {}) {
   return { referenceNo, debit, credit, description, transactionDate };
+}
+// Helper KHUSUS test coverage-aware — bankRow() biasa TIDAK punya
+// transactionDateTime (dianggap "tanpa presisi jam", coverage tidak
+// membatasi). bankRowT() dipakai test TEST 1-9 yang butuh presisi menit.
+function bankRowT(referenceNo, { debit = null, credit = null, description = null, transactionDateTime = null } = {}) {
+  return { referenceNo, debit, credit, description, transactionDateTime };
 }
 
 // ── cleanNum — angka aman ──────────────────────────────────────────────
@@ -270,6 +278,199 @@ test('2 BANK_ONLY via description_fallback (tanpa reference asli) tetap 2 baris 
   const refs = bankOnlyRows.map(r => r.referenceNo).sort();
   assert.deepStrictEqual(refs, ['9990001112', '9990002223']);
   assert.ok(bankOnlyRows.every(r => r.referenceNo !== null), 'referenceNo tidak boleh null utk fallback BANK_ONLY');
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// COVERAGE-AWARE RECONCILIATION — DATA BANK OCBC dibatasi 5.000 baris
+// mutasi TERBARU di Google Sheet. TEST 1-11 di bawah memverifikasi
+// coverage_status (dimensi TERPISAH dari recon_status, BUKAN status ke-12)
+// dan rolling bank archive (recon_bank_archive) tidak menghilangkan
+// kemampuan matching walau window 5.000 baris bergeser antar sync.
+// ═══════════════════════════════════════════════════════════════════════
+
+// ── TEST 1: FP di luar coverage ─────────────────────────────────────────
+test('TEST 1: FP lebih tua dari trusted_coverage_start -> OUTSIDE_BANK_COVERAGE, recon_status NULL, tidak actionable, tidak masuk match rate', () => {
+  const fpRows = [fp('1000000001', 50000, { timeResponse: new Date('2026-07-13T08:00:00+07:00') })];
+  const bankRows = [
+    bankRowT('9999999991', { debit: 100000, transactionDateTime: new Date('2026-07-13T10:00:23+07:00') }),
+    bankRowT('9999999992', { debit: 100000, transactionDateTime: new Date('2026-07-13T10:05:00+07:00') }),
+  ];
+  const { results, coverage } = reconcileTransactionsWithCoverage(fpRows, bankRows, { sourceLimit: 2 }, new Date('2026-07-13T12:00:00+07:00'));
+  assert.strictEqual(coverage.isSourceTruncated, true);
+  const r = results.find(x => x.idTransaksi === '1000000001');
+  assert.strictEqual(r.coverageStatus, 'OUTSIDE_BANK_COVERAGE');
+  assert.strictEqual(r.reconStatus, null);
+  assert.strictEqual(r.isActionable, false);
+  assert.strictEqual(r.eligibleForMatchRate, false);
+});
+
+// ── TEST 2: FP dalam coverage, tidak ditemukan ──────────────────────────
+test('TEST 2: FP dalam trusted coverage, tidak ditemukan & lewat grace period -> IN_BANK_COVERAGE + FP_ONLY (actionable)', () => {
+  const fpRows = [fp('1000000002', 50000, { timeResponse: new Date('2026-07-13T11:00:00+07:00') })];
+  const bankRows = [
+    bankRowT('9999999993', { debit: 100000, transactionDateTime: new Date('2026-07-13T09:00:10+07:00') }),
+    bankRowT('9999999994', { debit: 100000, transactionDateTime: new Date('2026-07-13T09:05:00+07:00') }),
+  ];
+  const { results } = reconcileTransactionsWithCoverage(fpRows, bankRows, { sourceLimit: 2 }, new Date('2026-07-13T12:00:00+07:00'));
+  const r = results.find(x => x.idTransaksi === '1000000002');
+  assert.strictEqual(r.coverageStatus, 'IN_BANK_COVERAGE');
+  assert.strictEqual(r.reconStatus, 'FP_ONLY');
+  assert.strictEqual(r.isActionable, true);
+});
+
+// ── TEST 3: exact match lengkap PERSIS di boundary minute ───────────────
+test('TEST 3: exact match lengkap (principal+fee) PERSIS di boundary minute -> tetap MATCHED, bukan BOUNDARY_PARTIAL', () => {
+  const fpRows = [fp('1000000003', 74200, { timeResponse: new Date('2026-07-13T10:00:15+07:00') })];
+  const bankRows = [
+    bankRowT('1000000003', { debit: 74200, transactionDateTime: new Date('2026-07-13T10:00:20+07:00') }),
+    bankRowT('1000000003', { debit: 25, transactionDateTime: new Date('2026-07-13T10:00:25+07:00') }),
+  ];
+  const { results } = reconcileTransactionsWithCoverage(fpRows, bankRows, { sourceLimit: 2 }, new Date('2026-07-13T12:00:00+07:00'));
+  const r = results.find(x => x.idTransaksi === '1000000003');
+  assert.strictEqual(r.coverageStatus, 'IN_BANK_COVERAGE');
+  assert.strictEqual(r.reconStatus, 'MATCHED');
+});
+
+// ── TEST 4: fee saja pada boundary (principal terpotong) ────────────────
+test('TEST 4a: hanya baris fee ditemukan pada boundary (principal ke-cutoff) -> BOUNDARY_PARTIAL, bukan NEED_REVIEW/NOMINAL_MISMATCH', () => {
+  const fpRows = [fp('1000000004', 90000, { timeResponse: new Date('2026-07-13T10:00:30+07:00') })];
+  const bankRows = [
+    bankRowT('1000000004', { debit: 25, transactionDateTime: new Date('2026-07-13T10:00:05+07:00') }), // hanya fee
+    bankRowT('9999999995', { debit: 50000, transactionDateTime: new Date('2026-07-13T10:05:00+07:00') }),
+  ];
+  const { results } = reconcileTransactionsWithCoverage(fpRows, bankRows, { sourceLimit: 2 }, new Date('2026-07-13T12:00:00+07:00'));
+  const r = results.find(x => x.idTransaksi === '1000000004');
+  assert.strictEqual(r.coverageStatus, 'BOUNDARY_PARTIAL');
+  assert.strictEqual(r.reconStatus, null);
+});
+test('TEST 4b: fee-only group TANPA FP match PERSIS di boundary minute -> TIDAK menjadi BANK_ONLY', () => {
+  const fpRows = [fp('1000000005', 50000, { timeResponse: new Date('2026-07-13T10:05:00+07:00') })];
+  const bankRows = [
+    bankRowT('7770000001', { debit: 25, transactionDateTime: new Date('2026-07-13T10:00:05+07:00') }), // fee-only, tanpa FP, PERSIS boundary
+    bankRowT('1000000005', { debit: 50000, transactionDateTime: new Date('2026-07-13T10:05:10+07:00') }),
+  ];
+  const { results } = reconcileTransactionsWithCoverage(fpRows, bankRows, { sourceLimit: 2 }, new Date('2026-07-13T12:00:00+07:00'));
+  assert.strictEqual(results.filter(x => x.reconStatus === 'BANK_ONLY').length, 0);
+});
+
+// ── TEST 5: match rate valid HANYA dari FP dalam cakupan ────────────────
+test('TEST 5: valid match rate dihitung dari FP DALAM cakupan saja, bukan seluruh DATA FP', () => {
+  const now = new Date('2026-07-13T12:00:00+07:00');
+  const bankRows = [
+    bankRowT('AAAA000001', { debit: 10000, transactionDateTime: new Date('2026-07-13T10:00:10+07:00') }),
+    bankRowT('AAAA000001', { debit: 25, transactionDateTime: new Date('2026-07-13T10:00:15+07:00') }),
+    bankRowT('AAAA000002', { debit: 20000, transactionDateTime: new Date('2026-07-13T10:02:00+07:00') }),
+    bankRowT('AAAA000002', { debit: 25, transactionDateTime: new Date('2026-07-13T10:02:05+07:00') }),
+  ];
+  const fpRows = [
+    fp('AAAA000001', 10000, { timeResponse: new Date('2026-07-13T10:00:10+07:00') }),
+    fp('AAAA000002', 20000, { timeResponse: new Date('2026-07-13T10:02:00+07:00') }),
+    fp('BBBB000001', 5000, { timeResponse: new Date('2026-07-13T08:00:00+07:00') }),
+    fp('BBBB000002', 5000, { timeResponse: new Date('2026-07-13T08:30:00+07:00') }),
+    fp('BBBB000003', 5000, { timeResponse: new Date('2026-07-13T09:00:00+07:00') }),
+  ];
+  const { results } = reconcileTransactionsWithCoverage(fpRows, bankRows, { sourceLimit: 4 }, now);
+  const inCoverage = results.filter(r => r.idTransaksi && r.coverageStatus === 'IN_BANK_COVERAGE');
+  const outside = results.filter(r => r.idTransaksi && r.coverageStatus === 'OUTSIDE_BANK_COVERAGE');
+  const matchedInCoverage = inCoverage.filter(r => r.reconStatus === 'MATCHED' || r.reconStatus === 'MATCHED_NO_FEE');
+  assert.strictEqual(outside.length, 3);
+  assert.strictEqual(inCoverage.length, 2);
+  assert.strictEqual(matchedInCoverage.length, 2);
+  const validMatchRate = (matchedInCoverage.length / inCoverage.length) * 100;
+  assert.strictEqual(validMatchRate, 100);
+  assert.notStrictEqual((matchedInCoverage.length / fpRows.length) * 100, validMatchRate);
+});
+
+// ── TEST 6: archive tidak kehilangan baris lama (fingerprint union) ─────
+test('TEST 6: fingerprint stabil -> baris lama (A) tetap ada di archive walau sudah tergeser keluar snapshot baru (sync2 cuma B,C,D)', () => {
+  const rowA = { bankCode: 'OCBC', accountNo: '123', transactionDateTime: new Date('2026-07-10T09:00:00+07:00'), valueDate: '2026-07-10', referenceNo: 'A', description: 'ref A', debit: 1000, credit: null, balance: 5000 };
+  const rowB = { bankCode: 'OCBC', accountNo: '123', transactionDateTime: new Date('2026-07-10T09:05:00+07:00'), valueDate: '2026-07-10', referenceNo: 'B', description: 'ref B', debit: 2000, credit: null, balance: 4000 };
+  const rowC = { bankCode: 'OCBC', accountNo: '123', transactionDateTime: new Date('2026-07-10T09:10:00+07:00'), valueDate: '2026-07-10', referenceNo: 'C', description: 'ref C', debit: 3000, credit: null, balance: 3000 };
+  const rowD = { bankCode: 'OCBC', accountNo: '123', transactionDateTime: new Date('2026-07-10T09:15:00+07:00'), valueDate: '2026-07-10', referenceNo: 'D', description: 'ref D', debit: 4000, credit: null, balance: 2000 };
+
+  const sync1 = buildOcbcBankArchiveRows([rowA, rowB, rowC], 1);
+  const sync2 = buildOcbcBankArchiveRows([rowB, rowC, rowD], 2); // A sudah tergeser keluar window 5.000 baris
+
+  const archive = new Map(); // simulasi UPSERT by row_fingerprint (recon_bank_archive), TIDAK PERNAH delete
+  for (const r of sync1) archive.set(r.fingerprint, r);
+  for (const r of sync2) archive.set(r.fingerprint, r);
+
+  const refsInArchive = [...archive.values()].map(r => r.referenceNo).sort();
+  assert.deepStrictEqual(refsInArchive, ['A', 'B', 'C', 'D']);
+});
+
+// ── TEST 7: resync idempotent (fingerprint deterministik) ───────────────
+test('TEST 7: fingerprint deterministik -- data identik menghasilkan fingerprint SAMA meski snapshot_id beda (upsert, bukan duplikat)', () => {
+  const row = { bankCode: 'OCBC', accountNo: '123', transactionDateTime: new Date('2026-07-10T09:00:00+07:00'), valueDate: '2026-07-10', referenceNo: 'X', description: 'ref X', debit: 1000, credit: null, balance: 5000 };
+  const built1 = buildOcbcBankArchiveRows([row], 1);
+  const built2 = buildOcbcBankArchiveRows([row], 2);
+  assert.strictEqual(built1[0].fingerprint, built2[0].fingerprint);
+  assert.strictEqual(built1[0].fingerprint, computeBankRowFingerprint({ ...row }));
+});
+test('TEST 7b: fingerprint BEDA kalau salah satu field (mis. debit) berbeda', () => {
+  const rowX = { bankCode: 'OCBC', accountNo: '123', transactionDateTime: new Date('2026-07-10T09:00:00+07:00'), valueDate: '2026-07-10', referenceNo: 'X', description: 'ref X', debit: 1000, credit: null, balance: 5000 };
+  const rowY = { ...rowX, debit: 1001 };
+  assert.notStrictEqual(computeBankRowFingerprint(rowX), computeBankRowFingerprint(rowY));
+});
+
+// ── TEST 8: resolution manual + audit log tetap ada lintas resync ───────
+// (Perilaku upsert-by-natural-key SUDAH ADA sebelum perubahan ini --
+// recon_results TIDAK PERNAH delete+insert, hanya upsert, jadi id & FK
+// recon_action_logs stabil. Diverifikasi ulang scr end-to-end lewat live
+// endpoint test di server, lihat laporan implementasi.)
+
+// ── TEST 9: matching lama tetap berjalan (tidak truncated) ──────────────
+test('TEST 9: reconcileTransactionsWithCoverage IDENTIK dgn reconcileTransactions lama utk data TIDAK truncated', () => {
+  const fpRows = [fp('3556344215', 74200)];
+  const bankRows = [bankRow('3556344215', { debit: 74200 }), bankRow('3556344215', { debit: 25 })];
+  const oldResult = reconcileTransactions(fpRows, bankRows, {}, new Date())[0];
+  const { results: newResults, coverage } = reconcileTransactionsWithCoverage(fpRows, bankRows, {}, new Date());
+  const newResult = newResults[0];
+  assert.strictEqual(coverage.isSourceTruncated, false);
+  assert.strictEqual(newResult.reconStatus, oldResult.reconStatus);
+  assert.strictEqual(newResult.reconStatus, 'MATCHED');
+  assert.strictEqual(newResult.bankPrincipal, oldResult.bankPrincipal);
+  assert.strictEqual(newResult.bankFee, oldResult.bankFee);
+  assert.strictEqual(newResult.coverageStatus, 'IN_BANK_COVERAGE');
+  assert.strictEqual(newResult.isActionable, true);
+  assert.strictEqual(newResult.eligibleForMatchRate, true);
+});
+
+// ── TEST 10: Mandiri tidak terpengaruh ──────────────────────────────────
+// (dijalankan terpisah: `node backend/scripts/test-reconciliation-mandiri.js`
+// — file ini tidak meng-import apa pun dari modul Mandiri, dan tidak ada
+// satu baris pun di warroom-reconciliation-mandiri.js/mandiriAdapter.js yang
+// disentuh oleh perubahan coverage-aware ini.)
+
+// ── TEST 11: timezone -- transaksi dini hari WIB tidak mundur 1 hari ────
+test('TEST 11: transaksi 00:30 WIB -> business_date archive TIDAK mundur ke hari sebelumnya (bukan .toISOString().slice(0,10))', () => {
+  const row = { bankCode: 'OCBC', accountNo: '123', transactionDateTime: new Date('2026-07-13T00:30:00+07:00'), valueDate: '2026-07-13', referenceNo: 'X', description: 'ref', debit: 1000, credit: null, balance: 5000 };
+  const built = buildOcbcBankArchiveRows([row], 1);
+  assert.strictEqual(built[0].businessDate, '2026-07-13');
+});
+
+// ── isCompleteOcbcGroup / calculateOcbcCoverage / classifyFpCoverage — unit langsung ──
+test('isCompleteOcbcGroup: principal+fee sesuai -> true', () => {
+  const group = [{ debit: 1000 }, { debit: 25 }];
+  assert.strictEqual(isCompleteOcbcGroup(group, 1000, 25), true);
+});
+test('isCompleteOcbcGroup: tanpa fee -> false (konservatif, MATCHED_NO_FEE tetap dianggap tidak "lengkap" di boundary)', () => {
+  const group = [{ debit: 1000 }];
+  assert.strictEqual(isCompleteOcbcGroup(group, 1000, 25), false);
+});
+test('isCompleteOcbcGroup: 2 principal (duplicate) -> false', () => {
+  const group = [{ debit: 1000 }, { debit: 1000 }, { debit: 25 }];
+  assert.strictEqual(isCompleteOcbcGroup(group, 1000, 25), false);
+});
+test('calculateOcbcCoverage: bankRowCount < sourceLimit -> isSourceTruncated false, trustedCoverageStart null', () => {
+  const coverage = calculateOcbcCoverage([bankRowT('A', { debit: 100, transactionDateTime: new Date('2026-07-13T09:00:00+07:00') })], { sourceLimit: 5000 });
+  assert.strictEqual(coverage.isSourceTruncated, false);
+  assert.strictEqual(coverage.trustedCoverageStart, null);
+});
+test('classifyFpCoverage: coverage tidak truncated -> selalu IN_BANK_COVERAGE', () => {
+  const coverage = { isSourceTruncated: false };
+  const r = classifyFpCoverage(fp('1', 1000, { timeResponse: new Date('2020-01-01T00:00:00Z') }), coverage, null, 25);
+  assert.strictEqual(r.coverageStatus, 'IN_BANK_COVERAGE');
 });
 
 // ── Runner ──────────────────────────────────────────────────────────────

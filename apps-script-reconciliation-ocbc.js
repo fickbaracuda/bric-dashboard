@@ -166,6 +166,12 @@ function reconReadBank_() {
     if (!reference && !description && debit === null && credit === null) continue; // baris kosong
     rows.push({
       transaction_date: reconToIsoDateOnly_(row[0]),
+      // transaction_date_time: presisi jam-menit-detik (kalau ada di sel,
+      // Date object atau string) — dipakai backend utk coverage-aware
+      // reconciliation (menghitung boundary minute snapshot 5.000 baris).
+      // reconToIso_ SUDAH pakai Asia/Jakarta eksplisit (bukan timezone
+      // server), sama seperti time_response di DATA FP.
+      transaction_date_time: reconToIso_(row[0]),
       value_date: reconToIsoDateOnly_(row[1]),
       reference_no: reference || null,
       cheque_no: String(row[3] || '').trim() || null,
@@ -182,6 +188,36 @@ function reconReadBank_() {
   return { rows, summary };
 }
 
+/**
+ * Ringkasan cakupan data bank — HANYA utk visibilitas dry-run/Execution Log
+ * (testReconciliationOcbc). Backend TIDAK PERNAH mempercayai angka ini utk
+ * keputusan bisnis — is_source_truncated/trusted_coverage dihitung ULANG
+ * dari baris yang benar-benar diterima, supaya logic tetap terpusat di
+ * satu tempat (warroom-reconciliation.js) dan tidak bisa dipalsukan client.
+ */
+function reconBuildCoverageMeta_(bankRows) {
+  const sourceLimit = 5000;
+  const rowCount = bankRows.length;
+  const isSourceTruncated = rowCount >= sourceLimit;
+  const times = bankRows
+    .map(r => r.transaction_date_time)
+    .filter(Boolean)
+    .map(s => new Date(s))
+    .filter(d => !isNaN(d));
+  let oldest = null, newest = null;
+  if (times.length) {
+    oldest = new Date(Math.min.apply(null, times.map(d => d.getTime())));
+    newest = new Date(Math.max.apply(null, times.map(d => d.getTime())));
+  }
+  return {
+    source_limit: sourceLimit,
+    bank_transaction_row_count: rowCount,
+    is_source_truncated: isSourceTruncated,
+    snapshot_oldest_time: oldest ? Utilities.formatDate(oldest, 'Asia/Jakarta', "yyyy-MM-dd'T'HH:mm:ssXXX") : null,
+    snapshot_newest_time: newest ? Utilities.formatDate(newest, 'Asia/Jakarta', "yyyy-MM-dd'T'HH:mm:ssXXX") : null,
+  };
+}
+
 function reconBuildPayloadChunks_() {
   const props = PropertiesService.getScriptProperties();
   const fpRows = reconReadFp_();
@@ -195,6 +231,9 @@ function reconBuildPayloadChunks_() {
   const totalChunks = Math.max(1, fpChunks.length, bankChunks.length);
   const today = new Date();
   const businessDate = Utilities.formatDate(today, 'Asia/Jakarta', 'yyyy-MM-dd');
+  // Hanya utk visibilitas Execution Log -- backend menghitung ULANG dari
+  // baris yang benar-benar diterima, tidak pernah percaya angka client.
+  const coverageMeta = reconBuildCoverageMeta_(bankData.rows);
 
   const chunks = [];
   for (let i = 0; i < totalChunks; i++) {
@@ -209,11 +248,18 @@ function reconBuildPayloadChunks_() {
       fp: fpChunks[i] || [],
       bank: bankChunks[i] || [],
       bank_summary: i === totalChunks - 1 ? bankData.summary : {},
-      meta: { synced_by: Session.getActiveUser().getEmail() || 'apps_script' },
+      config: { source_limit: coverageMeta.source_limit },
+      meta: {
+        synced_by: Session.getActiveUser().getEmail() || 'apps_script',
+        bank_transaction_row_count: coverageMeta.bank_transaction_row_count,
+        is_source_truncated: coverageMeta.is_source_truncated,
+        snapshot_oldest_time: coverageMeta.snapshot_oldest_time,
+        snapshot_newest_time: coverageMeta.snapshot_newest_time,
+      },
     });
   }
 
-  return { chunks, fpCount: fpRows.length, bankCount: bankData.rows.length, summary: bankData.summary, businessDate };
+  return { chunks, fpCount: fpRows.length, bankCount: bankData.rows.length, summary: bankData.summary, businessDate, coverageMeta };
 }
 
 /** Jalankan ini DULU — hanya membaca & melapor ke Logger, TIDAK mengirim apa pun. */
@@ -225,6 +271,10 @@ function testReconciliationOcbc() {
   Logger.log('Bank rows: ' + built.bankCount);
   Logger.log('Jumlah chunk: ' + built.chunks.length);
   Logger.log('Bank summary: ' + JSON.stringify(built.summary));
+  Logger.log('Cakupan data bank (source_limit=' + built.coverageMeta.source_limit + '): ' +
+    (built.coverageMeta.is_source_truncated
+      ? 'TERPOTONG (' + built.coverageMeta.bank_transaction_row_count + ' baris >= ' + built.coverageMeta.source_limit + '). Oldest=' + built.coverageMeta.snapshot_oldest_time + ', Newest=' + built.coverageMeta.snapshot_newest_time
+      : 'lengkap (' + built.coverageMeta.bank_transaction_row_count + ' baris < ' + built.coverageMeta.source_limit + ')'));
   Logger.log('Sample FP (max 3): ' + JSON.stringify(built.chunks[0].fp.slice(0, 3)));
   Logger.log('Sample Bank (max 3): ' + JSON.stringify(built.chunks[0].bank.slice(0, 3)));
   Logger.log('=== SELESAI TEST — TIDAK ADA DATA YANG DIKIRIM ===');

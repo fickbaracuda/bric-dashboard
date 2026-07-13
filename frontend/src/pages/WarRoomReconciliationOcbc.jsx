@@ -75,6 +75,15 @@ const STATUS_META = {
 };
 function statusMeta(s) { return STATUS_META[s] || STATUS_META.NEED_REVIEW; }
 
+// coverage_status TIDAK PERNAH merah -- OUTSIDE_BANK_COVERAGE & BOUNDARY_PARTIAL
+// BUKAN kegagalan transaksi, cuma keterbatasan data bank (5.000 baris terbaru).
+const COVERAGE_META = {
+  IN_BANK_COVERAGE:     { label: 'Dalam Cakupan', color: '#0369A1', bg: '#E0F2FE' },
+  OUTSIDE_BANK_COVERAGE: { label: 'Di Luar Cakupan Data OCBC', color: '#6B7280', bg: '#F3F4F6' },
+  BOUNDARY_PARTIAL:     { label: 'Batas Data OCBC Terpotong', color: '#B45309', bg: '#FEF3C7' },
+};
+function coverageMeta(s) { return COVERAGE_META[s] || null; }
+
 /* ─── UI atoms ─── */
 function InfoIcon({ text }) {
   if (!text) return null;
@@ -92,7 +101,13 @@ function KPICard({ label, value, sub, alert, info }) {
   );
 }
 function StatusBadge({ status }) {
+  if (!status) return <span className="wrr-status-badge" style={{ background: '#F3F4F6', color: '#9CA3AF' }}>-</span>;
   const m = statusMeta(status);
+  return <span className="wrr-status-badge" style={{ background: m.bg, color: m.color }}>{m.label}</span>;
+}
+function CoverageBadge({ status }) {
+  const m = coverageMeta(status);
+  if (!m) return <span>-</span>;
   return <span className="wrr-status-badge" style={{ background: m.bg, color: m.color }}>{m.label}</span>;
 }
 function SortableTh({ label, sortKey, sort, onSort }) {
@@ -144,8 +159,42 @@ function downloadBlob(blob, filename) {
 function SummaryTab({ analytics, onSelectStatus }) {
   const s = analytics?.summary;
   const sv = analytics?.statement_validation;
+  const cov = analytics?.coverage;
+  const isTruncated = !!cov?.is_source_truncated;
   return (
     <>
+      {isTruncated && (
+        <div className="wrr-panel" style={{ borderLeft: '4px solid #B45309', background: '#FFFBEB' }}>
+          <div className="wrr-panel-title" style={{ color: '#B45309' }}>
+            <i className="ti ti-alert-triangle" /> Data OCBC Terbatas
+          </div>
+          <p style={{ margin: 0, fontSize: 13.5, color: 'var(--text-2)' }}>
+            OCBC hanya menyediakan 5.000 baris mutasi terbaru. Hasil rekonsiliasi dihitung berdasarkan transaksi FP
+            yang berada dalam cakupan data bank yang tersedia. Transaksi FP di luar cakupan tidak dianggap gagal dan
+            tidak masuk Exception Queue.
+          </p>
+        </div>
+      )}
+
+      {cov && (
+        <div className="wrr-panel">
+          <div className="wrr-panel-title">
+            <i className="ti ti-history-toggle" style={{ color: COLOR }} /> Cakupan Data Bank OCBC
+            <InfoIcon text="Rolling Bank Archive menyimpan setiap baris mutasi bank yang pernah diterima secara kumulatif, supaya transaksi FP lama tetap bisa dicocokkan walau sudah tergeser keluar 5.000 baris terbaru di Google Sheet." />
+          </div>
+          <div className="wrr-dq-note-grid">
+            <div><span className="wrr-dq-note-label">Bank Coverage Start</span><span className="wrr-dq-note-value">{fmtDateTime(cov.snapshot_oldest_time)}</span></div>
+            <div><span className="wrr-dq-note-label">Bank Coverage End</span><span className="wrr-dq-note-value">{fmtDateTime(cov.snapshot_newest_time)}</span></div>
+            <div><span className="wrr-dq-note-label">Trusted Coverage Start</span><span className="wrr-dq-note-value">{fmtDateTime(cov.trusted_coverage_start)}</span></div>
+            <div><span className="wrr-dq-note-label">Bank Rows Received</span><span className="wrr-dq-note-value">{fmtN(cov.bank_row_count)} / {fmtN(cov.source_limit)}</span></div>
+            <div><span className="wrr-dq-note-label">Archive Rows</span><span className="wrr-dq-note-value">{fmtN(cov.archive_row_count)}</span></div>
+            <div><span className="wrr-dq-note-label">FP Dalam Cakupan</span><span className="wrr-dq-note-value">{fmtN(cov.fp_in_coverage)}</span></div>
+            <div><span className="wrr-dq-note-label">FP Di Luar Cakupan</span><span className="wrr-dq-note-value">{fmtN(cov.fp_outside_coverage)}</span></div>
+            <div><span className="wrr-dq-note-label">Boundary Partial</span><span className="wrr-dq-note-value">{fmtN(cov.fp_boundary_partial)}</span></div>
+          </div>
+        </div>
+      )}
+
       <div className="wrr-kpi-grid">
         <KPICard label="Total Transaksi FP" value={fmtN(s?.total_transaksi_fp)}
           info="Jumlah total transaksi dari sheet DATA FP untuk tanggal yang dipilih." />
@@ -160,17 +209,19 @@ function SummaryTab({ analytics, onSelectStatus }) {
         <KPICard label="Pending Bank" value={fmtN(s?.pending_bank_count)} alert={(s?.pending_bank_count || 0) > 0}
           info="Transaksi FP yang belum ditemukan di bank, TAPI masih dalam masa tunggu (grace period, default 30 menit) — belum tentu bermasalah, mungkin bank belum posting." />
         <KPICard label="FP Only" value={fmtN(s?.fp_only_count)} alert={(s?.fp_only_count || 0) > 0}
-          info="Transaksi FP yang TIDAK ditemukan di bank SETELAH masa tunggu selesai — perlu dicek, kemungkinan gagal transfer atau salah catat." />
+          info="Transaksi FP yang TIDAK ditemukan di bank SETELAH masa tunggu selesai, DAN berada dalam cakupan data bank — perlu dicek, kemungkinan gagal transfer atau salah catat." />
         <KPICard label="Bank Only" value={fmtN(s?.bank_only_count)} alert={(s?.bank_only_count || 0) > 0}
           info="Mutasi di bank yang punya pola reference/outlet FP tapi tidak ditemukan padanannya di DATA FP — kemungkinan transaksi tidak tercatat di sistem FP." />
         <KPICard label="Nominal Mismatch" value={fmtN(s?.nominal_mismatch_count)} alert={(s?.nominal_mismatch_count || 0) > 0}
           info="Reference cocok, tapi tidak ada debit bank yang nilainya sama dengan nominal FP — kemungkinan salah input nominal di salah satu sisi." />
         <KPICard label="Total Fee Bank" value={fmtRp(s?.total_fee_bank)}
           info="Total biaya (fee BI-FAST) yang terpotong bank dari seluruh transaksi yang matched." />
-        <KPICard label="Match Rate Transaksi" value={fmtPct(s?.match_rate_transaksi)}
-          info="Persentase JUMLAH transaksi FP yang berhasil dicocokkan, dari total transaksi FP." />
-        <KPICard label="Match Rate Nominal" value={fmtPct(s?.match_rate_nominal)}
-          info="Persentase NILAI (Rupiah) transaksi yang berhasil dicocokkan, dari total nominal FP." />
+        <KPICard label="Match Rate Transaksi (Valid)" value={fmtPct(s?.valid_match_rate_transaction)}
+          info="Persentase JUMLAH transaksi FP yang cocok, dihitung HANYA dari transaksi yang berada dalam cakupan data bank (coverage_status=IN_BANK_COVERAGE) — transaksi di luar cakupan TIDAK ikut menurunkan angka ini." />
+        <KPICard label="Match Rate Nominal (Valid)" value={fmtPct(s?.valid_match_rate_nominal)}
+          info="Persentase NILAI (Rupiah) transaksi yang cocok, dihitung HANYA dari transaksi dalam cakupan data bank." />
+        <KPICard label="Actionable Exception" value={fmtN(s?.actionable_exception_count)} alert={(s?.actionable_exception_count || 0) > 0}
+          info="Jumlah exception yang BENAR-BENAR perlu ditindaklanjuti tim — sudah dikecualikan transaksi di luar cakupan/boundary data bank yang bukan kegagalan sungguhan." />
       </div>
 
       <div className="wrr-panel">
@@ -232,9 +283,16 @@ function SummaryTab({ analytics, onSelectStatus }) {
 /* ═══════════════════════════════════════════════════════════════════════
    Tabel bersama — dipakai Tab 2 (Hasil Rekonsiliasi) & Tab 3 (Exception Queue)
    ═══════════════════════════════════════════════════════════════════════ */
+const COVERAGE_STATUSES = ['IN_BANK_COVERAGE', 'OUTSIDE_BANK_COVERAGE', 'BOUNDARY_PARTIAL'];
+
 function ReconTable({ date, scope, onOpenAudit, initialStatus }) {
   const isException = scope === 'exception';
   const [statusFilter, setStatusFilter] = useState(initialStatus || 'semua');
+  // Filter coverage HANYA relevan/bisa diubah di tab Hasil Rekonsiliasi --
+  // Exception Queue WAJIB coverage_status=IN_BANK_COVERAGE (bukan pilihan
+  // user, supaya transaksi di luar cakupan/boundary tidak pernah muncul di
+  // sana sama sekali, sesuai definisi Exception Queue).
+  const [coverageFilter, setCoverageFilter] = useState('semua');
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState({ key: 'updated_at', dir: 'desc' });
   const [page, setPage] = useState(1);
@@ -245,20 +303,22 @@ function ReconTable({ date, scope, onOpenAudit, initialStatus }) {
   const [error, setError] = useState(null);
   const [resolveTarget, setResolveTarget] = useState(null);
 
-  useEffect(() => { setPage(1); }, [statusFilter, search, sort, pageSize, date]);
+  useEffect(() => { setPage(1); }, [statusFilter, coverageFilter, search, sort, pageSize, date]);
 
   useEffect(() => {
     if (!date) return;
     setLoading(true); setError(null);
     const statusParam = statusFilter !== 'semua' ? statusFilter : (isException ? EXCEPTION_STATUSES.join(',') : undefined);
+    const coverageParam = isException ? 'IN_BANK_COVERAGE' : (coverageFilter !== 'semua' ? coverageFilter : undefined);
+    const isActionableParam = isException ? 'true' : undefined;
     getReconciliationTransactions({
-      date, status: statusParam, search: search || undefined,
-      page, limit: pageSize, sort: sort.key, order: sort.dir,
+      date, status: statusParam, coverage_status: coverageParam, is_actionable: isActionableParam,
+      search: search || undefined, page, limit: pageSize, sort: sort.key, order: sort.dir,
     })
       .then(res => { setRows(res.rows || []); setTotal(res.meta?.total || 0); })
       .catch(e => setError(e.message || 'Gagal memuat data'))
       .finally(() => setLoading(false));
-  }, [date, statusFilter, search, sort, page, pageSize, isException]);
+  }, [date, statusFilter, coverageFilter, search, sort, page, pageSize, isException]);
 
   const handleSort = useCallback((key) => {
     setSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' });
@@ -274,6 +334,12 @@ function ReconTable({ date, scope, onOpenAudit, initialStatus }) {
           <option value="semua">{isException ? 'Semua Exception' : 'Semua Status'}</option>
           {statusOptions.map(s => <option key={s} value={s}>{statusMeta(s).label}</option>)}
         </select>
+        {!isException && (
+          <select className="wrr-select" value={coverageFilter} onChange={e => setCoverageFilter(e.target.value)}>
+            <option value="semua">Semua Cakupan</option>
+            {COVERAGE_STATUSES.map(c => <option key={c} value={c}>{coverageMeta(c)?.label || c}</option>)}
+          </select>
+        )}
       </div>
 
       {loading && <div className="wrr-empty-sub">Memuat...</div>}
@@ -296,6 +362,7 @@ function ReconTable({ date, scope, onOpenAudit, initialStatus }) {
                 <th>Waktu FP</th><th>Waktu Bank</th><th>Outlet</th><th>Produk</th>
                 <th>Matching Method</th>
                 <SortableTh label="Status" sortKey="recon_status" sort={sort} onSort={handleSort} />
+                <th>Cakupan</th>
                 {isException && <th></th>}
               </tr>
             </thead>
@@ -318,6 +385,7 @@ function ReconTable({ date, scope, onOpenAudit, initialStatus }) {
                   <td>{r.id_produk || '-'}</td>
                   <td>{r.matching_method || '-'}</td>
                   <td><StatusBadge status={r.recon_status} /></td>
+                  <td><CoverageBadge status={r.coverage_status} /></td>
                   {isException && (
                     <td>
                       <div className="wrr-row-actions">
