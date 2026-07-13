@@ -94,6 +94,18 @@ function numEq(a, b) {
   return typeof a === 'number' && typeof b === 'number' && Math.abs(a - b) < NUM_EPS;
 }
 
+/**
+ * id_transaksi ASLI selalu murni digit. Insiden nyata: baris header CSV
+ * ("id_transaksi,nominal,id_produk,...") ke-paste ke tengah data DATA FP
+ * dalam satu sel (bukan terpisah per kolom), lolos sebagai "transaksi
+ * hantu" di hasil rekonsiliasi. Dipakai sbg guard defense-in-depth di sync
+ * handler (selain guard yang sama di Apps Script) — jangan andalkan Apps
+ * Script saja untuk validasi ini.
+ */
+function isValidIdTransaksi(value) {
+  return /^\d+$/.test(String(value || '').trim());
+}
+
 function safeDiv(numerator, denominator) {
   if (typeof numerator !== 'number' || !Number.isFinite(numerator)) return null;
   if (typeof denominator !== 'number' || !Number.isFinite(denominator) || denominator === 0) return null;
@@ -345,9 +357,11 @@ async function syncHandler(req, res) {
     }
 
     let fpInserted = 0;
+    let fpSkippedInvalid = 0;
     for (const row of fpRowsRaw) {
       const idTransaksi = nullIfEmpty(row.id_transaksi);
       if (!idTransaksi) continue;
+      if (!isValidIdTransaksi(idTransaksi)) { fpSkippedInvalid++; continue; }
       await client.query(
         `INSERT INTO recon_fp_transactions (batch_id, id_transaksi, nominal, id_produk, time_response, id_outlet, id_biller, source_row_number, raw_data)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
@@ -359,6 +373,9 @@ async function syncHandler(req, res) {
         ]
       );
       fpInserted++;
+    }
+    if (fpSkippedInvalid > 0) {
+      console.warn(`reconciliation sync: ${fpSkippedInvalid} baris FP dilewati (id_transaksi bukan angka murni) untuk business_date ${businessDate}`);
     }
 
     let bankInserted = 0;
@@ -862,6 +879,7 @@ module.exports = {
   cleanNum,
   toIsoDate,
   numEq,
+  isValidIdTransaksi,
   RECON_STATUSES,
   EXCEPTION_STATUSES,
   DEFAULT_FEE_BIFAST,

@@ -71,10 +71,16 @@ function reconReadFp_() {
 
   const values = sheet.getDataRange().getValues();
   const rows = [];
+  let skippedInvalid = 0;
   for (let r = 1; r < values.length; r++) {
     const row = values[r];
     const idTransaksi = String(row[0] || '').trim();
     if (!idTransaksi) continue; // baris kosong dilewati
+    // Baris "sampah" — mis. header CSV yang ke-paste ikut ke tengah data
+    // ("id_transaksi,nominal,id_produk,..." dalam SATU sel, bukan terpisah
+    // per kolom). id_transaksi ASLI selalu murni digit — skip kalau bukan,
+    // supaya tidak mencemari hasil rekonsiliasi sebagai "transaksi hantu".
+    if (!/^\d+$/.test(idTransaksi)) { skippedInvalid++; continue; }
     rows.push({
       id_transaksi: idTransaksi,
       nominal: reconCleanNum_(row[1]),
@@ -86,6 +92,9 @@ function reconReadFp_() {
       raw_data: { A: row[0], B: row[1], C: row[2], D: row[3], E: row[4], F: row[5] },
       // Kolom G ("CEK DATA ke BANK") SENGAJA tidak disertakan sama sekali.
     });
+  }
+  if (skippedInvalid > 0) {
+    Logger.log('WARNING: ' + skippedInvalid + ' baris DATA FP dilewati karena id_transaksi bukan angka murni (kemungkinan header/data sampah ke-paste ke tengah data).');
   }
   return rows;
 }

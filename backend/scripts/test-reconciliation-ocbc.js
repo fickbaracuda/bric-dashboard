@@ -6,7 +6,7 @@
 
 const assert = require('assert');
 const {
-  reconcileTransactions, parseDescriptionFallback, cleanNum, numEq, toIsoDate,
+  reconcileTransactions, parseDescriptionFallback, cleanNum, numEq, toIsoDate, isValidIdTransaksi,
 } = require('../src/routes/warroom-reconciliation');
 
 const tests = [];
@@ -51,6 +51,20 @@ test('toIsoDate: ISO passthrough', () => {
 test('toIsoDate: kosong/null -> null', () => {
   assert.strictEqual(toIsoDate(''), null);
   assert.strictEqual(toIsoDate(null), null);
+});
+
+// ── isValidIdTransaksi — regresi: baris header CSV ke-paste ke tengah
+// data DATA FP ("id_transaksi,nominal,id_produk,...") sempat lolos jadi
+// "transaksi hantu" di hasil rekonsiliasi ────────────────────────────────
+test('isValidIdTransaksi: id_transaksi asli (murni digit) valid', () => {
+  assert.strictEqual(isValidIdTransaksi('3556344215'), true);
+  assert.strictEqual(isValidIdTransaksi(3556344215), true);
+});
+test('isValidIdTransaksi: baris sampah/header ke-paste ditolak', () => {
+  assert.strictEqual(isValidIdTransaksi('id_transaksi,nominal,id_produk,time_response'), false);
+  assert.strictEqual(isValidIdTransaksi('abc123'), false);
+  assert.strictEqual(isValidIdTransaksi(''), false);
+  assert.strictEqual(isValidIdTransaksi(null), false);
 });
 
 // ── parseDescriptionFallback ────────────────────────────────────────────
