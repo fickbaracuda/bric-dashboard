@@ -337,3 +337,40 @@ Jalankan di server (Node lokal Windows tidak tersedia).
   credit pair), dan itu memang tugas cascade `REVERSAL` di
   `reconcileTransactions()`/`reconcileTransactionsWithCoverage()` utk
   mengenalinya, bukan tanda archive rusak.
+- **`coverage.trusted_coverage_start` tetap `null` terus walau sudah resync,
+  `FP_ONLY` meledak ratusan padahal seharusnya ~0 (dan bank counterpart-nya
+  memang ada, cuma sudah tergeser keluar window 5.000 baris)**: DUA insiden
+  bertumpuk, keduanya nyata terjadi di produksi:
+  1. Apps Script yang TERPASANG mengirim `transaction_date_time` lewat
+     `reconToIso_()`, tapi fungsi itu HANYA memformat objek `Date` asli dari
+     `getValues()` — kalau sel sheet berupa TEXT (kasus nyata kolom waktu
+     OCBC), `reconToIso_()` lama cuma `return String(value).trim()`, alias
+     mengembalikan `"DD/MM/YYYY HH:mm"` MENTAH, bukan ISO.
+  2. Karena field itu tetap truthy, resolver lama backend
+     (`row.transaction_date_time ? parseTimeResponse(...) : fallback`)
+     langsung commit ke cabang pertama — `new Date("DD/MM/YYYY...")` utk
+     tanggal>12 = Invalid Date = null — dan TIDAK PERNAH mencoba fallback
+     `raw_data.A`, walau fallback itu sendiri sudah benar.
+  Fix permanen: satu parser toleran `parseFlexibleOcbcDateTime()` (terima
+  ISO ATAU `"DD/MM/YYYY[ HH:mm[:ss]]"` mentah, anchor Asia/Jakarta +07:00)
+  dipakai baik utk `transaction_date_time` maupun fallback `raw_data.A`;
+  `resolveOcbcTransactionDateTime()` mencoba SEMUA tier via OR chain (bukan
+  if/return dini) supaya selalu jatuh ke tier berikutnya kalau satu tier
+  gagal parse, bukan cuma kalau falsy. `reconToIso_()` di
+  `apps-script-reconciliation-ocbc.js` juga diperbaiki supaya mem-parse
+  DD/MM/YYYY jadi ISO +07:00 yang benar (butuh user paste ulang ke Apps
+  Script Editor utk aktif di sisi Apps Script — TAPI backend sudah robust
+  independen dari itu, tidak perlu menunggu).
+  **Efek samping SEKALI JALAN yang harus diantisipasi**: begitu
+  `transaction_date_time` berubah dari selalu-null jadi terisi, SEMUA baris
+  arsip lama (fingerprint dihitung dgn `transactionDateTime: null`) jadi
+  "berbeda" dari baris baru hasil sync berikutnya (fingerprint dgn
+  `transactionDateTime` terisi) utk transaksi LOGIS YANG SAMA — archive
+  membengkak 2x lagi (mis. 5.210 lama + 5.000 baru = 10.210) dan
+  `DUPLICATE_BANK` sempat mendominasi lagi (match rate sempat jatuh ke
+  ~4%). Sama seperti insiden `balance`: karena seluruh data arsip masih
+  dalam window snapshot bank yang masih hidup, aman
+  `TRUNCATE recon_bank_snapshots CASCADE;` + 1x sync baru SEKALI LAGI
+  setelah fix ini di-deploy. Setelah transisi ini selesai, `transaction_date_time`
+  jadi field yang STABIL (jam transaksi historis tidak berubah lagi seperti
+  `balance`), jadi tidak akan terulang lagi ke depannya.
