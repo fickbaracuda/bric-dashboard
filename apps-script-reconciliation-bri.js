@@ -1,6 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════
 // Rekonsiliasi BRI — Apps Script
-// Sheet tab : "DATA FP" + "DATA BRI"
+// Sheet tab : nama persis sesuai RECON_BRI_SHEET_FP / RECON_BRI_SHEET_BANK di
+//             bawah (getSheetByName exact-match, case & spasi harus sama
+//             persis dgn nama tab sungguhan di spreadsheet)
 // Endpoint  : POST {BRIC_API_BASE_URL}/api/warroom/reconciliation/bri/sync
 //             (header x-sync-token)
 //
@@ -25,8 +27,8 @@
 //   7. getReconciliationBriStatus() -> lihat ringkasan sync terakhir.
 // ═══════════════════════════════════════════════════════════════════════
 
-const RECON_BRI_SHEET_FP = 'DATA FP';
-const RECON_BRI_SHEET_BANK = 'DATA BRI';
+const RECON_BRI_SHEET_FP = 'Data FP';
+const RECON_BRI_SHEET_BANK = 'Data bank bri';
 const RECON_BRI_DEFAULT_BASE_URL = 'https://bmsretail.my.id';
 const RECON_BRI_BANK_CODE = 'BRI';
 const RECON_BRI_CHUNK_SIZE = 1500;
