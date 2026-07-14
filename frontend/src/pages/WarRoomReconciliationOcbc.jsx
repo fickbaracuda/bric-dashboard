@@ -161,13 +161,14 @@ function downloadBlob(blob, filename) {
   URL.revokeObjectURL(url);
 }
 
-/* Tabel ringkas "Transaksi Tidak Match" di Executive Summary — HANYA
-   muncul kalau ada exception actionable (FP_ONLY/BANK_ONLY/dst), isinya
-   sengaja minimal (ID Transaksi + Nominal saja) supaya cepat dibaca sekilas
-   tanpa perlu buka tab Exception Queue. Reference ditampilkan sbg fallback
-   ID Transaksi utk baris BANK_ONLY/REVERSAL-tanpa-FP (id_transaksi NULL),
-   nominal fallback ke Total Debit bank kalau nominal FP tidak ada. */
-function UnmatchedQuickTable({ date }) {
+/* Tiga card sejajar di Executive Summary (FP Only / Bank Only / Reversal) —
+   masing-masing tabel ringkas (ID Trx + Nominal saja) supaya cepat dibaca
+   sekilas tanpa perlu buka tab Exception Queue. Tinggi seragam, scroll
+   vertikal sendiri-sendiri kalau datanya banyak (lihat wrr-mini-table-wrap
+   di index.css). Reference ditampilkan sbg fallback ID Trx utk baris
+   BANK_ONLY/REVERSAL-tanpa-FP (id_transaksi NULL), nominal fallback ke
+   Total Debit bank kalau nominal FP tidak ada. */
+function StatusMiniTable({ title, status, date, info }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const requestIdRef = useRef(0);
@@ -177,36 +178,37 @@ function UnmatchedQuickTable({ date }) {
     const myRequestId = ++requestIdRef.current;
     setLoading(true);
     getReconciliationTransactions({
-      date, status: EXCEPTION_STATUSES.join(','), is_actionable: 'true',
-      limit: 20, sort: 'updated_at', order: 'desc',
+      date, status, is_actionable: 'true',
+      limit: 200, sort: 'updated_at', order: 'desc',
     })
       .then(res => { if (myRequestId === requestIdRef.current) setRows(res.rows || []); })
       .catch(() => { if (myRequestId === requestIdRef.current) setRows([]); })
       .finally(() => { if (myRequestId === requestIdRef.current) setLoading(false); });
-  }, [date]);
-
-  if (loading || rows.length === 0) return null;
+  }, [date, status]);
 
   return (
-    <div className="wrr-panel">
+    <div className="wrr-panel wrr-mini-panel">
       <div className="wrr-panel-title">
-        <i className="ti ti-alert-triangle" style={{ color: COLOR }} /> Transaksi Tidak Match
-        <InfoIcon text="Daftar ringkas transaksi yang belum match (FP Only, Bank Only, Duplicate, dst) — hanya ID Transaksi & nominal. Lihat tab Exception Queue untuk detail lengkap & aksi penyelesaian." />
+        <i className="ti ti-alert-triangle" style={{ color: COLOR }} /> {title}
+        {info && <InfoIcon text={info} />}
       </div>
-      <div className="wrr-table-wrap">
-        <table className="wrr-table">
-          <thead><tr><th>ID Transaksi</th><th>Nominal</th><th>Status</th></tr></thead>
-          <tbody>
-            {rows.map((r, i) => (
-              <tr key={i}>
-                <td>{r.id_transaksi || r.reference_no || '-'}</td>
-                <td>{fmtRp(r.fp_nominal !== null ? r.fp_nominal : r.bank_total_debit)}</td>
-                <td><StatusBadge status={r.recon_status} /></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      {loading && <div className="wrr-empty-sub">Memuat...</div>}
+      {!loading && rows.length === 0 && <div className="wrr-empty-sub">Tidak ada data.</div>}
+      {!loading && rows.length > 0 && (
+        <div className="wrr-table-wrap wrr-mini-table-wrap">
+          <table className="wrr-table">
+            <thead><tr><th>ID Trx</th><th>Nominal</th></tr></thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={i}>
+                  <td>{r.id_transaksi || r.reference_no || '-'}</td>
+                  <td>{fmtRp(r.fp_nominal !== null ? r.fp_nominal : r.bank_total_debit)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
@@ -273,8 +275,6 @@ function SummaryTab({ analytics, onSelectStatus, date }) {
           info="Mutasi di bank yang punya pola reference/outlet FP tapi tidak ditemukan padanannya di DATA FP — kemungkinan transaksi tidak tercatat di sistem FP." />
         <KPICard label="Nominal Mismatch" value={fmtN(s?.nominal_mismatch_count)} alert={(s?.nominal_mismatch_count || 0) > 0}
           info="Reference cocok, tapi tidak ada debit bank yang nilainya sama dengan nominal FP — kemungkinan salah input nominal di salah satu sisi." />
-        <KPICard label="Total Fee Bank" value={fmtRp(s?.total_fee_bank)}
-          info="Total biaya (fee BI-FAST) yang terpotong bank dari seluruh transaksi yang matched." />
         <KPICard label="Match Rate Transaksi (Valid)" value={fmtPct(s?.valid_match_rate_transaction)}
           info="Persentase JUMLAH transaksi FP yang cocok, dihitung HANYA dari transaksi yang berada dalam cakupan data bank (coverage_status=IN_BANK_COVERAGE) — transaksi di luar cakupan TIDAK ikut menurunkan angka ini." />
         <KPICard label="Match Rate Nominal (Valid)" value={fmtPct(s?.valid_match_rate_nominal)}
@@ -283,7 +283,14 @@ function SummaryTab({ analytics, onSelectStatus, date }) {
           info="Jumlah exception yang BENAR-BENAR perlu ditindaklanjuti tim — sudah dikecualikan transaksi di luar cakupan/boundary data bank yang bukan kegagalan sungguhan." />
       </div>
 
-      <UnmatchedQuickTable date={date} />
+      <div className="wrr-mini-panel-row">
+        <StatusMiniTable title="FP Only" status="FP_ONLY" date={date}
+          info="Transaksi FP yang TIDAK ditemukan di bank setelah masa tunggu selesai, dalam cakupan data bank." />
+        <StatusMiniTable title="Bank Only" status="BANK_ONLY" date={date}
+          info="Mutasi di bank yang punya pola reference/outlet FP tapi tidak ditemukan padanannya di DATA FP." />
+        <StatusMiniTable title="Reversal" status="REVERSAL" date={date}
+          info="Transaksi yang punya baris credit/pembatalan (reversal) di bank." />
+      </div>
 
       <div className="wrr-panel">
         <div className="wrr-panel-title">
