@@ -10,6 +10,7 @@ const {
   reconcileTransactionsWithCoverage, calculateOcbcCoverage, classifyFpCoverage, isCompleteOcbcGroup,
   buildOcbcBankArchiveRows, computeBankRowFingerprint,
   parseOcbcRawDateTimeFallback, resolveOcbcTransactionDateTime, parseFlexibleOcbcDateTime,
+  buildTransactionsQuery,
 } = require('../src/routes/warroom-reconciliation');
 
 const tests = [];
@@ -516,6 +517,38 @@ test('classifyFpCoverage: coverage tidak truncated -> selalu IN_BANK_COVERAGE', 
   const coverage = { isSourceTruncated: false };
   const r = classifyFpCoverage(fp('1', 1000, { timeResponse: new Date('2020-01-01T00:00:00Z') }), coverage, null, 25);
   assert.strictEqual(r.coverageStatus, 'IN_BANK_COVERAGE');
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// BUG CROSS-DATE — root cause: runOcbcEngineAndPersist() dulu mengambil
+// recon_bank_archive HANYA difilter bank_code(+account_no), TANPA
+// business_date sama sekali, sehingga baris archive dari TANGGAL LAIN ikut
+// tertarik ke engine batch aktif dan salah jadi BANK_ONLY milik batch yang
+// salah. Fix: query archive kini WAJIB menyertakan `AND business_date = $N`
+// (lihat runOcbcEngineAndPersist), dan buildTransactionsQuery() dapat lapis
+// pertahanan tambahan (defense-in-depth) di /transactions & /export.
+//
+// runOcbcEngineAndPersist() SENDIRI menyentuh DB (bukan pure function),
+// jadi TIDAK bisa di-unit-test langsung di file ini (project ini sengaja
+// tidak punya test framework/mocking DB) -- acceptance TEST 1-11 dari
+// spesifikasi (data tanggal 14 saja, archive tetap tersimpan lintas
+// tanggal, BANK_ONLY valid/invalid lintas tanggal, timezone dini hari,
+// analytics/transactions/export per-batch, cache/race-condition, resync,
+// regresi Mandiri) diverifikasi END-TO-END lewat server sungguhan dengan
+// data nyata batch 2026-07-14 -- lihat laporan implementasi. Yang
+// unit-testable TANPA DB (buildTransactionsQuery, pure) diuji di bawah.
+// ═══════════════════════════════════════════════════════════════════════
+test('CROSS-DATE TEST 1: buildTransactionsQuery -- date diberikan -> WHERE menyertakan business_date DAN pertahanan tambahan bank_transaction_date (defense-in-depth thd baris stale sebelum repair)', () => {
+  const { whereClause, params } = buildTransactionsQuery({ query: { date: '2026-07-14', bank_code: 'OCBC' } });
+  assert.ok(whereClause.includes('b.business_date = $2'), `whereClause harus punya b.business_date = $2, got: ${whereClause}`);
+  assert.ok(whereClause.includes('r.bank_transaction_date IS NULL OR r.bank_transaction_date = $2'),
+    `whereClause harus punya pertahanan bank_transaction_date pakai parameter YANG SAMA ($2), got: ${whereClause}`);
+  assert.strictEqual(params[1], '2026-07-14');
+});
+test('CROSS-DATE TEST 2: buildTransactionsQuery -- tanpa date -> TIDAK ada filter business_date/bank_transaction_date sama sekali', () => {
+  const { whereClause } = buildTransactionsQuery({ query: { bank_code: 'OCBC' } });
+  assert.ok(!whereClause.includes('business_date'), `whereClause TIDAK boleh mengandung business_date kalau date tidak diberikan, got: ${whereClause}`);
+  assert.ok(!whereClause.includes('bank_transaction_date'), `whereClause TIDAK boleh mengandung bank_transaction_date kalau date tidak diberikan, got: ${whereClause}`);
 });
 
 // ── Runner ──────────────────────────────────────────────────────────────

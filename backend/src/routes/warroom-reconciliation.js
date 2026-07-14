@@ -861,8 +861,22 @@ async function upsertBankArchiveRows(client, archiveRows) {
  * TERAKHIR yang sudah ada utk BACKFILL — coverage TIDAK dihitung ulang dari
  * archive kumulatif, krn ukurannya akan >> source_limit begitu archive
  * bertambah dari waktu ke waktu, bukan mencerminkan window aktif Sheets).
+ *
+ * `businessDate` WAJIB diisi (string "YYYY-MM-DD") — INSIDEN NYATA: versi
+ * sebelumnya query recon_bank_archive HANYA filter bank_code (+account_no),
+ * TANPA batasan tanggal sama sekali. Begitu archive kumulatif mengandung
+ * lebih dari 1 hari (mis. tanggal 13 DAN 14), setiap batch (termasuk batch
+ * tanggal 14) ikut menarik SELURUH baris archive lintas tanggal ke dalam
+ * engine, sehingga baris bank tanggal 13 yang tidak ada pasangan FP-nya di
+ * batch tanggal 14 salah dijadikan BANK_ONLY milik batch tanggal 14. Archive
+ * tetap kumulatif/historis (tidak dihapus), TAPI engine SATU batch hanya
+ * boleh melihat baris archive dgn business_date PERSIS SAMA dgn business_date
+ * batch itu -- filter di kolom `business_date` (bukan `transaction_date_time`
+ * mentah), karena kolom itu SUDAH dihitung benar WIB-anchored sekali di saat
+ * insert (lihat buildOcbcBankArchiveRows/formatDateJakartaOcbc), sehingga
+ * tidak bergantung sama sekali pada timezone session database.
  */
-async function runOcbcEngineAndPersist(client, { batchId, bankCode, accountNo, snapshotMeta, configOverride, now }) {
+async function runOcbcEngineAndPersist(client, { batchId, bankCode, accountNo, businessDate, snapshotMeta, configOverride, now }) {
   const fpAllRes = await client.query('SELECT * FROM recon_fp_transactions WHERE batch_id = $1', [batchId]);
   const fpForEngine = fpAllRes.rows.map(r => ({
     idTransaksi: r.id_transaksi, nominal: r.nominal !== null ? Number(r.nominal) : null,
@@ -871,11 +885,14 @@ async function runOcbcEngineAndPersist(client, { batchId, bankCode, accountNo, s
   }));
 
   // Ambil bank row dari ARCHIVE (kumulatif), BUKAN cuma snapshot 5.000 baris
-  // aktif — row lama yang sudah tergeser keluar window tetap bisa dipakai
-  // utk matching. business_date::text -> hindari shift kolom DATE (lihat
-  // insiden serupa di Rekonsiliasi Mandiri).
-  const archiveParams = [bankCode];
-  let archiveWhere = 'bank_code = $1';
+  // aktif — row lama yang sudah tergeser keluar window TAPI MASIH DALAM
+  // business_date YANG SAMA tetap bisa dipakai utk matching. business_date
+  // di-filter EQUALITY (bukan range/AT TIME ZONE) krn kolomnya sendiri sudah
+  // WIB-anchored sejak insert -- lihat catatan panjang di atas.
+  // business_date::text & value_date::text -> hindari shift kolom DATE
+  // (insiden serupa di Rekonsiliasi Mandiri).
+  const archiveParams = [bankCode, businessDate];
+  let archiveWhere = 'bank_code = $1 AND business_date = $2';
   if (accountNo) { archiveParams.push(accountNo); archiveWhere += ` AND account_no = $${archiveParams.length}`; }
   const archiveRes = await client.query(
     `SELECT *, business_date::text AS business_date, value_date::text AS value_date FROM recon_bank_archive WHERE ${archiveWhere}`,
@@ -1026,7 +1043,7 @@ async function syncHandler(req, res) {
       };
 
       const { fpRowCount, resultCount } = await runOcbcEngineAndPersist(client, {
-        batchId, bankCode, accountNo: stableAccountNo, snapshotMeta, configOverride, now: new Date(),
+        batchId, bankCode, accountNo: stableAccountNo, businessDate, snapshotMeta, configOverride, now: new Date(),
       });
 
       await client.query('COMMIT');
@@ -1171,7 +1188,7 @@ async function syncHandler(req, res) {
     };
 
     const { fpRowCount, resultCount } = await runOcbcEngineAndPersist(client, {
-      batchId, bankCode, accountNo: stableAccountNo, snapshotMeta, configOverride, now: new Date(),
+      batchId, bankCode, accountNo: stableAccountNo, businessDate, snapshotMeta, configOverride, now: new Date(),
     });
 
     await client.query(
@@ -1250,13 +1267,25 @@ async function analyticsHandler(req, res) {
     }
 
     const [resultsRes, fpCountRes, bankRefCountRes, snapshotRes] = await Promise.all([
-      pool.query('SELECT * FROM recon_results WHERE batch_id = $1', [batch.id]),
+      // bank_transaction_date::text -> hindari shift kolom DATE (node-pg akan
+      // parse DATE mentah jadi objek Date lalu geser tanggal kalau timezone
+      // server bukan UTC, lihat insiden serupa yg berulang di modul ini).
+      pool.query('SELECT *, bank_transaction_date::text AS bank_transaction_date FROM recon_results WHERE batch_id = $1', [batch.id]),
       pool.query('SELECT COUNT(*) AS c, COALESCE(SUM(nominal),0) AS s FROM recon_fp_transactions WHERE batch_id = $1', [batch.id]),
       pool.query('SELECT COUNT(DISTINCT reference_no) AS c FROM recon_bank_transactions WHERE batch_id = $1 AND reference_no IS NOT NULL', [batch.id]),
       pool.query('SELECT * FROM recon_bank_snapshots WHERE batch_id = $1 ORDER BY synced_at DESC LIMIT 1', [batch.id]),
     ]);
-    const results = resultsRes.rows;
     const snapshot = snapshotRes.rows[0] || null;
+
+    // ── Guard cross-date (BUG NYATA: sebelum fix, engine tidak scoped per
+    // business_date -- lihat catatan panjang di runOcbcEngineAndPersist).
+    // Baris recon_results yg bank_transaction_date-nya BUKAN business_date
+    // batch ini adalah data STALE (kemungkinan sisa sebelum perbaikan atau
+    // hasil belum di-resync) -- dikecualikan dari SEMUA summary/distribusi
+    // di bawah, dan dilaporkan lewat data_quality_warning supaya kelihatan
+    // kalau masih ada (setelah fix+repair, seharusnya selalu 0).
+    const crossDateRows = resultsRes.rows.filter(r => r.bank_transaction_date !== null && r.bank_transaction_date !== date);
+    const results = resultsRes.rows.filter(r => r.bank_transaction_date === null || r.bank_transaction_date === date);
 
     const totalTransaksiFp = Number(fpCountRes.rows[0]?.c || 0);
     const totalNominalFp = Number(fpCountRes.rows[0]?.s || 0);
@@ -1415,6 +1444,20 @@ async function analyticsHandler(req, res) {
         fp_row_count: batch.fp_row_count, bank_row_count: batch.bank_row_count,
         last_sync: batch.synced_at, source_spreadsheet_id: batch.spreadsheet_id,
       },
+      // Sumber kebenaran batch aktif -- frontend WAJIB cek business_date di
+      // sini sama dengan tanggal yang diminta sebelum merender (lihat guard
+      // integrity di WarRoomReconciliationOcbc.jsx).
+      active_batch: {
+        batch_id: batch.id, bank_code: batch.bank_code, business_date: date,
+        account_no: batch.account_no, synced_at: batch.synced_at,
+      },
+      // Seharusnya SELALU null setelah fix cross-date + repair script
+      // dijalankan -- kalau masih muncul, berarti ada recon_results stale
+      // yg belum dibersihkan (jalankan backend/scripts/repair-reconciliation-cross-date.js).
+      data_quality_warning: crossDateRows.length > 0 ? {
+        cross_date_result_count: crossDateRows.length,
+        message: `Ditemukan ${crossDateRows.length} baris hasil rekonsiliasi pada batch ${date} dengan bank_transaction_date di luar tanggal ini (data stale, dikecualikan otomatis dari summary). Jalankan backend/scripts/repair-reconciliation-cross-date.js --apply untuk membersihkan permanen.`,
+      } : null,
       summary, status_distribution, statement_validation, fee_analysis, coverage, recent_batches: recentBatches,
     });
   } catch (e) {
@@ -1446,7 +1489,19 @@ function buildTransactionsQuery(req) {
 
   const conditions = ['b.bank_code = $1'];
   const params = [bankCode];
-  if (date) { params.push(date); conditions.push(`b.business_date = $${params.length}`); }
+  if (date) {
+    params.push(date);
+    const idx = params.length;
+    conditions.push(`b.business_date = $${idx}`);
+    // Pertahanan tambahan (defense-in-depth) di luar scoping via batch_id:
+    // insiden nyata pernah ada recon_results dgn batch_id tanggal 14 tapi
+    // bank_transaction_date tanggal 13 (archive query lama tidak scoped
+    // business_date, sudah diperbaiki di runOcbcEngineAndPersist) -- filter
+    // ini memastikan baris lintas-tanggal yg BELUM sempat di-repair tetap
+    // tidak tampil di /transactions & /export walau masih ada di DB.
+    // DATE = DATE (bukan round-trip lewat JS) -> tidak ada risiko timezone.
+    conditions.push(`(r.bank_transaction_date IS NULL OR r.bank_transaction_date = $${idx})`);
+  }
   if (status) {
     const statusList = status.split(',').map(s => s.trim()).filter(Boolean);
     params.push(statusList);
@@ -1717,4 +1772,8 @@ module.exports = {
   parseFlexibleOcbcDateTime,
   resolveOcbcTransactionDateTime,
   DEFAULT_SOURCE_LIMIT,
+  // exported utk script repair (backend/scripts/repair-reconciliation-cross-date.js)
+  runOcbcEngineAndPersist,
+  // exported utk unit test (buildTransactionsQuery pure, tidak menyentuh DB)
+  buildTransactionsQuery,
 };

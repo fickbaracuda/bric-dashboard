@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import Layout from '../components/Layout';
 import {
   getReconciliationAnalytics, getReconciliationTransactions, exportReconciliationCsv,
@@ -58,6 +58,14 @@ function fmtDateTime(v) {
   const d = new Date(v);
   if (Number.isNaN(d.getTime())) return '-';
   return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+const MONTHS_ID = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+function fmtDateLong(v) {
+  if (!v) return null;
+  const iso = String(v).slice(0, 10);
+  const [y, m, d] = iso.split('-');
+  if (!y || !m || !d) return null;
+  return `${Number(d)} ${MONTHS_ID[Number(m) - 1] || m} ${y}`;
 }
 
 const STATUS_META = {
@@ -303,11 +311,21 @@ function ReconTable({ date, scope, onOpenAudit, initialStatus }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [resolveTarget, setResolveTarget] = useState(null);
+  // Guard race condition: kalau user ganti tanggal cepat, respons request
+  // LAMA bisa datang SETELAH respons request BARU dan menimpanya dgn data
+  // tanggal yg salah. requestIdRef menandai request TERBARU -- respons dari
+  // request yg sudah "basi" (bukan yg terbaru saat resolve) diabaikan.
+  const requestIdRef = useRef(0);
 
   useEffect(() => { setPage(1); }, [statusFilter, coverageFilter, search, sort, pageSize, date]);
+  // Hapus data lama dari state segera saat tanggal berganti -- jangan
+  // menunggu respons baru datang dulu (supaya tidak sempat menampilkan
+  // baris tanggal SEBELUMNYA walau sesaat).
+  useEffect(() => { setRows([]); setTotal(0); }, [date]);
 
   useEffect(() => {
     if (!date) return;
+    const myRequestId = ++requestIdRef.current;
     setLoading(true); setError(null);
     const statusParam = statusFilter !== 'semua' ? statusFilter : (isException ? EXCEPTION_STATUSES.join(',') : undefined);
     const coverageParam = isException ? 'IN_BANK_COVERAGE' : (coverageFilter !== 'semua' ? coverageFilter : undefined);
@@ -316,9 +334,12 @@ function ReconTable({ date, scope, onOpenAudit, initialStatus }) {
       date, status: statusParam, coverage_status: coverageParam, is_actionable: isActionableParam,
       search: search || undefined, page, limit: pageSize, sort: sort.key, order: sort.dir,
     })
-      .then(res => { setRows(res.rows || []); setTotal(res.meta?.total || 0); })
-      .catch(e => setError(e.message || 'Gagal memuat data'))
-      .finally(() => setLoading(false));
+      .then(res => {
+        if (myRequestId !== requestIdRef.current) return; // respons basi, sudah ada request lebih baru
+        setRows(res.rows || []); setTotal(res.meta?.total || 0);
+      })
+      .catch(e => { if (myRequestId === requestIdRef.current) setError(e.message || 'Gagal memuat data'); })
+      .finally(() => { if (myRequestId === requestIdRef.current) setLoading(false); });
   }, [date, statusFilter, coverageFilter, search, sort, page, pageSize, isException]);
 
   const handleSort = useCallback((key) => {
@@ -609,21 +630,36 @@ export default function WarRoomReconciliationOcbc() {
   const [exporting, setExporting] = useState(false);
   const [syncRequesting, setSyncRequesting] = useState(false);
   const [syncRequestMsg, setSyncRequestMsg] = useState(null);
+  // Guard race condition analytics (sama alasan dgn ReconTable di atas).
+  const analyticsRequestIdRef = useRef(0);
 
   const loadAnalytics = useCallback((d) => {
+    const myRequestId = ++analyticsRequestIdRef.current;
     setLoading(true); setError(null);
     getReconciliationAnalytics(d ? { date: d } : {})
       .then(res => {
+        if (myRequestId !== analyticsRequestIdRef.current) return; // respons basi, sudah ada request lebih baru
+        // Guard integritas data: kalau tanggal SUDAH eksplisit diminta (d),
+        // tapi server mengembalikan batch dgn business_date BERBEDA, JANGAN
+        // render hasil campuran -- tampilkan error data integrity yg jelas.
+        if (d && res && res.empty === false && res.active_batch && res.active_batch.business_date !== d) {
+          setError(`Data integrity error: diminta tanggal ${d}, server mengembalikan batch tanggal ${res.active_batch.business_date}. Hasil tidak ditampilkan untuk menghindari data tercampur.`);
+          setAnalytics(null);
+          return;
+        }
         setAnalytics(res);
         if (!d && res?.meta?.date) setDate(res.meta.date);
       })
-      .catch(e => setError(e.message || 'Gagal memuat analytics'))
-      .finally(() => setLoading(false));
+      .catch(e => { if (myRequestId === analyticsRequestIdRef.current) setError(e.message || 'Gagal memuat analytics'); })
+      .finally(() => { if (myRequestId === analyticsRequestIdRef.current) setLoading(false); });
   }, []);
 
   useEffect(() => { loadAnalytics(date); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleDateChange = (d) => { setDate(d); loadAnalytics(d); };
+  // Hapus data lama dari state SEGERA saat tanggal berganti -- jangan
+  // menunggu respons baru dulu, supaya tidak sempat menampilkan analytics
+  // tanggal SEBELUMNYA walau sesaat.
+  const handleDateChange = (d) => { setDate(d); setAnalytics(null); loadAnalytics(d); };
   const handleRefresh = () => loadAnalytics(date);
 
   const handleExport = () => {
@@ -648,6 +684,10 @@ export default function WarRoomReconciliationOcbc() {
 
   const isEmpty = !loading && !error && analytics?.empty === true;
   const recentBatches = analytics?.recent_batches || [];
+  // Tanggal batch AKTIF (sumber kebenaran dari server, active_batch.business_date)
+  // -- fallback ke filter tanggal frontend kalau analytics belum ada.
+  const activeBatchDate = analytics?.active_batch?.business_date || date;
+  const activeBatchDateLong = fmtDateLong(activeBatchDate);
 
   return (
     <Layout>
@@ -656,7 +696,7 @@ export default function WarRoomReconciliationOcbc() {
           <div className="wrr-header-left">
             <i className="ti ti-building-bank" style={{ color: COLOR, fontSize: 24 }} />
             <div>
-              <div className="wrr-header-title">Rekonsiliasi OCBC</div>
+              <div className="wrr-header-title">Rekonsiliasi OCBC{activeBatchDateLong ? ` — ${activeBatchDateLong}` : ''}</div>
               <div className="wrr-header-sub">Rekonsiliasi transaksi FP terhadap mutasi Bank OCBC — matching reference, fee BI-FAST, dan exception queue.</div>
             </div>
           </div>
@@ -683,6 +723,16 @@ export default function WarRoomReconciliationOcbc() {
           </div>
         </div>
         {syncRequestMsg && <div className="wrr-empty-sub" style={{ marginBottom: 12 }}>{syncRequestMsg}</div>}
+
+        {!loading && !error && analytics?.data_quality_warning && (
+          <div className="wrr-warning-banner wrr-warning-banner-amber">
+            <i className="ti ti-alert-triangle" />
+            <div>
+              <div className="wrr-warning-banner-title">Data Quality Warning — Hasil Cross-Date Ditemukan</div>
+              <p style={{ margin: 0 }}>{analytics.data_quality_warning.message}</p>
+            </div>
+          </div>
+        )}
 
         {loading && <div className="wrr-loading"><i className="ti ti-loader-2 wrr-spin" /> Memuat data...</div>}
         {!loading && error && <div className="wrr-error"><i className="ti ti-alert-circle" /> {error}</div>}

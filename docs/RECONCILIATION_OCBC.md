@@ -107,6 +107,45 @@ SNAPSHOT AKTIF SAJA (row count vs `source_limit`), **bukan** dari archive
 kumulatif — archive akan jauh melebihi `source_limit` setelah berjalan
 lama, dan kalau ikut dihitung akan SELALU salah menganggap truncated.
 
+### 3. Business Date Scoping — fix bug cross-date
+**Insiden nyata**: `runOcbcEngineAndPersist()` mengambil bank row dari
+`recon_bank_archive` HANYA difilter `bank_code` (+`account_no`), **TANPA
+`business_date` sama sekali**. Begitu archive kumulatif mencakup lebih dari
+1 hari (mis. tanggal 13 DAN 14), SETIAP batch (termasuk batch tanggal 14)
+ikut menarik SELURUH baris archive lintas tanggal ke dalam engine — baris
+bank tanggal 13 yang tidak ada pasangan FP-nya di batch tanggal 14 salah
+dijadikan `BANK_ONLY` milik batch tanggal 14, menyebabkan selisih/exception
+meledak walau data sheet sebenarnya sudah bersih (hanya tanggal 14).
+
+**Fix**: query archive di `runOcbcEngineAndPersist()` sekarang WAJIB
+`AND business_date = $businessDate` (equality pada kolom `business_date`
+yang SUDAH WIB-anchored sejak insert via `formatDateJakartaOcbc()` — bukan
+range `AT TIME ZONE` di SQL, supaya tidak bergantung sama sekali pada
+timezone session database). Archive tetap kumulatif/historis (tanggal 13
+TIDAK dihapus, tetap tersimpan), TAPI engine 1 batch hanya boleh melihat
+baris archive dgn `business_date` PERSIS SAMA dengan `business_date` batch
+itu sendiri.
+
+Lapis pertahanan tambahan (defense-in-depth) di `GET .../transactions` &
+`GET .../export`: filter `(bank_transaction_date IS NULL OR
+bank_transaction_date = business_date)` — DATE=DATE murni di SQL (bukan
+round-trip lewat JS), supaya recon_results cross-date yang BELUM sempat
+di-repair tetap tidak tampil di dashboard walau masih ada di DB.
+
+`GET .../analytics` juga mengecualikan baris cross-date dari SEMUA
+summary/distribusi (bukan cuma tampilan tabel), dan melaporkan
+`data_quality_warning.cross_date_result_count` kalau masih ada baris begitu
+(seharusnya SELALU 0 setelah fix + repair script dijalankan). Response
+`analytics` juga menyertakan `active_batch` (`batch_id`, `bank_code`,
+`business_date`, `account_no`, `synced_at`) — sumber kebenaran batch yang
+sedang ditampilkan, dipakai frontend utk validasi integritas (kalau
+`active_batch.business_date` beda dari filter tanggal yang diminta user,
+frontend menampilkan error alih-alih merender hasil campuran).
+
+**Perbaikan data yang sudah terlanjur salah**: jalankan
+`backend/scripts/repair-reconciliation-cross-date.js` (dry-run default,
+`--apply` utk eksekusi — lihat bagian Testing).
+
 ### Backfill (memperkaya archive dgn data lama)
 Payload sync mendukung `sync_mode: 'SNAPSHOT' | 'BACKFILL'` (default
 `SNAPSHOT`). Untuk `BACKFILL`: hanya meng-upsert `body.bank` ke
@@ -136,8 +175,11 @@ menurunkan angka ini hanya karena data pembandingnya memang terpotong.
 ## Database
 Migration: `backend/src/migrations/create_reconciliation_ocbc.sql` (tabel dasar)
 + `backend/src/migrations/add_reconciliation_ocbc_coverage.sql` (coverage + archive)
++ `backend/src/migrations/add_reconciliation_ocbc_archive_business_date_index.sql`
+(index `(bank_code, account_no, business_date)` utk query archive yg kini scoped per business_date)
 Runner: `backend/scripts/run-reconciliation-ocbc-migration.js` +
-`backend/scripts/run-reconciliation-ocbc-coverage-migration.js`
+`backend/scripts/run-reconciliation-ocbc-coverage-migration.js` +
+`backend/scripts/run-reconciliation-ocbc-archive-index-migration.js`
 
 | Tabel | Key | Catatan |
 |---|---|---|
@@ -162,7 +204,7 @@ menghasilkan `result_count`/jumlah archive row identik.
 |---|---|---|
 | `POST /api/warroom/reconciliation/sync` | `APPS_SCRIPT_TOKEN` (token SHARED, bukan token baru) | Terima chunk FP/bank, jalankan engine di chunk terakhir |
 | `GET /api/warroom/reconciliation/sync-request-status?bank_code=` | `APPS_SCRIPT_TOKEN` | Dipanggil Apps Script tiap 1 menit — cek apakah tombol "Sync Now" ditekan sejak sync terakhir |
-| `GET /api/warroom/reconciliation/analytics?date=&bank_code=` | JWT | Summary (+ `valid_match_rate_*`, `actionable_exception_count`), distribusi status, validasi rekening, fee analysis, blok `coverage` baru, recent batches |
+| `GET /api/warroom/reconciliation/analytics?date=&bank_code=` | JWT | Summary (+ `valid_match_rate_*`, `actionable_exception_count`), distribusi status, validasi rekening, fee analysis, blok `coverage`, `active_batch` (batch_id/bank_code/business_date/account_no/synced_at), `data_quality_warning` (cross_date_result_count, seharusnya selalu null), recent batches. Kalau `date` diberikan tapi batch tidak ada, `empty:true` — TIDAK fallback ke batch tanggal lain |
 | `GET /api/warroom/reconciliation/transactions?date=&status=&coverage_status=&is_actionable=&id_outlet=&id_produk=&search=&page=&limit=&sort=&order=` | JWT | List berpaginasi; `status` & `coverage_status` boleh comma-separated. Field baru per baris: `coverage_status`, `coverage_reason`, `is_actionable`, `eligible_for_match_rate`, `archive_match` |
 | `GET /api/warroom/reconciliation/export?...` | JWT | CSV (di-fetch sbg blob di frontend krn butuh header Authorization) — + 5 kolom baru (Coverage Status/Reason/Actionable/Eligible for Match Rate/Archive Match) |
 | `POST /api/warroom/reconciliation/request-sync` | JWT | Tombol "Sync Now" — body `{bank_code}`, generik utk OCBC & Mandiri, hanya mencatat permintaan di `recon_sync_requests` |
@@ -273,15 +315,44 @@ menampilkan ringkasan cakupan di Execution Log.
   Exception Queue **WAJIB** `coverage_status=IN_BANK_COVERAGE&is_actionable=true`
   (hardcoded, bukan pilihan user) supaya transaksi di luar cakupan/boundary
   tidak pernah nyasar ke sana.
+- **Header**: menampilkan tanggal batch AKTIF (`active_batch.business_date`
+  dari response analytics — sumber kebenaran server, bukan cuma filter
+  tanggal frontend), mis. "Rekonsiliasi OCBC — 14 Juli 2026".
+- **Endpoint TIDAK di-cache** (`getReconciliationAnalytics`/
+  `getReconciliationTransactions`/`exportReconciliationCsv` di
+  `services/api.js` — selalu fresh, tidak ada cache key sama sekali), jadi
+  tidak ada risiko cache lintas-tanggal. Race condition tetap mungkin
+  terjadi murni dari urutan resolve promise (bukan cache) kalau user ganti
+  tanggal cepat — dijaga via `requestIdRef` (abaikan respons yang bukan lagi
+  request terbaru) di `ReconTable` & `loadAnalytics`, plus reset
+  `rows`/`analytics` ke kosong SEGERA saat tanggal berganti (jangan tunggu
+  respons baru datang dulu). Kalau `active_batch.business_date` dari server
+  ternyata beda dari tanggal yang diminta user, frontend menampilkan error
+  data integrity dan TIDAK merender hasil.
 
 ## Testing
 `node backend/scripts/test-reconciliation-ocbc.js` — 10 acceptance test
 resmi awal + beberapa test tambahan (MATCHED_NO_FEE, FEE_MISMATCH, fallback
-description, BANK_ONLY scope) + **TEST 1-11 coverage-aware** (OUTSIDE/
+description, BANK_ONLY scope) + TEST 1-11 coverage-aware (OUTSIDE/
 BOUNDARY_PARTIAL classification, exact match menang di boundary, valid
 match rate, fingerprint archive stabil & deterministik, timezone WIB dini
 hari, regresi `reconcileTransactionsWithCoverage` identik dgn
-`reconcileTransactions` lama utk data tidak truncated) — 44 test total.
+`reconcileTransactions` lama utk data tidak truncated) + fallback jam
+presisi raw_data.A + CROSS-DATE TEST 1-2 (`buildTransactionsQuery` pure —
+lihat catatan panjang di file test soal kenapa `runOcbcEngineAndPersist`
+sendiri tidak bisa di-unit-test tanpa DB) — 51 test total.
+
+**Repair data cross-date yang terlanjur salah**:
+`node backend/scripts/repair-reconciliation-cross-date.js` (default
+DRY-RUN — hanya menampilkan batch & jumlah baris cross-date, TIDAK
+mengubah apa pun) lalu `--apply` setelah dry-run diverifikasi aman —
+untuk tiap batch terdampak, menjalankan ULANG `runOcbcEngineAndPersist()`
+(kode yang sudah diperbaiki: archive kini scoped `business_date`) sehingga
+baris cross-date lama otomatis tidak dihasilkan lagi & terhapus lewat
+mekanisme cleanup-stale bawaan (bukan DELETE manual terpisah) — archive
+kumulatif TIDAK disentuh, `recon_action_logs` hanya ikut hilang untuk baris
+yang memang tidak valid (FK `ON DELETE CASCADE`), baris yang masih valid
+(natural key sama) tetap di-UPDATE (id stabil, riwayat log tetap ada).
 Jalankan di server (Node lokal Windows tidak tersedia).
 
 ## Troubleshooting
@@ -374,3 +445,20 @@ Jalankan di server (Node lokal Windows tidak tersedia).
   setelah fix ini di-deploy. Setelah transisi ini selesai, `transaction_date_time`
   jadi field yang STABIL (jam transaksi historis tidak berubah lagi seperti
   `balance`), jadi tidak akan terulang lagi ke depannya.
+- **Transaksi tanggal SEBELUMNYA (mis. tanggal 13) masih muncul di dashboard
+  batch tanggal BARU (mis. tanggal 14), jadi `BANK_ONLY`/exception yang
+  seharusnya tidak ada**: insiden nyata — `runOcbcEngineAndPersist()` dulu
+  mengambil `recon_bank_archive` HANYA difilter `bank_code`(+`account_no`),
+  **TANPA `business_date` sama sekali**. Begitu archive kumulatif mencakup
+  lebih dari 1 hari, SETIAP batch ikut menarik SELURUH baris archive lintas
+  tanggal ke dalam engine — baris bank hari sebelumnya yang tidak ada
+  pasangan FP-nya di batch hari ini salah jadi `BANK_ONLY` milik batch hari
+  ini. Fix permanen: query archive sekarang WAJIB
+  `AND business_date = $businessDate` (equality pada kolom yang sudah
+  WIB-anchored sejak insert, BUKAN range `AT TIME ZONE` — lihat bagian
+  "Business Date Scoping" di atas). Data yang SUDAH terlanjur tersimpan
+  salah (sebelum fix ini di-deploy) dibersihkan dengan
+  `node backend/scripts/repair-reconciliation-cross-date.js --apply`
+  (dry-run dulu tanpa `--apply` utk lihat batch mana saja yang terdampak) —
+  archive TIDAK ikut terhapus/terpengaruh, hanya `recon_results` milik batch
+  yang salah yang dibersihkan (via re-run engine, bukan DELETE manual).

@@ -239,10 +239,88 @@ function reconBuildCoverageMeta_(bankRows) {
   };
 }
 
+/**
+ * Ambil tanggal WIB (yyyy-MM-dd) dari 1 baris FP/bank memakai field tanggal
+ * ISO yang sudah dihasilkan reconToIso_/reconToIsoDateOnly_ (SUDAH
+ * Asia/Jakarta-anchored, bukan re-parse dari raw value). null kalau field
+ * tanggalnya kosong/tidak valid.
+ */
+function reconExtractIsoDate_(isoString) {
+  if (!isoString) return null;
+  const m = /^(\d{4}-\d{2}-\d{2})/.exec(String(isoString));
+  return m ? m[1] : null;
+}
+
+/**
+ * Validasi tanggal SEBELUM push (bukan cuma visibilitas Execution Log) —
+ * bandingkan tanggal ASLI tiap baris FP/bank terhadap businessDate yang akan
+ * dikirim. Dipakai utk deteksi dini kalau Sheet ternyata masih mencampur
+ * lebih dari 1 tanggal (mis. baris lama belum sempat dibersihkan operator),
+ * SEBELUM data itu ikut terkirim dan berpotensi salah atribusi tanggal.
+ *
+ * FP di luar businessDate DIKECUALIKAN dari payload yang dikirim (bukan
+ * cuma dicatat) — baris FP SEHARUSNYA murni transaksi "hari ini" per desain
+ * sheet ini, jadi baris bertanggal lain nyaris pasti sampah/sisa yang belum
+ * dibersihkan, dan kalau ikut terkirim akan salah teratribusi ke batch hari
+ * ini. Baris BANK TIDAK difilter (tetap dikirim apa adanya) — window 5.000
+ * baris bank secara alami bisa mencakup beberapa jam sebelum tengah malam,
+ * dan backend (recon_bank_archive) sudah mengatribusikan business_date tiap
+ * baris bank dari transaction_date_time-nya SENDIRI (bukan businessDate
+ * batch), jadi baris bank "kemarin" yang ikut di window tetap aman —
+ * tersimpan ke archive dgn tanggalnya sendiri, tidak pernah dipakai utk
+ * matching batch hari ini (lihat fix runOcbcEngineAndPersist di backend).
+ */
+function reconValidateDates_(fpRows, bankRows, businessDate) {
+  const fpDates = new Set();
+  const fpInDate = [];
+  let fpOutsideCount = 0;
+  for (const r of fpRows) {
+    const d = reconExtractIsoDate_(r.time_response);
+    if (d) fpDates.add(d);
+    if (d && d !== businessDate) fpOutsideCount++;
+    if (!d || d === businessDate) fpInDate.push(r);
+  }
+
+  const bankDates = new Set();
+  let bankOutsideCount = 0;
+  for (const r of bankRows) {
+    const d = reconExtractIsoDate_(r.transaction_date_time) || reconExtractIsoDate_(r.transaction_date);
+    if (d) bankDates.add(d);
+    if (d && d !== businessDate) bankOutsideCount++;
+  }
+
+  if (fpOutsideCount > 0) {
+    Logger.log('WARNING: ' + fpOutsideCount + ' baris DATA FP bertanggal DI LUAR business_date (' + businessDate +
+      ') -- dikecualikan dari payload yang dikirim. Tanggal unik FP: ' + JSON.stringify([...fpDates]));
+  }
+  if (bankOutsideCount > 0) {
+    Logger.log('INFO: ' + bankOutsideCount + ' baris DATA BANK OCBC bertanggal DI LUAR business_date (' + businessDate +
+      ') -- TETAP dikirim (aman, backend mengatribusikan business_date bank per baris sendiri). Tanggal unik bank: ' + JSON.stringify([...bankDates]));
+  }
+
+  return {
+    business_date: businessDate,
+    fp_unique_dates: [...fpDates].sort(),
+    bank_unique_dates: [...bankDates].sort(),
+    fp_outside_date_count: fpOutsideCount,
+    bank_outside_date_count: bankOutsideCount,
+    fpRowsInDate: fpInDate,
+  };
+}
+
 function reconBuildPayloadChunks_() {
   const props = PropertiesService.getScriptProperties();
-  const fpRows = reconReadFp_();
+  const fpRowsAll = reconReadFp_();
   const bankData = reconReadBank_();
+
+  const today = new Date();
+  const businessDate = Utilities.formatDate(today, 'Asia/Jakarta', 'yyyy-MM-dd');
+
+  // Validasi tanggal SEBELUM chunking/push -- lihat catatan panjang
+  // reconValidateDates_. fpRows yg dipakai utk chunk & dikirim adalah versi
+  // SUDAH DIFILTER (dateValidation.fpRowsInDate), bank TETAP seluruhnya.
+  const dateValidation = reconValidateDates_(fpRowsAll, bankData.rows, businessDate);
+  const fpRows = dateValidation.fpRowsInDate;
 
   const fpChunks = [];
   for (let i = 0; i < fpRows.length; i += RECON_CHUNK_SIZE) fpChunks.push(fpRows.slice(i, i + RECON_CHUNK_SIZE));
@@ -250,8 +328,6 @@ function reconBuildPayloadChunks_() {
   for (let i = 0; i < bankData.rows.length; i += RECON_CHUNK_SIZE) bankChunks.push(bankData.rows.slice(i, i + RECON_CHUNK_SIZE));
 
   const totalChunks = Math.max(1, fpChunks.length, bankChunks.length);
-  const today = new Date();
-  const businessDate = Utilities.formatDate(today, 'Asia/Jakarta', 'yyyy-MM-dd');
   // Hanya utk visibilitas Execution Log -- backend menghitung ULANG dari
   // baris yang benar-benar diterima, tidak pernah percaya angka client.
   const coverageMeta = reconBuildCoverageMeta_(bankData.rows);
@@ -276,11 +352,21 @@ function reconBuildPayloadChunks_() {
         is_source_truncated: coverageMeta.is_source_truncated,
         snapshot_oldest_time: coverageMeta.snapshot_oldest_time,
         snapshot_newest_time: coverageMeta.snapshot_newest_time,
+        date_validation: {
+          business_date: dateValidation.business_date,
+          fp_unique_dates: dateValidation.fp_unique_dates,
+          bank_unique_dates: dateValidation.bank_unique_dates,
+          fp_outside_date_count: dateValidation.fp_outside_date_count,
+          bank_outside_date_count: dateValidation.bank_outside_date_count,
+        },
       },
     });
   }
 
-  return { chunks, fpCount: fpRows.length, bankCount: bankData.rows.length, summary: bankData.summary, businessDate, coverageMeta };
+  return {
+    chunks, fpCount: fpRows.length, fpCountRaw: fpRowsAll.length, bankCount: bankData.rows.length,
+    summary: bankData.summary, businessDate, coverageMeta, dateValidation,
+  };
 }
 
 /** Jalankan ini DULU — hanya membaca & melapor ke Logger, TIDAK mengirim apa pun. */
@@ -288,7 +374,7 @@ function testReconciliationOcbc() {
   const built = reconBuildPayloadChunks_();
   Logger.log('=== TEST (dry-run) Rekonsiliasi OCBC ===');
   Logger.log('Business date: ' + built.businessDate);
-  Logger.log('FP rows: ' + built.fpCount);
+  Logger.log('FP rows (dikirim / total sebelum filter tanggal): ' + built.fpCount + ' / ' + built.fpCountRaw);
   Logger.log('Bank rows: ' + built.bankCount);
   Logger.log('Jumlah chunk: ' + built.chunks.length);
   Logger.log('Bank summary: ' + JSON.stringify(built.summary));
@@ -296,6 +382,10 @@ function testReconciliationOcbc() {
     (built.coverageMeta.is_source_truncated
       ? 'TERPOTONG (' + built.coverageMeta.bank_transaction_row_count + ' baris >= ' + built.coverageMeta.source_limit + '). Oldest=' + built.coverageMeta.snapshot_oldest_time + ', Newest=' + built.coverageMeta.snapshot_newest_time
       : 'lengkap (' + built.coverageMeta.bank_transaction_row_count + ' baris < ' + built.coverageMeta.source_limit + ')'));
+  Logger.log('Validasi tanggal: FP unik=' + JSON.stringify(built.dateValidation.fp_unique_dates) +
+    ', Bank unik=' + JSON.stringify(built.dateValidation.bank_unique_dates) +
+    ', FP di luar business_date=' + built.dateValidation.fp_outside_date_count +
+    ' (dikecualikan dari kiriman), Bank di luar business_date=' + built.dateValidation.bank_outside_date_count + ' (tetap dikirim, lihat catatan reconValidateDates_)');
   Logger.log('Sample FP (max 3): ' + JSON.stringify(built.chunks[0].fp.slice(0, 3)));
   Logger.log('Sample Bank (max 3): ' + JSON.stringify(built.chunks[0].bank.slice(0, 3)));
   Logger.log('=== SELESAI TEST — TIDAK ADA DATA YANG DIKIRIM ===');
