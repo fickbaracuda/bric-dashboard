@@ -195,12 +195,13 @@ function UnmatchedQuickTable({ date }) {
       </div>
       <div className="wrr-table-wrap">
         <table className="wrr-table">
-          <thead><tr><th>ID Transaksi</th><th>Nominal</th></tr></thead>
+          <thead><tr><th>ID Transaksi</th><th>Nominal</th><th>Status</th></tr></thead>
           <tbody>
             {rows.map((r, i) => (
               <tr key={i}>
                 <td>{r.id_transaksi || r.reference_no || '-'}</td>
                 <td>{fmtRp(r.fp_nominal !== null ? r.fp_nominal : r.bank_total_debit)}</td>
+                <td><StatusBadge status={r.recon_status} /></td>
               </tr>
             ))}
           </tbody>
