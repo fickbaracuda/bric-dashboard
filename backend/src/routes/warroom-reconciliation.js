@@ -439,6 +439,26 @@ function normalizeDateForFingerprint(value) {
 }
 
 /**
+ * Normalisasi Description SEBELUM dipakai sbg bagian fingerprint — INSIDEN
+ * NYATA: teks Description utk mutasi bank yang SAMA persis (reference_no,
+ * jam, debit/credit semua identik) bisa terbaca berbeda antar sync HANYA
+ * krn tanda baca (apostrof di nama org, mis. "A'ISYAH" jadi "AISYAH",
+ * "SU'UDI" jadi "SUUDI") — kemungkinan besar krn OCBC/spreadsheet
+ * menormalisasi karakter itu secara tidak konsisten antar pembacaan.
+ * Fingerprint yang ikut memakai teks Description mentah jadi BEDA utk
+ * mutasi yang SAMA, menghasilkan baris arsip duplikat -> `DUPLICATE_BANK`
+ * palsu (mirip pola insiden `balance` sebelumnya). Fix: buang SEMUA
+ * karakter selain huruf/angka/garis-miring (garis miring dipertahankan krn
+ * jadi separator penting bagi parseDescriptionFallback), lalu uppercase --
+ * "NUR A'ISYAH/HH8..." dan "NUR AISYAH/HH8..." sama2 jadi
+ * "NURAISYAH/HH8..." setelah normalisasi ini.
+ */
+function normalizeDescriptionForFingerprint(description) {
+  if (!description) return '';
+  return String(description).toUpperCase().replace(/[^A-Z0-9/]/g, '');
+}
+
+/**
  * Fingerprint stabil 1 baris mutasi bank — SENGAJA TIDAK memakai
  * source_row_number (posisi baris bisa berubah begitu window 5.000 baris
  * Sheets bergeser antar sync). SHA-256 dari kombinasi field yang secara
@@ -453,6 +473,11 @@ function normalizeDateForFingerprint(value) {
  * duplikat dan match rate kolaps jadi DUPLICATE_BANK. balance tetap
  * disimpan di kolom archive (informational, di-refresh via ON CONFLICT),
  * hanya tidak dipakai sebagai bagian identitas.
+ *
+ * `description` DINORMALISASI (bukan dipakai mentah) — lihat catatan
+ * panjang normalizeDescriptionForFingerprint() — insiden nyata KEDUA dgn
+ * pola sama: apostrof pada nama pelanggan hilang/muncul beda antar sync
+ * utk mutasi yang identik, menyebabkan DUPLICATE_BANK palsu.
  */
 function computeBankRowFingerprint(row) {
   const parts = [
@@ -461,7 +486,7 @@ function computeBankRowFingerprint(row) {
     normalizeDateForFingerprint(row.transactionDateTime),
     normalizeForFingerprint(row.valueDate),
     normalizeForFingerprint(row.referenceNo),
-    normalizeForFingerprint(row.description),
+    normalizeDescriptionForFingerprint(row.description),
     normalizeNumForFingerprint(row.debit),
     normalizeNumForFingerprint(row.credit),
   ];
@@ -1865,6 +1890,7 @@ module.exports = {
   isCompleteOcbcGroup,
   buildOcbcBankArchiveRows,
   computeBankRowFingerprint,
+  normalizeDescriptionForFingerprint,
   parseOcbcRawDateTimeFallback,
   parseFlexibleOcbcDateTime,
   resolveOcbcTransactionDateTime,

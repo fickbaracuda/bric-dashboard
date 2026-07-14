@@ -8,7 +8,7 @@ const assert = require('assert');
 const {
   reconcileTransactions, parseDescriptionFallback, cleanNum, numEq, toIsoDate, isValidIdTransaksi,
   reconcileTransactionsWithCoverage, calculateOcbcCoverage, classifyFpCoverage, isCompleteOcbcGroup,
-  buildOcbcBankArchiveRows, computeBankRowFingerprint,
+  buildOcbcBankArchiveRows, computeBankRowFingerprint, normalizeDescriptionForFingerprint,
   parseOcbcRawDateTimeFallback, resolveOcbcTransactionDateTime, parseFlexibleOcbcDateTime,
   buildTransactionsQuery, normalizeCanonicalKey, buildOcbcBankGroups,
 } = require('../src/routes/warroom-reconciliation');
@@ -418,6 +418,23 @@ test('TEST 7c: fingerprint SAMA meski balance berbeda -- running balance OCBC bi
   const rowX = { bankCode: 'OCBC', accountNo: '123', transactionDateTime: new Date('2026-07-10T09:00:00+07:00'), valueDate: '2026-07-10', referenceNo: 'X', description: 'ref X', debit: 1000, credit: null, balance: 5000 };
   const rowY = { ...rowX, balance: 4871 };
   assert.strictEqual(computeBankRowFingerprint(rowX), computeBankRowFingerprint(rowY));
+});
+test('TEST 7d: fingerprint SAMA meski Description beda krn apostrof nama pelanggan hilang/muncul -- insiden nyata produksi ("A\'ISYAH" vs "AISYAH", "SU\'UDI" vs "SUUDI")', () => {
+  const rowX = { bankCode: 'OCBC', accountNo: '123', transactionDateTime: new Date('2026-07-14T09:24:00+07:00'), valueDate: '2026-07-14', referenceNo: '3556930519', description: "7995-CASA OUT BI FAST KHAIRIYYAH NUR A'ISYAH/HH829153556930519", debit: 918011, credit: null };
+  const rowY = { ...rowX, description: '7995-CASA OUT BI FAST KHAIRIYYAH NUR AISYAH/HH829153556930519' };
+  assert.strictEqual(computeBankRowFingerprint(rowX), computeBankRowFingerprint(rowY),
+    'fingerprint HARUS sama utk Description yg cuma beda tanda baca/apostrof -- mutasi bank yg identik (reference/jam/debit sama)');
+});
+test('TEST 7e: fingerprint TETAP beda kalau Description benar-benar transaksi lain (huruf/kata berbeda, bukan cuma tanda baca)', () => {
+  const rowX = { bankCode: 'OCBC', accountNo: '123', transactionDateTime: new Date('2026-07-14T09:24:00+07:00'), valueDate: '2026-07-14', referenceNo: '3556930519', description: 'CASA OUT NAMA BUDI/HH82915X', debit: 918011, credit: null };
+  const rowY = { ...rowX, description: 'CASA OUT NAMA SITI/HH82915Y' };
+  assert.notStrictEqual(computeBankRowFingerprint(rowX), computeBankRowFingerprint(rowY));
+});
+test('normalizeDescriptionForFingerprint: buang tanda baca/spasi, uppercase, pertahankan garis miring', () => {
+  assert.strictEqual(normalizeDescriptionForFingerprint("NUR A'ISYAH/HH82915X"), 'NURAISYAH/HH82915X');
+  assert.strictEqual(normalizeDescriptionForFingerprint('nur aisyah/HH82915X'), 'NURAISYAH/HH82915X');
+  assert.strictEqual(normalizeDescriptionForFingerprint(null), '');
+  assert.strictEqual(normalizeDescriptionForFingerprint(''), '');
 });
 
 // ── TEST 12: fallback jam presisi dari raw_data.A (regresi insiden FP_ONLY meledak) ──
