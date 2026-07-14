@@ -215,6 +215,23 @@ async function syncHandler(req, res) {
     const { results, coverage } = reconcileBriTransactions(fpForEngine, bankForEngine, { expectedFee, graceMinutes, scopeMode, coverageToleranceMinutes }, new Date());
     const balanceValidation = validateBriBalance(bankForEngine);
 
+    // Tandai coverage_status pada SETIAP baris raw bank (bukan cuma pada
+    // recon_results) — supaya tab Raw Data & Audit bisa menampilkan status
+    // coverage per baris tanpa perlu join ke recon_results (banyak baris
+    // OUT_OF_SCOPE/NEED_REVIEW/UNKNOWN tidak punya recon_results sama sekali).
+    if (coverage.scopeMode === 'FULL_BUSINESS_DATE') {
+      await client.query(`UPDATE recon_bank_transactions SET coverage_status = 'IN_FP_COVERAGE' WHERE batch_id = $1`, [batchId]);
+    } else if (coverage.coverageStart && coverage.coverageEnd) {
+      await client.query(
+        `UPDATE recon_bank_transactions SET coverage_status = CASE
+           WHEN transaction_date_time IS NULL THEN NULL
+           WHEN transaction_date_time < $2::timestamptz OR transaction_date_time > $3::timestamptz THEN 'OUTSIDE_FP_COVERAGE'
+           ELSE 'IN_FP_COVERAGE'
+         END WHERE batch_id = $1`,
+        [batchId, coverage.coverageStart, coverage.coverageEnd]
+      );
+    }
+
     // Reversal cross-date lookup — TERISOLASI (lihat briAdapter.js), HANYA
     // query bank row dari business_date+1 s.d. +reversalLookupDays yang
     // sudah tersimpan (di-sync sebelumnya) utk rekening yang sama.
@@ -663,7 +680,7 @@ async function rawBankHandler(req, res) {
       `SELECT id, account_no, transaction_date_time, effective_date_time, sequence_no, description, remarks,
               tlbds1, tlbds2, opening_balance, debit, credit, balance, gl_sign, tr_user, kode_tran, kode_tran_teller,
               extracted_transaction_id, bank_row_type, extraction_method, extraction_confidence, id_conflict,
-              balance_check_status, balance_variance, source_row_number, raw_data
+              coverage_status, balance_check_status, balance_variance, source_row_number, raw_data
        FROM recon_bank_transactions WHERE batch_id = $1 ORDER BY source_row_number ASC NULLS LAST LIMIT $2 OFFSET $3`,
       [batchId, limit, offset]
     );
