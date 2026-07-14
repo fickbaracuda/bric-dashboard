@@ -625,27 +625,41 @@ function reconcileTransactions(fpRows, bankRows, config = {}, now = new Date()) 
     results.push(result);
   }
 
-  // BANK_ONLY — per GROUP (bukan per baris bank), HANYA dari group yang
-  // BELUM pernah consumed FP manapun di atas. fpIdSet dicek juga sbg
-  // defense-in-depth kedua (redundan dgn consumedBankKeys secara teori,
-  // tapi eksplisit sesuai spec supaya robust thd kemungkinan edge case).
+  // BANK_ONLY / REVERSAL tanpa FP — per GROUP (bukan per baris bank), HANYA
+  // dari group yang BELUM pernah consumed FP manapun di atas. fpIdSet dicek
+  // juga sbg defense-in-depth kedua (redundan dgn consumedBankKeys secara
+  // teori, tapi eksplisit sesuai spec supaya robust thd kemungkinan edge case).
+  //
+  // Group yang punya debit (principal DAN/ATAU fee) SEKALIGUS credit --
+  // artinya transaksi itu SENDIRI sudah reversed sepenuhnya di sisi bank,
+  // tanpa pernah ada pasangan FP -- diberi label REVERSAL (bukan BANK_ONLY),
+  // supaya tidak tercampur secara visual dgn BANK_ONLY "murni" (uang keluar
+  // TANPA jejak reversal apa pun, butuh investigasi berbeda). Kedua kasus
+  // TETAP actionable/masuk Exception Queue (tidak ada FP = tetap perlu
+  // ditelusuri kenapa transaksi bank ini tidak tercatat di sistem FP), hanya
+  // labelnya yang dibedakan.
   const fpIdSet = new Set(fpRows.map(f => normalizeCanonicalKey(f.idTransaksi)).filter(Boolean));
   for (const group of bankGroups.values()) {
     if (consumedBankKeys.has(group.canonicalKey)) continue;
     if (fpIdSet.has(group.canonicalKey)) continue;
-    if (!group.hasPrincipal) continue; // fee-only ATAU credit-only -> bukan BANK_ONLY
+
+    const hasAnyDebit = group.hasFee; // hasFee = minimal 1 baris debit (principal atau fee), lihat buildOcbcBankGroups
+    const isReversalNoFp = group.hasCredit && hasAnyDebit;
+    if (!group.hasPrincipal && !isReversalNoFp) continue; // fee-only ATAU credit-only (tanpa debit sama sekali) -> bukan BANK_ONLY/REVERSAL
 
     results.push({
       // referenceNo WAJIB tidak null (fallback ke canonicalKey) supaya key
-      // upsert/canonical_transaction_key unik per kandidat BANK_ONLY.
+      // upsert/canonical_transaction_key unik per kandidat BANK_ONLY/REVERSAL.
       idTransaksi: null, referenceNo: group.referenceNo || group.canonicalKey, idOutlet: group.candidateOutlet, idProduk: null, idBiller: null,
       fpNominal: null, fpTimeResponse: null, bankTransactionDate: group.rows[0].transactionDate || null,
       bankPrincipal: null, bankFee: null, bankCredit: group.hasCredit ? group.totalCredit : null,
       bankTotalDebit: group.hasFee ? group.totalDebit : null,
       variancePrincipal: null, varianceFee: null,
       matchingMethod: group.matchMethod,
-      reconStatus: 'BANK_ONLY', agingMinutes: null,
-      notes: `Ditemukan di bank (kandidat id_transaksi: ${group.canonicalKey}) tapi tidak ada di DATA FP.`,
+      reconStatus: isReversalNoFp ? 'REVERSAL' : 'BANK_ONLY', agingMinutes: null,
+      notes: isReversalNoFp
+        ? `Ditemukan reversal di bank (kandidat id_transaksi: ${group.canonicalKey}, debit Rp${group.totalDebit} dibalik credit Rp${group.totalCredit}) tapi tidak ada di DATA FP.`
+        : `Ditemukan di bank (kandidat id_transaksi: ${group.canonicalKey}) tapi tidak ada di DATA FP.`,
     });
   }
 
@@ -811,17 +825,28 @@ function reconcileTransactionsWithCoverage(fpRows, bankRows, config = {}, now = 
     results.push(result);
   }
 
-  // ── BANK_ONLY — per GROUP (bukan per baris bank). HANYA dari group yang
-  // belum consumed FP manapun DAN, kalau truncated, TIDAK boleh ada satu pun
-  // baris di group yang berada DI/SEBELUM boundary minute (spec: "berada
-  // dalam trusted coverage" + "fee-only group pada boundary jangan menjadi
-  // BANK_ONLY") — kalau salah satu baris grup masih di zona batas yang
-  // berpotensi terpotong, seluruh grup dianggap belum pasti lengkap. ──
+  // ── BANK_ONLY / REVERSAL tanpa FP — per GROUP (bukan per baris bank).
+  // HANYA dari group yang belum consumed FP manapun DAN, kalau truncated,
+  // TIDAK boleh ada satu pun baris di group yang berada DI/SEBELUM boundary
+  // minute (spec: "berada dalam trusted coverage" + "fee-only group pada
+  // boundary jangan menjadi BANK_ONLY") — kalau salah satu baris grup masih
+  // di zona batas yang berpotensi terpotong, seluruh grup dianggap belum
+  // pasti lengkap.
+  //
+  // Group yang punya debit (principal DAN/ATAU fee) SEKALIGUS credit --
+  // transaksi itu SENDIRI sudah reversed sepenuhnya di sisi bank, tanpa
+  // pernah ada pasangan FP -- diberi label REVERSAL (bukan BANK_ONLY),
+  // supaya tidak tercampur visual dgn BANK_ONLY "murni" (uang keluar TANPA
+  // jejak reversal apa pun). Keduanya TETAP actionable/masuk Exception
+  // Queue (tidak ada FP = tetap perlu ditelusuri), hanya labelnya beda. ──
   const fpIdSet = new Set(fpRows.map(f => normalizeCanonicalKey(f.idTransaksi)).filter(Boolean));
   for (const group of bankGroups.values()) {
     if (consumedBankKeys.has(group.canonicalKey)) continue;
     if (fpIdSet.has(group.canonicalKey)) continue;
-    if (!group.hasPrincipal) continue; // fee-only ATAU credit-only -> bukan BANK_ONLY
+
+    const hasAnyDebit = group.hasFee; // hasFee = minimal 1 baris debit (principal atau fee), lihat buildOcbcBankGroups
+    const isReversalNoFp = group.hasCredit && hasAnyDebit;
+    if (!group.hasPrincipal && !isReversalNoFp) continue; // fee-only ATAU credit-only (tanpa debit sama sekali) -> bukan BANK_ONLY/REVERSAL
 
     if (coverage.isSourceTruncated && coverage.boundaryMinuteEnd) {
       const hasBoundaryRow = group.rows.some(x => x.transactionDateTime instanceof Date && x.transactionDateTime.getTime() <= coverage.boundaryMinuteEnd.getTime());
@@ -835,8 +860,10 @@ function reconcileTransactionsWithCoverage(fpRows, bankRows, config = {}, now = 
       bankTotalDebit: group.hasFee ? group.totalDebit : null,
       variancePrincipal: null, varianceFee: null,
       matchingMethod: group.matchMethod,
-      reconStatus: 'BANK_ONLY', agingMinutes: null,
-      notes: `Ditemukan di bank (kandidat id_transaksi: ${group.canonicalKey}) tapi tidak ada di DATA FP.`,
+      reconStatus: isReversalNoFp ? 'REVERSAL' : 'BANK_ONLY', agingMinutes: null,
+      notes: isReversalNoFp
+        ? `Ditemukan reversal di bank (kandidat id_transaksi: ${group.canonicalKey}, debit Rp${group.totalDebit} dibalik credit Rp${group.totalCredit}) tapi tidak ada di DATA FP.`
+        : `Ditemukan di bank (kandidat id_transaksi: ${group.canonicalKey}) tapi tidak ada di DATA FP.`,
       coverageStatus: 'IN_BANK_COVERAGE', coverageReason: null, isActionable: true, eligibleForMatchRate: true,
       archiveMatch: group.rows.some(x => x.fromArchive === true),
     });

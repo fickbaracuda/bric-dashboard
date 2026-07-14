@@ -602,6 +602,18 @@ test('REVERSAL-DUP TEST 4: BANK_ONLY valid (tidak ada FP sama sekali)', () => {
   assert.strictEqual(results.length, 1);
   assert.strictEqual(results[0].reconStatus, 'BANK_ONLY');
 });
+test('REVERSAL-DUP TEST 4b: group punya debit (principal+fee) DAN credit, TANPA FP sama sekali -> REVERSAL (bukan BANK_ONLY) — insiden nyata dilaporkan user', () => {
+  const { results } = reconcileTransactionsWithCoverage([], [
+    bankRow('3556980250', { debit: 500000, description: '.../HH829153556980250' }),
+    bankRow('3556980250', { debit: 25, description: '.../HH829153556980250' }),
+    bankRow('3556980250', { credit: 500025, description: '.../HH829153556980250' }),
+  ], {}, new Date());
+  assert.strictEqual(results.length, 1, `harus 1 result, got ${results.length}: ${JSON.stringify(results)}`);
+  assert.strictEqual(results[0].reconStatus, 'REVERSAL');
+  assert.strictEqual(results[0].bankTotalDebit, 500025);
+  assert.strictEqual(results[0].bankCredit, 500025);
+  assert.strictEqual(results[0].isActionable, true, 'tetap actionable -- tidak ada FP tetap perlu ditelusuri');
+});
 test('REVERSAL-DUP TEST 5: credit only tanpa FP -> BUKAN BANK_ONLY', () => {
   const { results } = reconcileTransactionsWithCoverage([], [
     bankRow('3556000005', { credit: 300000, description: '.../HH829153556000005' }),
