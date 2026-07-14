@@ -14,6 +14,7 @@ import WarRoomEkspedisi from './pages/WarRoomEkspedisi';
 import WarRoomEkspedisiProduk from './pages/WarRoomEkspedisiProduk';
 import WarRoomReconciliationOcbc from './pages/WarRoomReconciliationOcbc';
 import WarRoomReconciliationMandiri from './pages/WarRoomReconciliationMandiri';
+import WarRoomReconciliationBri from './pages/WarRoomReconciliationBri';
 import WarRoomFastpay from './pages/WarRoomFastpay';
 import WarRoomFarming from './pages/WarRoomFarming';
 import WarRoomPAProduk from './pages/WarRoomPAProduk';
@@ -73,6 +74,7 @@ export default function App() {
         <Route path="/war-room/ekspedisi-produk" element={<ProtectedRoute><WarRoomEkspedisiProduk /></ProtectedRoute>} />
         <Route path="/war-room/rekonsiliasi-ocbc" element={<ProtectedRoute><WarRoomReconciliationOcbc /></ProtectedRoute>} />
         <Route path="/war-room/rekonsiliasi/mandiri" element={<ProtectedRoute><WarRoomReconciliationMandiri /></ProtectedRoute>} />
+        <Route path="/war-room/rekonsiliasi/bri" element={<ProtectedRoute><WarRoomReconciliationBri /></ProtectedRoute>} />
         <Route path="/war-room/fastpayglobal" element={<ProtectedRoute><WarRoomFastpay /></ProtectedRoute>} />
         <Route path="/war-room/farming"       element={<ProtectedRoute><WarRoomFarming /></ProtectedRoute>} />
         <Route path="/war-room/pa-produk"    element={<ProtectedRoute><WarRoomPAProduk /></ProtectedRoute>} />
