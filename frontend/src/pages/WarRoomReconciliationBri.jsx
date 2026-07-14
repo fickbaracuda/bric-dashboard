@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import Layout from '../components/Layout';
 import {
   getReconciliationBriAnalytics, getReconciliationBriTransactions, exportReconciliationBriCsv,
@@ -159,38 +159,66 @@ function downloadBlob(blob, filename) {
   URL.revokeObjectURL(url);
 }
 
+/* Tiga card sejajar di Executive Summary (FP Only / Bank Only / Reversal) —
+   pola SAMA dgn Rekonsiliasi OCBC (lihat WarRoomReconciliationOcbc.jsx),
+   tabel ringkas ID Trx + Nominal, tinggi seragam & scroll vertikal sendiri
+   kalau data banyak (wrr-mini-panel-row / wrr-mini-table-wrap di index.css). */
+function StatusMiniTable({ title, status, date, info }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const requestIdRef = useRef(0);
+
+  useEffect(() => {
+    if (!date) return;
+    const myRequestId = ++requestIdRef.current;
+    setLoading(true);
+    getReconciliationBriTransactions({
+      date, status, limit: 200, sort: 'updated_at', order: 'desc',
+    })
+      .then(res => { if (myRequestId === requestIdRef.current) setRows(res.rows || []); })
+      .catch(() => { if (myRequestId === requestIdRef.current) setRows([]); })
+      .finally(() => { if (myRequestId === requestIdRef.current) setLoading(false); });
+  }, [date, status]);
+
+  return (
+    <div className="wrr-panel wrr-mini-panel">
+      <div className="wrr-panel-title">
+        <i className="ti ti-alert-triangle" style={{ color: COLOR }} /> {title}
+        {info && <InfoIcon text={info} />}
+      </div>
+      {loading && <div className="wrr-empty-sub">Memuat...</div>}
+      {!loading && rows.length === 0 && <div className="wrr-empty-sub">Tidak ada data.</div>}
+      {!loading && rows.length > 0 && (
+        <div className="wrr-table-wrap wrr-mini-table-wrap">
+          <table className="wrr-table">
+            <thead><tr><th>ID Trx</th><th>Nominal</th></tr></thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={i}>
+                  <td>{r.id_transaksi || r.extracted_transaction_id || '-'}</td>
+                  <td>{fmtRp(r.fp_nominal !== null ? r.fp_nominal : r.bank_gross_debit)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ═══════════════════════════════════════════════════════════════════════
    TAB 1 — Executive Summary
    ═══════════════════════════════════════════════════════════════════════ */
-function SummaryTab({ analytics, onSelectStatus }) {
+function SummaryTab({ analytics, onSelectStatus, date }) {
   const s = analytics?.summary;
   const cov = analytics?.coverage;
   const bv = analytics?.balance_validation;
+  const totalException = (analytics?.status_distribution || [])
+    .filter(d => EXCEPTION_STATUSES.includes(d.status))
+    .reduce((sum, d) => sum + (d.count || 0), 0);
   return (
     <>
-      <div className="wrr-kpi-grid">
-        <KPICard label="Total FP" value={fmtN(s?.total_fp)} info="Jumlah total transaksi dari sheet DATA FP utk tanggal yang dipilih." />
-        <KPICard label="Total Nominal FP" value={fmtRp(s?.total_fp_nominal)} info="Total nilai (Rupiah) seluruh transaksi FP utk tanggal ini." />
-        <KPICard label="Mutasi FASTPAY Valid" value={fmtN(s?.valid_fastpay_rows)} info="Mutasi rekening BRI yang polanya cocok FASTPAY (debit/credit), sudah dikurangi mutasi di luar lingkup (OUT_OF_SCOPE)." />
-        <KPICard label="Di Luar Lingkup" value={fmtN(s?.out_of_scope_rows)} info="Mutasi rekening BRI yang BUKAN pola FASTPAY (mis. transfer BKO, biaya lain) — tidak pernah masuk Exception Queue/match rate." />
-        <KPICard label="Matched" value={fmtN(s?.matched_count)} info="Principal BRI (gross debit - expected fee) cocok dgn nominal FP, fee sesuai expected." />
-        <KPICard label="Matched (No Fee)" value={fmtN(s?.matched_no_fee)} info="Gross debit BRI persis sama dgn nominal FP (tidak ada fee terpotong)." />
-        <KPICard label="Pending Bank" value={fmtN(s?.pending_bank)} alert={(s?.pending_bank || 0) > 0} info="FP belum ditemukan di BRI, tapi masih dalam grace period (default 30 menit)." />
-        <KPICard label="FP Only" value={fmtN(s?.fp_only)} alert={(s?.fp_only || 0) > 0} info="FP tidak ditemukan di BRI setelah grace period selesai." />
-        <KPICard label="Bank Only" value={fmtN(s?.bank_only)} alert={(s?.bank_only || 0) > 0} info="Mutasi FASTPAY BRI valid, dalam coverage, tapi tidak ada FP pasangannya." />
-        <KPICard label="Nominal Mismatch" value={fmtN(s?.nominal_mismatch)} alert={(s?.nominal_mismatch || 0) > 0} info="Gross debit BRI lebih kecil dari nominal FP — tidak masuk akal sbg principal+fee." />
-        <KPICard label="Fee Mismatch" value={fmtN(s?.fee_mismatch)} alert={(s?.fee_mismatch || 0) > 0} info="Principal cocok, tapi fee aktual berbeda dari expected fee (default Rp150)." />
-        <KPICard label="Duplikat" value={fmtN((s?.duplicate_fp || 0) + (s?.duplicate_bank || 0))} alert={((s?.duplicate_fp || 0) + (s?.duplicate_bank || 0)) > 0} info="DUPLICATE_FP (id_transaksi dobel di FP) + DUPLICATE_BANK (2+ baris debit FASTPAY utk 1 id sama)." />
-        <KPICard label="Reversal" value={fmtN(s?.reversal)} alert={(s?.reversal || 0) > 0} info="Ditemukan mutasi credit/reversal (sebatch atau cross-date lookup) utk id transaksi yang sama." />
-        <KPICard label="Need Review" value={fmtN(s?.need_review)} alert={(s?.need_review || 0) > 0} info="Konflik ekstraksi ID antar sumber (DESK_TRAN/TRREMK/TLBDS2) atau data tidak lengkap." />
-        <KPICard label="Gross Debit" value={fmtRp(s?.gross_debit)} info="Total seluruh debit FASTPAY BRI (principal + fee tergabung)." />
-        <KPICard label="Total Principal" value={fmtRp(s?.principal_total)} info="Total principal yang berhasil dipisahkan dari fee setelah dipasangkan dgn FP." />
-        <KPICard label="Total Fee" value={fmtRp(s?.fee_total)} info="Total fee aktual yang terpotong (gross debit - nominal FP) dari transaksi matched." />
-        <KPICard label="Match Rate Transaksi" value={fmtPct(s?.valid_match_rate_transaction)} info="Persentase jumlah transaksi FP yang berhasil dicocokkan." />
-        <KPICard label="Match Rate Nominal" value={fmtPct(s?.valid_match_rate_nominal)} info="Persentase nilai (Rupiah) transaksi yang berhasil dicocokkan." />
-        <KPICard label="Di Luar Coverage" value={fmtN(cov?.bank_outside_coverage)} info="Mutasi BRI di luar rentang waktu FP ± toleransi — tidak masuk Exception Queue/match rate, tetap terlihat di Raw Data." />
-      </div>
-
       <div className="wrr-panel">
         <div className="wrr-panel-title">
           <i className="ti ti-window" style={{ color: COLOR }} /> Coverage Window
@@ -202,7 +230,32 @@ function SummaryTab({ analytics, onSelectStatus }) {
           <div><span className="wrr-dq-note-label">Coverage End</span><span className="wrr-dq-note-value">{fmtDateTime(cov?.coverage_end)}</span></div>
           <div><span className="wrr-dq-note-label">Bank Dalam Coverage</span><span className="wrr-dq-note-value">{fmtN(cov?.bank_in_coverage)}</span></div>
           <div><span className="wrr-dq-note-label">Bank Di Luar Coverage</span><span className="wrr-dq-note-value">{fmtN(cov?.bank_outside_coverage)}</span></div>
+          <div><span className="wrr-dq-note-label">Mutasi Di Luar Lingkup (OUT_OF_SCOPE)</span><span className="wrr-dq-note-value">{fmtN(s?.out_of_scope_rows)}</span></div>
         </div>
+      </div>
+
+      <div className="wrr-kpi-grid">
+        <KPICard label="Total FP" value={fmtN(s?.total_fp)} info="Jumlah total transaksi dari sheet DATA FP utk tanggal yang dipilih." />
+        <KPICard label="Total Nominal FP" value={fmtRp(s?.total_fp_nominal)} info="Total nilai (Rupiah) seluruh transaksi FP utk tanggal ini." />
+        <KPICard label="ID Transaksi Bank Unik" value={fmtN(s?.unique_bank_transaction_id)} info="Jumlah extracted_transaction_id unik yang berhasil diekstrak dari DESK_TRAN/TRREMK/TLBDS2 mutasi BRI." />
+        <KPICard label="Matched Transaksi" value={fmtN((s?.matched_count || 0) + (s?.matched_no_fee || 0))} info="Jumlah transaksi FP yang principal-nya cocok dgn debit BRI (status MATCHED atau MATCHED_NO_FEE)." />
+        <KPICard label="Matched Nominal" value={fmtRp(s?.matched_nominal)} info="Total nominal FP dari transaksi yang berhasil dicocokkan ke BRI." />
+        <KPICard label="Pending Bank" value={fmtN(s?.pending_bank)} alert={(s?.pending_bank || 0) > 0} info="FP belum ditemukan di BRI, tapi masih dalam grace period (default 30 menit)." />
+        <KPICard label="FP Only" value={fmtN(s?.fp_only)} alert={(s?.fp_only || 0) > 0} info="FP tidak ditemukan di BRI setelah grace period selesai." />
+        <KPICard label="Bank Only" value={fmtN(s?.bank_only)} alert={(s?.bank_only || 0) > 0} info="Mutasi FASTPAY BRI valid, dalam coverage, tapi tidak ada FP pasangannya." />
+        <KPICard label="Nominal Mismatch" value={fmtN(s?.nominal_mismatch)} alert={(s?.nominal_mismatch || 0) > 0} info="Gross debit BRI lebih kecil dari nominal FP — tidak masuk akal sbg principal+fee." />
+        <KPICard label="Match Rate Transaksi (Valid)" value={fmtPct(s?.valid_match_rate_transaction)} info="Persentase jumlah transaksi FP yang berhasil dicocokkan." />
+        <KPICard label="Match Rate Nominal (Valid)" value={fmtPct(s?.valid_match_rate_nominal)} info="Persentase nilai (Rupiah) transaksi yang berhasil dicocokkan." />
+        <KPICard label="Actionable Exception" value={fmtN(totalException)} alert={totalException > 0} info="Total seluruh transaksi berstatus exception (Pending Bank, FP Only, Bank Only, Nominal Mismatch, Fee Mismatch, Duplicate, Reversal, Need Review) yang perlu ditindaklanjuti tim." />
+      </div>
+
+      <div className="wrr-mini-panel-row">
+        <StatusMiniTable title="FP Only" status="FP_ONLY" date={date}
+          info="Transaksi FP yang TIDAK ditemukan di BRI setelah grace period selesai." />
+        <StatusMiniTable title="Bank Only" status="BANK_ONLY" date={date}
+          info="Mutasi FASTPAY BRI valid, dalam coverage, tapi tidak ada FP pasangannya." />
+        <StatusMiniTable title="Reversal" status="REVERSAL" date={date}
+          info="Ditemukan mutasi credit/reversal (sebatch atau cross-date lookup) utk id transaksi yang sama." />
       </div>
 
       <div className="wrr-panel">
@@ -857,7 +910,7 @@ export default function WarRoomReconciliationBri() {
             ))}
           </div>
 
-          {activeTab === 'summary' && <SummaryTab analytics={analytics} onSelectStatus={handleSelectStatus} />}
+          {activeTab === 'summary' && <SummaryTab analytics={analytics} onSelectStatus={handleSelectStatus} date={date} />}
           {activeTab === 'hasil' && <ReconTable date={date} scope="all" onOpenAudit={setAuditId} initialStatus={jumpStatus} />}
           {activeTab === 'exception' && <ReconTable date={date} scope="exception" onOpenAudit={setAuditId} initialStatus={jumpStatus} />}
           {activeTab === 'fee' && <FeeAnalysisTab analytics={analytics} />}

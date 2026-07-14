@@ -375,7 +375,7 @@ async function analyticsHandler(req, res) {
       });
     }
 
-    const [resultsRes, fpCountRes, bankScopeRes, bankBalanceRes] = await Promise.all([
+    const [resultsRes, fpCountRes, bankScopeRes, bankBalanceRes, bankIdCountRes] = await Promise.all([
       pool.query('SELECT *, bank_transaction_date::text AS bank_transaction_date FROM recon_results WHERE batch_id = $1 AND bank_code = $2', [batch.id, BANK_CODE]),
       pool.query('SELECT COUNT(*) AS c, COALESCE(SUM(nominal),0) AS s FROM recon_fp_transactions WHERE batch_id = $1', [batch.id]),
       pool.query(
@@ -383,11 +383,13 @@ async function analyticsHandler(req, res) {
         [batch.id]
       ),
       pool.query('SELECT balance_check_status, COUNT(*) AS c, COALESCE(SUM(balance_variance),0) AS variance FROM recon_bank_transactions WHERE batch_id = $1 GROUP BY balance_check_status', [batch.id]),
+      pool.query('SELECT COUNT(DISTINCT extracted_transaction_id) AS c FROM recon_bank_transactions WHERE batch_id = $1 AND extracted_transaction_id IS NOT NULL', [batch.id]),
     ]);
     const results = resultsRes.rows;
 
     const totalTransaksiFp = Number(fpCountRes.rows[0]?.c || 0);
     const totalNominalFp = Number(fpCountRes.rows[0]?.s || 0);
+    const uniqueBankTransactionId = Number(bankIdCountRes.rows[0]?.c || 0);
     const scopeCounts = {};
     for (const r of bankScopeRes.rows) scopeCounts[r.bank_row_type || 'UNKNOWN'] = Number(r.c);
     const validFastpayRows = (scopeCounts.DEBIT_TRANSFER || 0) + (scopeCounts.CREDIT_REVERSAL || 0);
@@ -417,6 +419,7 @@ async function analyticsHandler(req, res) {
       total_fp: totalTransaksiFp,
       total_fp_nominal: totalNominalFp,
       total_bank_rows: totalBankRows,
+      unique_bank_transaction_id: uniqueBankTransactionId,
       valid_fastpay_rows: validFastpayRows,
       out_of_scope_rows: outOfScopeRows,
       matched_count: byStatus.MATCHED.count,

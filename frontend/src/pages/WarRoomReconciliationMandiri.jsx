@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import Layout from '../components/Layout';
 import {
   getReconciliationMandiriAnalytics, getReconciliationMandiriTransactions, exportReconciliationMandiriCsv,
@@ -150,12 +150,63 @@ function downloadBlob(blob, filename) {
   URL.revokeObjectURL(url);
 }
 
+/* Tiga card sejajar di Executive Summary (FP Only / Bank Only / Reversal) —
+   pola SAMA dgn Rekonsiliasi OCBC (lihat WarRoomReconciliationOcbc.jsx),
+   tabel ringkas ID Trx + Nominal, tinggi seragam & scroll vertikal sendiri
+   kalau data banyak (wrr-mini-panel-row / wrr-mini-table-wrap di index.css). */
+function StatusMiniTable({ title, status, date, info }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const requestIdRef = useRef(0);
+
+  useEffect(() => {
+    if (!date) return;
+    const myRequestId = ++requestIdRef.current;
+    setLoading(true);
+    getReconciliationMandiriTransactions({
+      date, status, limit: 200, sort: 'updated_at', order: 'desc',
+    })
+      .then(res => { if (myRequestId === requestIdRef.current) setRows(res.rows || []); })
+      .catch(() => { if (myRequestId === requestIdRef.current) setRows([]); })
+      .finally(() => { if (myRequestId === requestIdRef.current) setLoading(false); });
+  }, [date, status]);
+
+  return (
+    <div className="wrr-panel wrr-mini-panel">
+      <div className="wrr-panel-title">
+        <i className="ti ti-alert-triangle" style={{ color: COLOR }} /> {title}
+        {info && <InfoIcon text={info} />}
+      </div>
+      {loading && <div className="wrr-empty-sub">Memuat...</div>}
+      {!loading && rows.length === 0 && <div className="wrr-empty-sub">Tidak ada data.</div>}
+      {!loading && rows.length > 0 && (
+        <div className="wrr-table-wrap wrr-mini-table-wrap">
+          <table className="wrr-table">
+            <thead><tr><th>ID Trx</th><th>Nominal</th></tr></thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={i}>
+                  <td>{r.id_transaksi || r.reference_no || '-'}</td>
+                  <td>{fmtRp(r.fp_nominal !== null ? r.fp_nominal : r.bank_total_debit)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ═══════════════════════════════════════════════════════════════════════
    TAB 1 — Executive Summary
    ═══════════════════════════════════════════════════════════════════════ */
-function SummaryTab({ analytics, onSelectStatus }) {
+function SummaryTab({ analytics, onSelectStatus, date }) {
   const s = analytics?.summary;
   const bv = analytics?.balance_validation;
+  const totalException = (analytics?.status_distribution || [])
+    .filter(d => EXCEPTION_STATUSES.includes(d.status))
+    .reduce((sum, d) => sum + (d.count || 0), 0);
   return (
     <>
       <div className="wrr-kpi-grid">
@@ -165,8 +216,6 @@ function SummaryTab({ analytics, onSelectStatus }) {
           info="Total nilai (Rupiah) seluruh transaksi FP untuk tanggal ini." />
         <KPICard label="Unique ID Transaksi Bank" value={fmtN(s?.unique_bank_transaction_id)}
           info="Jumlah id_transaksi unik yang berhasil diekstrak dari Remarks/AdditionalDesc mutasi Mandiri. Satu id biasanya punya 2 baris (principal + fee), jadi angka ini lebih kecil dari jumlah baris mentah di sheet." />
-        <KPICard label="Total Principal Bank" value={fmtRp(s?.total_principal_bank)}
-          info="Total seluruh baris debit PRINCIPAL (bukan fee) yang berhasil dikaitkan ke transaksi FP." />
         <KPICard label="Matched Transaksi" value={fmtN(s?.matched_transaksi)}
           info="Jumlah transaksi FP yang principal-nya cocok dengan debit Mandiri (status MATCHED atau MATCHED_NO_FEE)." />
         <KPICard label="Matched Nominal" value={fmtRp(s?.matched_nominal)}
@@ -179,22 +228,21 @@ function SummaryTab({ analytics, onSelectStatus }) {
           info="Mutasi Mandiri (ada baris principal) yang id_transaksi-nya tidak ditemukan di DATA FP, dalam rentang waktu/scope yang dipilih." />
         <KPICard label="Nominal Mismatch" value={fmtN(s?.nominal_mismatch_count)} alert={(s?.nominal_mismatch_count || 0) > 0}
           info="id_transaksi cocok, tapi principal Mandiri berbeda dari nominal FP." />
-        <KPICard label="Fee Mismatch" value={fmtN(s?.fee_mismatch_count)} alert={(s?.fee_mismatch_count || 0) > 0}
-          info="Principal cocok, tapi fee yang terpotong berbeda dari expected fee (default Rp100)." />
-        <KPICard label="Duplicate" value={fmtN(s?.duplicate_count)} alert={(s?.duplicate_count || 0) > 0}
-          info="Jumlah DUPLICATE_FP (id_transaksi dobel di DATA FP) + DUPLICATE_BANK (2+ baris principal utk 1 id_transaksi)." />
-        <KPICard label="Reversal" value={fmtN(s?.reversal_count)} alert={(s?.reversal_count || 0) > 0}
-          info="Transaksi yang punya baris Credit Amount (pembatalan/refund) di Mandiri." />
-        <KPICard label="Total Actual Fee" value={fmtRp(s?.total_actual_fee)}
-          info="Total biaya transfer yang benar-benar terpotong di Mandiri dari seluruh transaksi." />
-        <KPICard label="Expected Total Fee" value={fmtRp(s?.expected_total_fee)}
-          info="Total fee yang SEHARUSNYA terpotong = jumlah transaksi berfee × expected fee (default Rp100)." />
-        <KPICard label="Fee Variance" value={fmtRp(s?.fee_variance)} alert={Math.abs(s?.fee_variance || 0) > 0}
-          info="Selisih Total Actual Fee dikurangi Expected Total Fee." />
-        <KPICard label="Match Rate Transaksi" value={fmtPct(s?.match_rate_transaksi)}
+        <KPICard label="Match Rate Transaksi (Valid)" value={fmtPct(s?.match_rate_transaksi)}
           info="Persentase JUMLAH transaksi FP yang berhasil dicocokkan, dari total transaksi FP." />
-        <KPICard label="Match Rate Nominal" value={fmtPct(s?.match_rate_nominal)}
+        <KPICard label="Match Rate Nominal (Valid)" value={fmtPct(s?.match_rate_nominal)}
           info="Persentase NILAI (Rupiah) transaksi yang berhasil dicocokkan, dari total nominal FP." />
+        <KPICard label="Actionable Exception" value={fmtN(totalException)} alert={totalException > 0}
+          info="Total seluruh transaksi berstatus exception (Pending Bank, FP Only, Bank Only, Nominal Mismatch, Fee Mismatch, Duplicate, Reversal, Need Review) yang perlu ditindaklanjuti tim." />
+      </div>
+
+      <div className="wrr-mini-panel-row">
+        <StatusMiniTable title="FP Only" status="FP_ONLY" date={date}
+          info="Transaksi FP yang TIDAK ditemukan di Mandiri setelah masa tunggu selesai." />
+        <StatusMiniTable title="Bank Only" status="BANK_ONLY" date={date}
+          info="Mutasi Mandiri yang id_transaksi-nya tidak ditemukan di DATA FP." />
+        <StatusMiniTable title="Reversal" status="REVERSAL" date={date}
+          info="Transaksi yang punya baris Credit Amount (pembatalan/refund) di Mandiri." />
       </div>
 
       <div className="wrr-panel">
@@ -846,7 +894,7 @@ export default function WarRoomReconciliationMandiri() {
             ))}
           </div>
 
-          {activeTab === 'summary' && <SummaryTab analytics={analytics} onSelectStatus={handleSelectStatus} />}
+          {activeTab === 'summary' && <SummaryTab analytics={analytics} onSelectStatus={handleSelectStatus} date={date} />}
           {activeTab === 'hasil' && <ReconTable date={date} scope="all" onOpenAudit={setAuditId} initialStatus={jumpStatus} />}
           {activeTab === 'exception' && <ReconTable date={date} scope="exception" onOpenAudit={setAuditId} initialStatus={jumpStatus} />}
           {activeTab === 'fee' && <FeeAnalysisTab analytics={analytics} />}
