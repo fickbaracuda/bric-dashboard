@@ -208,6 +208,98 @@ function parseDescriptionFallback(description) {
   return { idOutlet: m[1], idTransaksi: m[2] };
 }
 
+/**
+ * Normalisasi 1 nilai jadi canonical transaction key: `String()` + `trim()`
+ * SAJA — TIDAK PERNAH diubah ke number (supaya leading zero & representasi
+ * asli id_transaksi/Reference No. dipertahankan persis). null/undefined/
+ * string kosong -> null. Dipakai konsisten di SELURUH titik yang perlu
+ * membandingkan/menyimpan identitas 1 transaksi (grouping bank, lookup FP,
+ * kolom `canonical_transaction_key` di DB) — supaya exact match (Reference
+ * No.) dan fallback match (Description) TIDAK PERNAH diperlakukan sbg 2
+ * transaksi berbeda hanya krn representasi string sedikit beda.
+ */
+function normalizeCanonicalKey(value) {
+  if (value === null || value === undefined) return null;
+  const s = String(value).trim();
+  return s === '' ? null : s;
+}
+
+/**
+ * Group SELURUH baris bank OCBC jadi 1 group per canonical transaction key
+ * — SATU pass, MENGGANTIKAN 2 index terpisah (bankByRef exact + fallback by
+ * description) yang dipakai versi lama. Prioritas key per baris:
+ *   1. Reference No. dinormalisasi (kalau tidak kosong).
+ *   2. id_transaksi hasil fallback Description (HANYA kalau Reference No.
+ *      kosong) — pola "..../<id_outlet><id_transaksi>".
+ *   3. Kalau keduanya tidak menghasilkan key valid -> baris diabaikan (di
+ *      luar scope rekonsiliasi, SAMA seperti perilaku lama).
+ *
+ * INSIDEN yang coba diperbaiki (root cause double result REVERSAL+
+ * BANK_ONLY): versi lama membangun `bankByRef` (Map exact, dari SEMUA baris
+ * ber-reference) dan `bankFallbackByIdTransaksi` (Map fallback, HANYA dari
+ * baris YANG REFERENCE-NYA KOSONG) sbg 2 STRUKTUR TERPISAH yang tidak
+ * saling sinkron. Kalau representasi Reference No. sedikit berbeda antar
+ * baris principal/fee/credit milik 1 transaksi logis yang SAMA (mis. akibat
+ * normalisasi angka vs string, leading zero hilang), grouping bisa retak
+ * jadi 2 identitas berbeda: 1 group ketemu via exact match (menghasilkan
+ * REVERSAL/MATCHED/dst di loop FP), sisanya (yang representasinya beda)
+ * lolos sbg baris "tanpa pasangan FP" di loop BANK_ONLY. Dengan SATU
+ * struktur group (Map, key sudah dinormalisasi identik di semua tempat)
+ * dan mekanisme `consumedBankKeys` (lihat pemanggil), 1 transaksi logis
+ * HANYA akan pernah menghasilkan TEPAT SATU recon result.
+ *
+ * expectedFee dipakai utk heuristik `hasPrincipal` (lihat field grup) —
+ * bank_only TIDAK boleh dibuat dari grup yang HANYA berisi baris seukuran
+ * fee (mis. Rp25) tanpa baris principal sungguhan.
+ */
+function buildOcbcBankGroups(bankRows, expectedFee) {
+  const groups = new Map();
+  for (const b of bankRows) {
+    const ref = normalizeCanonicalKey(b.referenceNo);
+    let canonicalKey = ref;
+    let matchMethod = 'reference_exact';
+    let candidateOutlet = null;
+    if (!canonicalKey) {
+      const parsed = parseDescriptionFallback(b.description);
+      if (!parsed) continue; // tidak ada key valid sama sekali -> di luar scope, diabaikan
+      canonicalKey = normalizeCanonicalKey(parsed.idTransaksi);
+      if (!canonicalKey) continue;
+      matchMethod = 'description_fallback';
+      candidateOutlet = parsed.idOutlet;
+    }
+    if (!groups.has(canonicalKey)) {
+      groups.set(canonicalKey, {
+        canonicalKey, referenceNo: ref || null, extractedTransactionId: ref ? null : canonicalKey,
+        matchMethod, candidateOutlet, rows: [],
+      });
+    }
+    const g = groups.get(canonicalKey);
+    g.rows.push(b);
+    // Kalau ADA baris di group ini yang punya reference_no non-kosong,
+    // group secara keseluruhan dianggap "reference_exact" (prioritas lebih
+    // tinggi drpd fallback) — konsisten dgn aturan lama "exact diprioritaskan".
+    if (ref && g.matchMethod === 'description_fallback') { g.matchMethod = 'reference_exact'; g.referenceNo = ref; }
+    if (candidateOutlet && !g.candidateOutlet) g.candidateOutlet = candidateOutlet;
+  }
+
+  for (const g of groups.values()) {
+    g.principalRows = g.rows.filter(r => typeof r.debit === 'number' && r.debit > 0);
+    g.feeRows = []; // diisi kontekstual saat matching FP (fee = principal rows selain principal yg cocok nominal)
+    g.creditRows = g.rows.filter(r => typeof r.credit === 'number' && r.credit > 0);
+    g.totalDebit = g.principalRows.reduce((s, r) => s + r.debit, 0);
+    g.totalCredit = g.creditRows.reduce((s, r) => s + r.credit, 0);
+    g.hasCredit = g.creditRows.length > 0;
+    g.hasFee = g.principalRows.length > 0;
+    // hasPrincipal: minimal 1 baris debit yang BUKAN seukuran expected fee —
+    // tanpa FP nominal utk dibandingkan, ini satu-satunya heuristik yg bisa
+    // membedakan "principal sungguhan" dari "cuma baris fee nyasar tanpa
+    // pasangan" (spec: bank_only tidak boleh dibuat dari grup fee-only).
+    g.hasPrincipal = g.principalRows.some(r => !numEq(r.debit, expectedFee));
+  }
+
+  return groups;
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // COVERAGE-AWARE RECONCILIATION — semua fungsi di bawah PURE, tidak
 // menyentuh DB, supaya bisa di-unit-test langsung.
@@ -425,30 +517,20 @@ function reconcileTransactions(fpRows, bankRows, config = {}, now = new Date()) 
   const expectedFee = typeof config.expectedFee === 'number' && Number.isFinite(config.expectedFee) ? config.expectedFee : DEFAULT_FEE_BIFAST;
   const graceMinutes = typeof config.graceMinutes === 'number' && Number.isFinite(config.graceMinutes) ? config.graceMinutes : DEFAULT_GRACE_MINUTES;
 
-  // Group bank rows by reference_no (trimmed, non-empty)
-  const bankByRef = new Map();
-  for (const b of bankRows) {
-    const ref = String(b.referenceNo || '').trim();
-    if (!ref) continue;
-    if (!bankByRef.has(ref)) bankByRef.set(ref, []);
-    bankByRef.get(ref).push(b);
-  }
-
-  // Index fallback: bank rows TANPA reference, diparse dari description
-  const bankFallbackByIdTransaksi = new Map();
-  for (const b of bankRows) {
-    const ref = String(b.referenceNo || '').trim();
-    if (ref) continue;
-    const parsed = parseDescriptionFallback(b.description);
-    if (!parsed) continue;
-    if (!bankFallbackByIdTransaksi.has(parsed.idTransaksi)) bankFallbackByIdTransaksi.set(parsed.idTransaksi, []);
-    bankFallbackByIdTransaksi.get(parsed.idTransaksi).push(b);
-  }
+  // Grouping bank per canonical transaction key — SATU struktur (bukan 2
+  // index terpisah exact+fallback yang bisa retak jadi 2 identitas berbeda
+  // utk 1 transaksi logis yang sama, lihat catatan panjang di
+  // buildOcbcBankGroups). consumedBankKeys menandai group yang SUDAH
+  // dipakai FP manapun (apa pun status akhirnya) supaya tidak PERNAH lagi
+  // jadi kandidat BANK_ONLY — root cause fix insiden REVERSAL+BANK_ONLY
+  // double count utk reference yang sama.
+  const bankGroups = buildOcbcBankGroups(bankRows, expectedFee);
+  const consumedBankKeys = new Set();
 
   // Deteksi duplikat id_transaksi di FP
   const fpCountById = new Map();
   for (const f of fpRows) {
-    const id = String(f.idTransaksi || '').trim();
+    const id = normalizeCanonicalKey(f.idTransaksi);
     if (!id) continue;
     fpCountById.set(id, (fpCountById.get(id) || 0) + 1);
   }
@@ -457,18 +539,13 @@ function reconcileTransactions(fpRows, bankRows, config = {}, now = new Date()) 
   const processedIds = new Set();
 
   for (const fp of fpRows) {
-    const idTransaksi = String(fp.idTransaksi || '').trim();
+    const idTransaksi = normalizeCanonicalKey(fp.idTransaksi);
     if (!idTransaksi || processedIds.has(idTransaksi)) continue;
     processedIds.add(idTransaksi);
 
     const isDuplicateFp = (fpCountById.get(idTransaksi) || 0) > 1;
-
-    let matchedBankRows = bankByRef.get(idTransaksi) || null;
-    let matchingMethod = matchedBankRows ? 'reference_exact' : null;
-    if (!matchedBankRows) {
-      matchedBankRows = bankFallbackByIdTransaksi.get(idTransaksi) || null;
-      matchingMethod = matchedBankRows ? 'description_fallback' : null;
-    }
+    const matchedGroup = bankGroups.get(idTransaksi) || null;
+    const matchingMethod = matchedGroup ? matchedGroup.matchMethod : null;
 
     const fpTimeResponse = fp.timeResponse instanceof Date && !Number.isNaN(fp.timeResponse.getTime()) ? fp.timeResponse : null;
     const agingMinutes = fpTimeResponse ? Math.round((now.getTime() - fpTimeResponse.getTime()) / 60000) : null;
@@ -488,19 +565,24 @@ function reconcileTransactions(fpRows, bankRows, config = {}, now = new Date()) 
       continue;
     }
 
-    if (!matchedBankRows || !matchedBankRows.length) {
+    if (!matchedGroup || !matchedGroup.rows.length) {
       result.reconStatus = (agingMinutes !== null && agingMinutes < graceMinutes) ? 'PENDING_BANK' : 'FP_ONLY';
       results.push(result);
       continue;
     }
 
-    result.referenceNo = matchingMethod === 'reference_exact' ? idTransaksi : (matchedBankRows[0].referenceNo || null);
-    result.bankTransactionDate = matchedBankRows[0].transactionDate || null;
+    // Tandai consumed SEGERA, SEBELUM cascade status ditentukan — group ini
+    // valid sbg pasangan FP apa pun hasil akhirnya (MATCHED, NOMINAL_MISMATCH,
+    // DUPLICATE_BANK, REVERSAL, dst), sehingga TIDAK BOLEH lagi jadi BANK_ONLY.
+    consumedBankKeys.add(matchedGroup.canonicalKey);
 
-    const debitRows = matchedBankRows.filter(b => typeof b.debit === 'number' && b.debit > 0);
-    const creditRows = matchedBankRows.filter(b => typeof b.credit === 'number' && b.credit > 0);
-    const bankCreditTotal = creditRows.reduce((s, b) => s + b.credit, 0);
-    const bankTotalDebit = debitRows.reduce((s, b) => s + b.debit, 0);
+    result.referenceNo = matchingMethod === 'reference_exact' ? idTransaksi : (matchedGroup.referenceNo || null);
+    result.bankTransactionDate = matchedGroup.rows[0].transactionDate || null;
+
+    const debitRows = matchedGroup.principalRows;
+    const creditRows = matchedGroup.creditRows;
+    const bankCreditTotal = matchedGroup.totalCredit;
+    const bankTotalDebit = matchedGroup.totalDebit;
 
     result.bankCredit = creditRows.length ? bankCreditTotal : null;
     result.bankTotalDebit = debitRows.length ? bankTotalDebit : null;
@@ -543,53 +625,27 @@ function reconcileTransactions(fpRows, bankRows, config = {}, now = new Date()) 
     results.push(result);
   }
 
-  // BANK_ONLY — reference/description yang pola-nya "dalam scope" FP (outlet+id
-  // transaksi) tapi tidak match FP manapun. Mutasi bank yang polanya TIDAK
-  // cocok sama sekali (bukan format id_outlet+id_transaksi) DIABAIKAN, bukan
-  // otomatis jadi bank-only (instruksi eksplisit — supaya tidak flood exception
-  // dengan mutasi bank yang sama sekali tidak terkait FP).
-  const fpIdSet = new Set(fpRows.map(f => String(f.idTransaksi || '').trim()).filter(Boolean));
-  const seenBankOnly = new Set();
-  for (const b of bankRows) {
-    const ref = String(b.referenceNo || '').trim();
-    let candidateId = null;
-    let candidateOutlet = null;
-
-    if (ref) {
-      if (fpIdSet.has(ref)) continue;
-      candidateId = ref;
-    } else {
-      const parsed = parseDescriptionFallback(b.description);
-      if (!parsed) continue;
-      if (fpIdSet.has(parsed.idTransaksi)) continue;
-      candidateId = parsed.idTransaksi;
-      candidateOutlet = parsed.idOutlet;
-    }
-
-    if (typeof b.debit !== 'number' || b.debit <= 0) continue; // fokus baris debit, bukan mutasi credit murni
-    if (seenBankOnly.has(candidateId)) continue;
-    seenBankOnly.add(candidateId);
-
-    const group = ref ? (bankByRef.get(ref) || [b]) : [b];
-    const debitRows = group.filter(x => typeof x.debit === 'number' && x.debit > 0);
-    const creditRows = group.filter(x => typeof x.credit === 'number' && x.credit > 0);
-    const bankTotalDebit = debitRows.reduce((s, x) => s + x.debit, 0);
-    const bankCredit = creditRows.reduce((s, x) => s + x.credit, 0);
+  // BANK_ONLY — per GROUP (bukan per baris bank), HANYA dari group yang
+  // BELUM pernah consumed FP manapun di atas. fpIdSet dicek juga sbg
+  // defense-in-depth kedua (redundan dgn consumedBankKeys secara teori,
+  // tapi eksplisit sesuai spec supaya robust thd kemungkinan edge case).
+  const fpIdSet = new Set(fpRows.map(f => normalizeCanonicalKey(f.idTransaksi)).filter(Boolean));
+  for (const group of bankGroups.values()) {
+    if (consumedBankKeys.has(group.canonicalKey)) continue;
+    if (fpIdSet.has(group.canonicalKey)) continue;
+    if (!group.hasPrincipal) continue; // fee-only ATAU credit-only -> bukan BANK_ONLY
 
     results.push({
-      // referenceNo diisi candidateId kalau ref asli kosong (hasil parse
-      // description) — WAJIB tidak null, supaya key upsert (batch_id,
-      // id_transaksi, reference_no) unik per kandidat BANK_ONLY (kalau
-      // dibiarkan null, semua baris fallback tanpa reference akan tabrakan
-      // jadi 1 baris saja karena id_transaksi & reference_no sama-sama null).
-      idTransaksi: null, referenceNo: ref || candidateId, idOutlet: candidateOutlet, idProduk: null, idBiller: null,
-      fpNominal: null, fpTimeResponse: null, bankTransactionDate: group[0].transactionDate || null,
-      bankPrincipal: null, bankFee: null, bankCredit: creditRows.length ? bankCredit : null,
-      bankTotalDebit: debitRows.length ? bankTotalDebit : null,
+      // referenceNo WAJIB tidak null (fallback ke canonicalKey) supaya key
+      // upsert/canonical_transaction_key unik per kandidat BANK_ONLY.
+      idTransaksi: null, referenceNo: group.referenceNo || group.canonicalKey, idOutlet: group.candidateOutlet, idProduk: null, idBiller: null,
+      fpNominal: null, fpTimeResponse: null, bankTransactionDate: group.rows[0].transactionDate || null,
+      bankPrincipal: null, bankFee: null, bankCredit: group.hasCredit ? group.totalCredit : null,
+      bankTotalDebit: group.hasFee ? group.totalDebit : null,
       variancePrincipal: null, varianceFee: null,
-      matchingMethod: ref ? 'reference_exact' : 'description_fallback',
+      matchingMethod: group.matchMethod,
       reconStatus: 'BANK_ONLY', agingMinutes: null,
-      notes: `Ditemukan di bank (kandidat id_transaksi: ${candidateId}) tapi tidak ada di DATA FP.`,
+      notes: `Ditemukan di bank (kandidat id_transaksi: ${group.canonicalKey}) tapi tidak ada di DATA FP.`,
     });
   }
 
@@ -622,26 +678,15 @@ function reconcileTransactionsWithCoverage(fpRows, bankRows, config = {}, now = 
   // (mis. unit test dgn array flat sederhana), hitung otomatis dari bankRows.
   const coverage = config.coverage || calculateOcbcCoverage(bankRows, config);
 
-  const bankByRef = new Map();
-  for (const b of bankRows) {
-    const ref = String(b.referenceNo || '').trim();
-    if (!ref) continue;
-    if (!bankByRef.has(ref)) bankByRef.set(ref, []);
-    bankByRef.get(ref).push(b);
-  }
-  const bankFallbackByIdTransaksi = new Map();
-  for (const b of bankRows) {
-    const ref = String(b.referenceNo || '').trim();
-    if (ref) continue;
-    const parsed = parseDescriptionFallback(b.description);
-    if (!parsed) continue;
-    if (!bankFallbackByIdTransaksi.has(parsed.idTransaksi)) bankFallbackByIdTransaksi.set(parsed.idTransaksi, []);
-    bankFallbackByIdTransaksi.get(parsed.idTransaksi).push(b);
-  }
+  // Grouping bank per canonical transaction key + consumedBankKeys — lihat
+  // catatan panjang di buildOcbcBankGroups() & reconcileTransactions() utk
+  // root cause fix insiden REVERSAL+BANK_ONLY double count.
+  const bankGroups = buildOcbcBankGroups(bankRows, expectedFee);
+  const consumedBankKeys = new Set();
 
   const fpCountById = new Map();
   for (const f of fpRows) {
-    const id = String(f.idTransaksi || '').trim();
+    const id = normalizeCanonicalKey(f.idTransaksi);
     if (!id) continue;
     fpCountById.set(id, (fpCountById.get(id) || 0) + 1);
   }
@@ -650,18 +695,14 @@ function reconcileTransactionsWithCoverage(fpRows, bankRows, config = {}, now = 
   const processedIds = new Set();
 
   for (const fp of fpRows) {
-    const idTransaksi = String(fp.idTransaksi || '').trim();
+    const idTransaksi = normalizeCanonicalKey(fp.idTransaksi);
     if (!idTransaksi || processedIds.has(idTransaksi)) continue;
     processedIds.add(idTransaksi);
 
     const isDuplicateFp = (fpCountById.get(idTransaksi) || 0) > 1;
-
-    let matchedBankRows = bankByRef.get(idTransaksi) || null;
-    let matchingMethod = matchedBankRows ? 'reference_exact' : null;
-    if (!matchedBankRows) {
-      matchedBankRows = bankFallbackByIdTransaksi.get(idTransaksi) || null;
-      matchingMethod = matchedBankRows ? 'description_fallback' : null;
-    }
+    const matchedGroup = bankGroups.get(idTransaksi) || null;
+    const matchingMethod = matchedGroup ? matchedGroup.matchMethod : null;
+    const matchedBankRows = matchedGroup ? matchedGroup.rows : null;
 
     const fpTimeResponse = fp.timeResponse instanceof Date && !Number.isNaN(fp.timeResponse.getTime()) ? fp.timeResponse : null;
     const agingMinutes = fpTimeResponse ? Math.round((now.getTime() - fpTimeResponse.getTime()) / 60000) : null;
@@ -691,17 +732,19 @@ function reconcileTransactionsWithCoverage(fpRows, bankRows, config = {}, now = 
       // dihitung match rate. Kalau kebetulan ada partial bank data (mis. fee
       // saja di BOUNDARY_PARTIAL), tetap dicatat sbg referensi visual di Raw
       // Data, tapi tidak pernah dipaksa jadi NEED_REVIEW/NOMINAL_MISMATCH.
+      // TETAP tandai consumed kalau group ditemukan -- group ini SUDAH
+      // "dipakai" utk FP ini (walau tidak actionable), jangan sampai ganda
+      // muncul lagi sbg BANK_ONLY di luar cakupan.
       result.reconStatus = null;
       result.isActionable = false;
       result.eligibleForMatchRate = false;
-      if (matchedBankRows && matchedBankRows.length) {
-        result.referenceNo = matchingMethod === 'reference_exact' ? idTransaksi : (matchedBankRows[0].referenceNo || null);
-        result.bankTransactionDate = matchedBankRows[0].transactionDate || null;
-        const debitRows = matchedBankRows.filter(b => typeof b.debit === 'number' && b.debit > 0);
-        const creditRows = matchedBankRows.filter(b => typeof b.credit === 'number' && b.credit > 0);
-        result.bankTotalDebit = debitRows.length ? debitRows.reduce((s, b) => s + b.debit, 0) : null;
-        result.bankCredit = creditRows.length ? creditRows.reduce((s, b) => s + b.credit, 0) : null;
-        result.archiveMatch = matchedBankRows.some(b => b.fromArchive === true);
+      if (matchedGroup && matchedGroup.rows.length) {
+        consumedBankKeys.add(matchedGroup.canonicalKey);
+        result.referenceNo = matchingMethod === 'reference_exact' ? idTransaksi : (matchedGroup.referenceNo || null);
+        result.bankTransactionDate = matchedGroup.rows[0].transactionDate || null;
+        result.bankTotalDebit = matchedGroup.principalRows.length ? matchedGroup.totalDebit : null;
+        result.bankCredit = matchedGroup.creditRows.length ? matchedGroup.totalCredit : null;
+        result.archiveMatch = matchedGroup.rows.some(b => b.fromArchive === true);
       }
       results.push(result);
       continue;
@@ -709,20 +752,24 @@ function reconcileTransactionsWithCoverage(fpRows, bankRows, config = {}, now = 
 
     // ── coverage_status = IN_BANK_COVERAGE -> cascade normal, IDENTIK dgn
     // reconcileTransactions() asli ──
-    if (!matchedBankRows || !matchedBankRows.length) {
+    if (!matchedGroup || !matchedGroup.rows.length) {
       result.reconStatus = (agingMinutes !== null && agingMinutes < graceMinutes) ? 'PENDING_BANK' : 'FP_ONLY';
       results.push(result);
       continue;
     }
 
-    result.referenceNo = matchingMethod === 'reference_exact' ? idTransaksi : (matchedBankRows[0].referenceNo || null);
-    result.bankTransactionDate = matchedBankRows[0].transactionDate || null;
-    result.archiveMatch = matchedBankRows.some(b => b.fromArchive === true);
+    // Tandai consumed SEGERA, SEBELUM cascade status ditentukan (lihat
+    // catatan panjang di reconcileTransactions()).
+    consumedBankKeys.add(matchedGroup.canonicalKey);
 
-    const debitRows = matchedBankRows.filter(b => typeof b.debit === 'number' && b.debit > 0);
-    const creditRows = matchedBankRows.filter(b => typeof b.credit === 'number' && b.credit > 0);
-    const bankCreditTotal = creditRows.reduce((s, b) => s + b.credit, 0);
-    const bankTotalDebit = debitRows.reduce((s, b) => s + b.debit, 0);
+    result.referenceNo = matchingMethod === 'reference_exact' ? idTransaksi : (matchedGroup.referenceNo || null);
+    result.bankTransactionDate = matchedGroup.rows[0].transactionDate || null;
+    result.archiveMatch = matchedGroup.rows.some(b => b.fromArchive === true);
+
+    const debitRows = matchedGroup.principalRows;
+    const creditRows = matchedGroup.creditRows;
+    const bankCreditTotal = matchedGroup.totalCredit;
+    const bankTotalDebit = matchedGroup.totalDebit;
 
     result.bankCredit = creditRows.length ? bankCreditTotal : null;
     result.bankTotalDebit = debitRows.length ? bankTotalDebit : null;
@@ -764,55 +811,34 @@ function reconcileTransactionsWithCoverage(fpRows, bankRows, config = {}, now = 
     results.push(result);
   }
 
-  // ── BANK_ONLY — TAMBAHAN dari versi asli: kalau truncated, baris yang
-  // berada DI or SEBELUM boundary minute TIDAK BOLEH jadi BANK_ONLY (spec:
-  // "berada dalam trusted coverage" + "fee-only group pada boundary jangan
-  // menjadi BANK_ONLY"). Kondisi <= boundaryMinuteEnd mencakup KEDUA kasus
-  // itu sekaligus (row lebih tua ATAU persis di menit batas). ──
-  const fpIdSet = new Set(fpRows.map(f => String(f.idTransaksi || '').trim()).filter(Boolean));
-  const seenBankOnly = new Set();
-  for (const b of bankRows) {
-    const ref = String(b.referenceNo || '').trim();
-    let candidateId = null;
-    let candidateOutlet = null;
+  // ── BANK_ONLY — per GROUP (bukan per baris bank). HANYA dari group yang
+  // belum consumed FP manapun DAN, kalau truncated, TIDAK boleh ada satu pun
+  // baris di group yang berada DI/SEBELUM boundary minute (spec: "berada
+  // dalam trusted coverage" + "fee-only group pada boundary jangan menjadi
+  // BANK_ONLY") — kalau salah satu baris grup masih di zona batas yang
+  // berpotensi terpotong, seluruh grup dianggap belum pasti lengkap. ──
+  const fpIdSet = new Set(fpRows.map(f => normalizeCanonicalKey(f.idTransaksi)).filter(Boolean));
+  for (const group of bankGroups.values()) {
+    if (consumedBankKeys.has(group.canonicalKey)) continue;
+    if (fpIdSet.has(group.canonicalKey)) continue;
+    if (!group.hasPrincipal) continue; // fee-only ATAU credit-only -> bukan BANK_ONLY
 
-    if (ref) {
-      if (fpIdSet.has(ref)) continue;
-      candidateId = ref;
-    } else {
-      const parsed = parseDescriptionFallback(b.description);
-      if (!parsed) continue;
-      if (fpIdSet.has(parsed.idTransaksi)) continue;
-      candidateId = parsed.idTransaksi;
-      candidateOutlet = parsed.idOutlet;
+    if (coverage.isSourceTruncated && coverage.boundaryMinuteEnd) {
+      const hasBoundaryRow = group.rows.some(x => x.transactionDateTime instanceof Date && x.transactionDateTime.getTime() <= coverage.boundaryMinuteEnd.getTime());
+      if (hasBoundaryRow) continue;
     }
-
-    if (typeof b.debit !== 'number' || b.debit <= 0) continue;
-    if (seenBankOnly.has(candidateId)) continue;
-
-    if (coverage.isSourceTruncated && coverage.boundaryMinuteEnd && b.transactionDateTime instanceof Date) {
-      if (b.transactionDateTime.getTime() <= coverage.boundaryMinuteEnd.getTime()) continue;
-    }
-
-    seenBankOnly.add(candidateId);
-
-    const group = ref ? (bankByRef.get(ref) || [b]) : [b];
-    const debitRowsG = group.filter(x => typeof x.debit === 'number' && x.debit > 0);
-    const creditRowsG = group.filter(x => typeof x.credit === 'number' && x.credit > 0);
-    const bankTotalDebitG = debitRowsG.reduce((s, x) => s + x.debit, 0);
-    const bankCreditG = creditRowsG.reduce((s, x) => s + x.credit, 0);
 
     results.push({
-      idTransaksi: null, referenceNo: ref || candidateId, idOutlet: candidateOutlet, idProduk: null, idBiller: null,
-      fpNominal: null, fpTimeResponse: null, bankTransactionDate: group[0].transactionDate || null,
-      bankPrincipal: null, bankFee: null, bankCredit: creditRowsG.length ? bankCreditG : null,
-      bankTotalDebit: debitRowsG.length ? bankTotalDebitG : null,
+      idTransaksi: null, referenceNo: group.referenceNo || group.canonicalKey, idOutlet: group.candidateOutlet, idProduk: null, idBiller: null,
+      fpNominal: null, fpTimeResponse: null, bankTransactionDate: group.rows[0].transactionDate || null,
+      bankPrincipal: null, bankFee: null, bankCredit: group.hasCredit ? group.totalCredit : null,
+      bankTotalDebit: group.hasFee ? group.totalDebit : null,
       variancePrincipal: null, varianceFee: null,
-      matchingMethod: ref ? 'reference_exact' : 'description_fallback',
+      matchingMethod: group.matchMethod,
       reconStatus: 'BANK_ONLY', agingMinutes: null,
-      notes: `Ditemukan di bank (kandidat id_transaksi: ${candidateId}) tapi tidak ada di DATA FP.`,
+      notes: `Ditemukan di bank (kandidat id_transaksi: ${group.canonicalKey}) tapi tidak ada di DATA FP.`,
       coverageStatus: 'IN_BANK_COVERAGE', coverageReason: null, isActionable: true, eligibleForMatchRate: true,
-      archiveMatch: group.some(x => x.fromArchive === true),
+      archiveMatch: group.rows.some(x => x.fromArchive === true),
     });
   }
 
@@ -916,14 +942,21 @@ async function runOcbcEngineAndPersist(client, { batchId, bankCode, accountNo, b
   const { results } = reconcileTransactionsWithCoverage(fpForEngine, bankForEngine, { ...configOverride, coverage }, now);
 
   for (const r of results) {
+    // canonical_transaction_key = identitas TUNGGAL 1 transaksi (id_transaksi
+    // kalau ada, else reference_no) -- fix bug 1 transaksi logis (mis. yang
+    // sudah REVERSAL) tersimpan sbg 2 baris berbeda gara2 BANK_ONLY lama
+    // (id_transaksi NULL) punya kombinasi lama yang literal berbeda. Lihat
+    // migration add_reconciliation_canonical_transaction_key(_unique).sql.
+    const canonicalKey = normalizeCanonicalKey(r.idTransaksi) || normalizeCanonicalKey(r.referenceNo);
     await client.query(
       `INSERT INTO recon_results
-         (batch_id, id_transaksi, reference_no, id_outlet, id_produk, id_biller, fp_nominal, fp_time_response,
+         (batch_id, id_transaksi, reference_no, canonical_transaction_key, id_outlet, id_produk, id_biller, fp_nominal, fp_time_response,
           bank_transaction_date, bank_principal, bank_fee, bank_credit, bank_total_debit,
           variance_principal, variance_fee, matching_method, recon_status, aging_minutes, notes,
           coverage_status, coverage_reason, is_actionable, eligible_for_match_rate, bank_snapshot_id, archive_match, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,NOW())
-       ON CONFLICT (batch_id, COALESCE(id_transaksi, ''), COALESCE(reference_no, '')) DO UPDATE SET
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,NOW())
+       ON CONFLICT (batch_id, canonical_transaction_key) DO UPDATE SET
+         id_transaksi = EXCLUDED.id_transaksi, reference_no = EXCLUDED.reference_no,
          id_outlet = EXCLUDED.id_outlet, id_produk = EXCLUDED.id_produk, id_biller = EXCLUDED.id_biller,
          fp_nominal = EXCLUDED.fp_nominal, fp_time_response = EXCLUDED.fp_time_response,
          bank_transaction_date = EXCLUDED.bank_transaction_date, bank_principal = EXCLUDED.bank_principal,
@@ -935,7 +968,7 @@ async function runOcbcEngineAndPersist(client, { batchId, bankCode, accountNo, b
          is_actionable = EXCLUDED.is_actionable, eligible_for_match_rate = EXCLUDED.eligible_for_match_rate,
          bank_snapshot_id = EXCLUDED.bank_snapshot_id, archive_match = EXCLUDED.archive_match, updated_at = NOW()`,
       [
-        batchId, r.idTransaksi, r.referenceNo, r.idOutlet, r.idProduk, r.idBiller, r.fpNominal, r.fpTimeResponse,
+        batchId, r.idTransaksi, r.referenceNo, canonicalKey, r.idOutlet, r.idProduk, r.idBiller, r.fpNominal, r.fpTimeResponse,
         r.bankTransactionDate, r.bankPrincipal, r.bankFee, r.bankCredit, r.bankTotalDebit,
         r.variancePrincipal, r.varianceFee, r.matchingMethod, r.reconStatus, r.agingMinutes, r.notes,
         r.coverageStatus, r.coverageReason, r.isActionable, r.eligibleForMatchRate, snapshotMeta.id, r.archiveMatch,
@@ -943,10 +976,16 @@ async function runOcbcEngineAndPersist(client, { batchId, bankCode, accountNo, b
     );
   }
 
-  // Hapus recon_results lama yang tidak lagi dihasilkan engine (mis. baris FP dihapus dari sheet)
-  const currentKeys = results.map(r => `${r.idTransaksi || ''}|${r.referenceNo || ''}`);
+  // Hapus recon_results lama yang tidak lagi dihasilkan engine (mis. baris FP
+  // dihapus dari sheet, ATAU baris BANK_ONLY basi yang sekarang consumed jadi
+  // REVERSAL/MATCHED/dst -- key sama, jadi row LAMA sudah di-UPDATE via
+  // upsert di atas, bukan diduplikasi; DELETE ini hanya utk key yang benar2
+  // sudah tidak dihasilkan sama sekali oleh run terbaru).
+  const currentKeys = results
+    .map(r => normalizeCanonicalKey(r.idTransaksi) || normalizeCanonicalKey(r.referenceNo))
+    .filter(Boolean);
   await client.query(
-    `DELETE FROM recon_results WHERE batch_id = $1 AND (COALESCE(id_transaksi,'') || '|' || COALESCE(reference_no,'')) <> ALL($2::text[])`,
+    `DELETE FROM recon_results WHERE batch_id = $1 AND canonical_transaction_key <> ALL($2::text[])`,
     [batchId, currentKeys.length ? currentKeys : ['']]
   );
 
@@ -1287,6 +1326,28 @@ async function analyticsHandler(req, res) {
     const crossDateRows = resultsRes.rows.filter(r => r.bank_transaction_date !== null && r.bank_transaction_date !== date);
     const results = resultsRes.rows.filter(r => r.bank_transaction_date === null || r.bank_transaction_date === date);
 
+    // ── Diagnostic: 1 transaksi logis WAJIB persis 1 hasil per
+    // canonical_transaction_key dalam 1 batch (fix bug REVERSAL+BANK_ONLY
+    // double count utk Reference No. yang sama). Setelah fix engine + unique
+    // index (batch_id, canonical_transaction_key) aktif, ini SELALU 0 --
+    // dipertahankan sbg diagnostic permanen (bukan cuma sekali jalan) utk
+    // mendeteksi regresi.
+    const canonicalGroups = new Map();
+    for (const r of results) {
+      const key = r.canonical_transaction_key;
+      if (!key) continue;
+      if (!canonicalGroups.has(key)) canonicalGroups.set(key, []);
+      canonicalGroups.get(key).push(r);
+    }
+    let duplicateCanonicalResultCount = 0;
+    let reversalAlsoBankOnlyCount = 0;
+    for (const rows of canonicalGroups.values()) {
+      if (rows.length <= 1) continue;
+      duplicateCanonicalResultCount += rows.length;
+      const statuses = rows.map(r => r.recon_status);
+      if (statuses.includes('REVERSAL') && statuses.includes('BANK_ONLY')) reversalAlsoBankOnlyCount++;
+    }
+
     const totalTransaksiFp = Number(fpCountRes.rows[0]?.c || 0);
     const totalNominalFp = Number(fpCountRes.rows[0]?.s || 0);
     const referenceBankUnik = Number(bankRefCountRes.rows[0]?.c || 0);
@@ -1451,12 +1512,21 @@ async function analyticsHandler(req, res) {
         batch_id: batch.id, bank_code: batch.bank_code, business_date: date,
         account_no: batch.account_no, synced_at: batch.synced_at,
       },
-      // Seharusnya SELALU null setelah fix cross-date + repair script
-      // dijalankan -- kalau masih muncul, berarti ada recon_results stale
-      // yg belum dibersihkan (jalankan backend/scripts/repair-reconciliation-cross-date.js).
-      data_quality_warning: crossDateRows.length > 0 ? {
+      // Seharusnya SELALU null setelah fix cross-date/duplicate + repair
+      // script dijalankan -- kalau masih muncul, berarti ada recon_results
+      // stale yg belum dibersihkan.
+      data_quality_warning: (crossDateRows.length > 0 || duplicateCanonicalResultCount > 0) ? {
         cross_date_result_count: crossDateRows.length,
-        message: `Ditemukan ${crossDateRows.length} baris hasil rekonsiliasi pada batch ${date} dengan bank_transaction_date di luar tanggal ini (data stale, dikecualikan otomatis dari summary). Jalankan backend/scripts/repair-reconciliation-cross-date.js --apply untuk membersihkan permanen.`,
+        duplicate_canonical_result_count: duplicateCanonicalResultCount,
+        reversal_also_bank_only_count: reversalAlsoBankOnlyCount,
+        message: [
+          crossDateRows.length > 0
+            ? `Ditemukan ${crossDateRows.length} baris hasil rekonsiliasi pada batch ${date} dengan bank_transaction_date di luar tanggal ini (data stale, dikecualikan otomatis dari summary). Jalankan backend/scripts/repair-reconciliation-cross-date.js --apply.`
+            : null,
+          duplicateCanonicalResultCount > 0
+            ? `Ditemukan ${duplicateCanonicalResultCount} baris hasil rekonsiliasi (${reversalAlsoBankOnlyCount} di antaranya pasangan REVERSAL+BANK_ONLY) berbagi canonical_transaction_key yang sama -- 1 transaksi seharusnya cuma 1 hasil. Jalankan backend/scripts/repair-reversal-bank-only-duplicates.js --apply.`
+            : null,
+        ].filter(Boolean).join(' '),
       } : null,
       summary, status_distribution, statement_validation, fee_analysis, coverage, recent_batches: recentBatches,
     });
@@ -1776,4 +1846,7 @@ module.exports = {
   runOcbcEngineAndPersist,
   // exported utk unit test (buildTransactionsQuery pure, tidak menyentuh DB)
   buildTransactionsQuery,
+  // exported utk unit test + repair script canonical key (fix REVERSAL+BANK_ONLY duplicate)
+  normalizeCanonicalKey,
+  buildOcbcBankGroups,
 };

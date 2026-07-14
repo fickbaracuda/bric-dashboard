@@ -10,7 +10,7 @@ const {
   reconcileTransactionsWithCoverage, calculateOcbcCoverage, classifyFpCoverage, isCompleteOcbcGroup,
   buildOcbcBankArchiveRows, computeBankRowFingerprint,
   parseOcbcRawDateTimeFallback, resolveOcbcTransactionDateTime, parseFlexibleOcbcDateTime,
-  buildTransactionsQuery,
+  buildTransactionsQuery, normalizeCanonicalKey, buildOcbcBankGroups,
 } = require('../src/routes/warroom-reconciliation');
 
 const tests = [];
@@ -549,6 +549,107 @@ test('CROSS-DATE TEST 2: buildTransactionsQuery -- tanpa date -> TIDAK ada filte
   const { whereClause } = buildTransactionsQuery({ query: { bank_code: 'OCBC' } });
   assert.ok(!whereClause.includes('business_date'), `whereClause TIDAK boleh mengandung business_date kalau date tidak diberikan, got: ${whereClause}`);
   assert.ok(!whereClause.includes('bank_transaction_date'), `whereClause TIDAK boleh mengandung bank_transaction_date kalau date tidak diberikan, got: ${whereClause}`);
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// BUG REVERSAL+BANK_ONLY DUPLICATE — root cause: `bankByRef` (exact, dari
+// SEMUA baris ber-reference) dan `bankFallbackByIdTransaksi` (fallback,
+// HANYA dari baris ber-reference KOSONG) adalah 2 index TERPISAH yang bisa
+// retak jadi 2 identitas berbeda utk 1 transaksi logis yang sama. Fix:
+// buildOcbcBankGroups() -- SATU struktur group per canonical transaction
+// key -- + consumedBankKeys (ditandai SEGERA saat bank group dipakai FP
+// manapun, apa pun status akhirnya) supaya BANK_ONLY loop (kini per GROUP,
+// bukan per baris) tidak PERNAH lagi membuat entri utk group yang sudah
+// consumed. TEST 9-13 dari spesifikasi (resync, idempotensi, resolution
+// manual existing, cross-date, regresi Mandiri) adalah skenario DB/live —
+// diverifikasi end-to-end lewat server sungguhan, lihat laporan implementasi
+// (pola yang sama dgn TEST 8/TEST 10 di bagian coverage-aware di atas).
+// ═══════════════════════════════════════════════════════════════════════
+test('REVERSAL-DUP TEST 1: REVERSAL dengan pasangan FP -> 1 result saja, TIDAK ada BANK_ONLY duplikat (contoh spek)', () => {
+  const fpRows = [fp('3556000001', 500000)];
+  const bankRows = [
+    bankRow('3556000001', { debit: 500000 }),
+    bankRow('3556000001', { debit: 25 }),
+    bankRow('3556000001', { credit: 500000 }),
+  ];
+  const { results } = reconcileTransactionsWithCoverage(fpRows, bankRows, {}, new Date());
+  assert.strictEqual(results.length, 1, `harus 1 result, got ${results.length}: ${JSON.stringify(results)}`);
+  assert.strictEqual(results[0].reconStatus, 'REVERSAL');
+  assert.strictEqual(results[0].bankPrincipal, 500000);
+  assert.strictEqual(results[0].bankFee, 25);
+  assert.strictEqual(results[0].bankCredit, 500000);
+  assert.strictEqual(results.filter(r => r.reconStatus === 'BANK_ONLY').length, 0);
+});
+test('REVERSAL-DUP TEST 2: MATCHED normal tetap 1 result (regresi)', () => {
+  const { results } = reconcileTransactionsWithCoverage([fp('3556000002', 100000)], [
+    bankRow('3556000002', { debit: 100000 }), bankRow('3556000002', { debit: 25 }),
+  ], {}, new Date());
+  assert.strictEqual(results.length, 1);
+  assert.strictEqual(results[0].reconStatus, 'MATCHED');
+});
+test('REVERSAL-DUP TEST 3: NOMINAL_MISMATCH -- bank group tetap consumed, TIDAK jadi BANK_ONLY kedua', () => {
+  const { results } = reconcileTransactionsWithCoverage([fp('3556000003', 100000)], [
+    bankRow('3556000003', { debit: 90000 }), bankRow('3556000003', { debit: 25 }),
+  ], {}, new Date());
+  assert.strictEqual(results.length, 1, `harus 1 result (NOMINAL_MISMATCH consumed), got ${results.length}`);
+  assert.strictEqual(results[0].reconStatus, 'NOMINAL_MISMATCH');
+});
+test('REVERSAL-DUP TEST 4: BANK_ONLY valid (tidak ada FP sama sekali)', () => {
+  const { results } = reconcileTransactionsWithCoverage([], [
+    bankRow('3556000004', { debit: 200000, description: '.../HH829153556000004' }),
+    bankRow('3556000004', { debit: 25, description: '.../HH829153556000004' }),
+  ], {}, new Date());
+  assert.strictEqual(results.length, 1);
+  assert.strictEqual(results[0].reconStatus, 'BANK_ONLY');
+});
+test('REVERSAL-DUP TEST 5: credit only tanpa FP -> BUKAN BANK_ONLY', () => {
+  const { results } = reconcileTransactionsWithCoverage([], [
+    bankRow('3556000005', { credit: 300000, description: '.../HH829153556000005' }),
+  ], {}, new Date());
+  assert.strictEqual(results.length, 0, `credit-only tanpa principal TIDAK boleh jadi BANK_ONLY, got: ${JSON.stringify(results)}`);
+});
+test('REVERSAL-DUP TEST 6: fee only (Rp25) tanpa FP -> BUKAN BANK_ONLY', () => {
+  const { results } = reconcileTransactionsWithCoverage([], [
+    bankRow('3556000006', { debit: 25, description: '.../HH829153556000006' }),
+  ], {}, new Date());
+  assert.strictEqual(results.length, 0, `fee-only (tanpa principal sungguhan) TIDAK boleh jadi BANK_ONLY, got: ${JSON.stringify(results)}`);
+});
+test('REVERSAL-DUP TEST 7: fallback description (reference kosong) dengan credit -> REVERSAL, bukan duplikat', () => {
+  const fpRows = [fp('3556000007', 150000)];
+  const bankRows = [
+    bankRow(null, { debit: 150000, description: '.../HH829153556000007' }),
+    bankRow(null, { debit: 25, description: '.../HH829153556000007' }),
+    bankRow(null, { credit: 150025, description: '.../HH829153556000007' }),
+  ];
+  const { results } = reconcileTransactionsWithCoverage(fpRows, bankRows, {}, new Date());
+  assert.strictEqual(results.length, 1, `harus 1 result, got ${results.length}: ${JSON.stringify(results)}`);
+  assert.strictEqual(results[0].reconStatus, 'REVERSAL');
+  assert.strictEqual(results[0].matchingMethod, 'description_fallback');
+});
+test('REVERSAL-DUP TEST 8: exact reference & fallback description sama-sama match -> 1 group, tidak duplicate', () => {
+  const fpRows = [fp('3556000008', 80000)];
+  const bankRows = [bankRow('3556000008', { debit: 80000, description: '.../HH829153556000008' })];
+  const groups = buildOcbcBankGroups(bankRows, 25);
+  assert.strictEqual(groups.size, 1, `harus 1 group, got ${groups.size}`);
+  const { results } = reconcileTransactionsWithCoverage(fpRows, bankRows, {}, new Date());
+  assert.strictEqual(results.length, 1);
+  assert.strictEqual(results[0].matchingMethod, 'reference_exact');
+});
+test('normalizeCanonicalKey: preserve leading zero, trim whitespace, tidak diubah ke number', () => {
+  assert.strictEqual(normalizeCanonicalKey('0012345'), '0012345');
+  assert.strictEqual(normalizeCanonicalKey('  3556000001  '), '3556000001');
+  assert.strictEqual(normalizeCanonicalKey(''), null);
+  assert.strictEqual(normalizeCanonicalKey(null), null);
+  assert.strictEqual(normalizeCanonicalKey(undefined), null);
+});
+test('reconcileTransactions (legacy, non-coverage) -- fix yang sama juga berlaku (dipakai bareng oleh 28 test lama di atas)', () => {
+  const fpRows = [fp('9990000001', 400000)];
+  const bankRows = [
+    bankRow('9990000001', { debit: 400000 }), bankRow('9990000001', { debit: 25 }), bankRow('9990000001', { credit: 400025 }),
+  ];
+  const results = reconcileTransactions(fpRows, bankRows, {}, new Date());
+  assert.strictEqual(results.length, 1, `harus 1 result, got ${results.length}: ${JSON.stringify(results)}`);
+  assert.strictEqual(results[0].reconStatus, 'REVERSAL');
 });
 
 // ── Runner ──────────────────────────────────────────────────────────────

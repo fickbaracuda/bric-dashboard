@@ -31,6 +31,62 @@ bank yang polanya tidak cocok sama sekali dianggap **di luar scope** rekon
 (bukan otomatis BANK_ONLY) — mencegah exception queue dibanjiri mutasi bank
 yang tidak terkait FP sama sekali.
 
+## Canonical Transaction Key — fix bug REVERSAL+BANK_ONLY double count
+**Insiden nyata**: 1 transaksi yang SUDAH ditemukan pasangan FP-nya dan
+punya credit/reversal (recon_status=`REVERSAL`) bisa ikut muncul LAGI
+sebagai baris `BANK_ONLY` terpisah utk Reference No. yang SAMA — 1
+transaksi logis dihitung 2 kali, membengkakkan jumlah BANK_ONLY & selisih.
+
+**Root cause**: `bankByRef` (exact, dari SEMUA baris ber-reference) dan
+`bankFallbackByIdTransaksi` (fallback, HANYA dari baris ber-reference
+KOSONG) adalah **2 index terpisah** yang tidak saling sinkron. Kalau
+representasi 1 baris bank sedikit berbeda dari baris lain milik transaksi
+logis yang sama (leading zero, whitespace, dsb — jarang tapi mungkin), atau
+kalau ada baris "orphan" BANK_ONLY tersimpan dari SEBELUM FP-nya tersedia,
+unique index lama recon_results (`batch_id, id_transaksi, reference_no`)
+menganggap baris FP-based (id_transaksi TERISI) dan baris BANK_ONLY
+(id_transaksi NULL, reference_no sama) sbg **2 identitas berbeda** — upsert
+tidak pernah menyatukan keduanya.
+
+**Fix engine** (`reconcileTransactions()`/`reconcileTransactionsWithCoverage()`):
+- `buildOcbcBankGroups()` — SATU struktur Map per **canonical transaction
+  key** (Reference No. dinormalisasi via `normalizeCanonicalKey()` — String+trim
+  SAJA, tidak pernah diubah ke number, leading zero dipertahankan — kalau
+  kosong baru fallback ke id_transaksi hasil parse Description), MENGGANTIKAN
+  2 index terpisah lama. Group menyimpan `principalRows`/`feeRows`/`creditRows`
+  + `hasPrincipal` (heuristik: minimal 1 debit yang BUKAN seukuran expected
+  fee — tanpa ini, grup fee-only Rp25 tanpa pasangan bisa salah jadi
+  BANK_ONLY).
+- `consumedBankKeys` (Set) — ditandai **SEGERA** begitu 1 bank group dipakai
+  FP manapun, **sebelum** cascade status ditentukan (jadi tetap ditandai
+  consumed walau hasil akhirnya MATCHED, NOMINAL_MISMATCH, DUPLICATE_BANK,
+  REVERSAL, dst — bukan cuma kalau MATCHED).
+- BANK_ONLY sekarang dibuat **per GROUP** (bukan per baris bank) — HANYA
+  dari group yang: (a) belum ada di `consumedBankKeys`, (b) canonical
+  key-nya tidak ada di `fpIdSet` (defense-in-depth kedua), (c) `hasPrincipal`
+  true (fee-only & credit-only dikecualikan).
+
+**Fix database**: kolom baru `canonical_transaction_key` = `COALESCE(id_transaksi,
+reference_no)` (dinormalisasi), **menggantikan** unique index lama
+`(batch_id, id_transaksi, reference_no)` dengan `(batch_id,
+canonical_transaction_key)`. Upsert `runOcbcEngineAndPersist()` (OCBC) DAN
+`warroom-reconciliation-mandiri.js` (Mandiri — tabel `recon_results` SAMA,
+dipakai bersama; `reconcileMandiriTransactions()` sendiri **tidak disentuh**)
+sekarang menargetkan `ON CONFLICT (batch_id, canonical_transaction_key)` —
+begitu FP ditemukan utk 1 reference yang sebelumnya BANK_ONLY, upsert
+meng-**UPDATE row yang sama** (bukan insert baru), sehingga `id` stabil dan
+`recon_action_logs` (FK ke id itu) otomatis tidak pernah hilang.
+
+**Diagnostic permanen** (bukan cuma migrasi sekali jalan) di
+`GET .../analytics`, field `data_quality_warning`:
+`duplicate_canonical_result_count` (jumlah baris yang berbagi
+canonical_transaction_key sama dalam 1 batch — harus SELALU 0 setelah unique
+index baru aktif) dan `reversal_also_bank_only_count` (subset spesifik pola
+REVERSAL+BANK_ONLY).
+
+**Perbaikan data yang sudah terlanjur salah**: lihat bagian Testing —
+`backend/scripts/repair-reversal-bank-only-duplicates.js`.
+
 ## Status Rekonsiliasi
 `MATCHED`, `MATCHED_NO_FEE`, `PENDING_BANK`, `FP_ONLY`, `BANK_ONLY`,
 `NOMINAL_MISMATCH`, `FEE_MISMATCH`, `DUPLICATE_FP`, `DUPLICATE_BANK`,
@@ -177,16 +233,23 @@ Migration: `backend/src/migrations/create_reconciliation_ocbc.sql` (tabel dasar)
 + `backend/src/migrations/add_reconciliation_ocbc_coverage.sql` (coverage + archive)
 + `backend/src/migrations/add_reconciliation_ocbc_archive_business_date_index.sql`
 (index `(bank_code, account_no, business_date)` utk query archive yg kini scoped per business_date)
++ `backend/src/migrations/add_reconciliation_canonical_transaction_key.sql`
+(kolom `canonical_transaction_key` + backfill — SELALU aman dijalankan)
++ `backend/src/migrations/add_reconciliation_canonical_transaction_key_unique.sql`
+(unique index baru — **HANYA** jalankan setelah
+`repair-reversal-bank-only-duplicates.js --apply` memastikan 0 duplikat)
 Runner: `backend/scripts/run-reconciliation-ocbc-migration.js` +
 `backend/scripts/run-reconciliation-ocbc-coverage-migration.js` +
-`backend/scripts/run-reconciliation-ocbc-archive-index-migration.js`
+`backend/scripts/run-reconciliation-ocbc-archive-index-migration.js` +
+`backend/scripts/run-reconciliation-canonical-key-migration.js` +
+`backend/scripts/run-reconciliation-canonical-key-unique-migration.js`
 
 | Tabel | Key | Catatan |
 |---|---|---|
 | `recon_sync_batches` | UNIQUE(business_date, bank_code) | 1 batch per hari per bank; resync menimpa batch yang sama |
 | `recon_fp_transactions` | — | Raw FP, dihapus+diisi ulang tiap chunk pertama sync |
 | `recon_bank_transactions` | — (reference_no SENGAJA TIDAK unique) | Raw bank (snapshot AKTIF saja), dihapus+diisi ulang tiap sync. + `transaction_date_time` (TIMESTAMPTZ, presisi menit) |
-| `recon_results` | UNIQUE expression index (batch_id, id_transaksi, reference_no) | Hasil engine, di-**upsert** (bukan delete+insert). `recon_status` sekarang **NULLABLE**. + `coverage_status`/`coverage_reason`/`is_actionable`/`eligible_for_match_rate`/`bank_snapshot_id`/`archive_match` |
+| `recon_results` | UNIQUE **(batch_id, canonical_transaction_key)** | Hasil engine, di-**upsert** (bukan delete+insert). `recon_status` **NULLABLE**. + `coverage_status`/`coverage_reason`/`is_actionable`/`eligible_for_match_rate`/`bank_snapshot_id`/`archive_match`/**`canonical_transaction_key`** (BARU — menggantikan unique index lama `(batch_id, id_transaksi, reference_no)`, lihat bagian "Canonical Transaction Key" di atas) |
 | `recon_action_logs` | FK ke recon_results | Audit trail tiap aksi resolve |
 | `recon_bank_snapshots` | FK ke recon_sync_batches | **BARU** — 1 baris ringkasan cakupan per sync (row_count, is_truncated, snapshot_oldest/newest_time, trusted_coverage_start) |
 | `recon_bank_archive` | UNIQUE(row_fingerprint) | **BARU** — kumulatif, TIDAK PERNAH dihapus. Identitas via SHA-256 fingerprint (bukan source_row_number) |
@@ -195,9 +258,9 @@ Runner: `backend/scripts/run-reconciliation-ocbc-migration.js` +
 lama batch tsb (raw snapshot saja — archive TIDAK disentuh); chunk
 terakhir membuat 1 baris `recon_bank_snapshots`, meng-upsert setiap baris
 bank ke `recon_bank_archive`, lalu menjalankan engine dan meng-upsert
-`recon_results` by natural key. Resync data yang sama tidak pernah
-menggandakan baris atau batch — diverifikasi lewat sync 2× berturut-turut
-menghasilkan `result_count`/jumlah archive row identik.
+`recon_results` by canonical_transaction_key. Resync data yang sama tidak
+pernah menggandakan baris atau batch — diverifikasi lewat sync 2×
+berturut-turut menghasilkan `result_count`/jumlah archive row identik.
 
 ## Backend Endpoints (`backend/src/routes/warroom-reconciliation.js`)
 | Endpoint | Auth | Keterangan |
@@ -338,9 +401,16 @@ BOUNDARY_PARTIAL classification, exact match menang di boundary, valid
 match rate, fingerprint archive stabil & deterministik, timezone WIB dini
 hari, regresi `reconcileTransactionsWithCoverage` identik dgn
 `reconcileTransactions` lama utk data tidak truncated) + fallback jam
-presisi raw_data.A + CROSS-DATE TEST 1-2 (`buildTransactionsQuery` pure —
-lihat catatan panjang di file test soal kenapa `runOcbcEngineAndPersist`
-sendiri tidak bisa di-unit-test tanpa DB) — 51 test total.
+presisi raw_data.A + CROSS-DATE TEST 1-2 (`buildTransactionsQuery` pure) +
+REVERSAL-DUP TEST 1-8 (REVERSAL dgn pasangan FP -> 1 result bukan 2,
+MATCHED/NOMINAL_MISMATCH tetap consumed tidak jadi BANK_ONLY kedua,
+BANK_ONLY valid, credit-only/fee-only bukan BANK_ONLY, fallback description
+dgn credit, exact+fallback sama-sama match -> 1 group) +
+`normalizeCanonicalKey` (preserve leading zero) — 63 test total. Skenario
+DB/live (resync, idempotensi, resolution manual existing, cross-date,
+regresi Mandiri) diverifikasi end-to-end lewat server sungguhan (pola yang
+sama dgn TEST 8/TEST 10 coverage-aware — lihat catatan di file test soal
+kenapa `runOcbcEngineAndPersist` sendiri tidak bisa di-unit-test tanpa DB).
 
 **Repair data cross-date yang terlanjur salah**:
 `node backend/scripts/repair-reconciliation-cross-date.js` (default
@@ -354,6 +424,22 @@ kumulatif TIDAK disentuh, `recon_action_logs` hanya ikut hilang untuk baris
 yang memang tidak valid (FK `ON DELETE CASCADE`), baris yang masih valid
 (natural key sama) tetap di-UPDATE (id stabil, riwayat log tetap ada).
 Jalankan di server (Node lokal Windows tidak tersedia).
+
+**Repair duplikat REVERSAL+BANK_ONLY (atau kombinasi lain) per canonical
+transaction key yang terlanjur salah**:
+`node backend/scripts/repair-reversal-bank-only-duplicates.js` (default
+DRY-RUN — menampilkan tiap canonical key yg punya >1 recon_results, statusnya
+apa saja, id row-nya) lalu `--apply` setelah dry-run diverifikasi aman —
+untuk tiap grup duplikat: pilih row yang dipertahankan berdasarkan
+prioritas status (REVERSAL tertinggi, urutan lengkap ada di
+`STATUS_PRIORITY_ORDER` dalam file script), lengkapi field NULL di row yang
+dipertahankan dari row lain (TIDAK PERNAH menimpa nilai yang sudah terisi
+dgn NULL), pindahkan `recon_action_logs` dari row yang dihapus ke row yang
+dipertahankan (riwayat audit TIDAK hilang), baru hapus row duplikat.
+**WAJIB dijalankan (dan dipastikan 0 duplikat tersisa) SEBELUM** migration
+`add_reconciliation_canonical_transaction_key_unique.sql` — unique index
+baru akan GAGAL dibuat kalau masih ada duplikat. Jalankan di server (Node
+lokal Windows tidak tersedia).
 
 ## Troubleshooting
 - **401 saat sync**: cek `APPS_SCRIPT_TOKEN` sudah sama di server & Script Properties Apps Script.
@@ -462,3 +548,22 @@ Jalankan di server (Node lokal Windows tidak tersedia).
   (dry-run dulu tanpa `--apply` utk lihat batch mana saja yang terdampak) —
   archive TIDAK ikut terhapus/terpengaruh, hanya `recon_results` milik batch
   yang salah yang dibersihkan (via re-run engine, bukan DELETE manual).
+- **Transaksi yang sudah REVERSAL (credit ditemukan, pasangan FP ada) masih
+  muncul LAGI sebagai `BANK_ONLY` terpisah utk Reference No. yang sama, KPI
+  BANK_ONLY & selisih membengkak**: insiden nyata — `bankByRef` (exact) dan
+  `bankFallbackByIdTransaksi` (fallback, HANYA dari baris ber-reference
+  KOSONG) adalah 2 index terpisah yang tidak saling sinkron; ditambah unique
+  index lama `(batch_id, id_transaksi, reference_no)` menganggap baris
+  FP-based (id_transaksi terisi) dan baris BANK_ONLY (id_transaksi NULL,
+  reference_no sama) sbg 2 identitas berbeda. Fix permanen: grouping bank
+  SATU struktur per canonical transaction key (`buildOcbcBankGroups()`) +
+  `consumedBankKeys` (ditandai segera saat group dipakai FP manapun, apa pun
+  status akhirnya) + kolom `canonical_transaction_key` menggantikan unique
+  index lama (lihat bagian "Canonical Transaction Key" di atas). Data yang
+  SUDAH terlanjur tersimpan duplikat dibersihkan dengan
+  `node backend/scripts/repair-reversal-bank-only-duplicates.js --apply`
+  (dry-run dulu) — **WAJIB** dijalankan (sampai 0 duplikat) SEBELUM migration
+  `add_reconciliation_canonical_transaction_key_unique.sql`, kalau tidak
+  `CREATE UNIQUE INDEX` akan gagal. Cek juga field
+  `data_quality_warning.duplicate_canonical_result_count`/
+  `reversal_also_bank_only_count` di response analytics — harus SELALU 0.

@@ -16,7 +16,7 @@
 const pool = require('../db');
 const {
   extractToken, nullIfEmpty, cleanNum, isValidIdTransaksi,
-  csvEscape, safeDiv, RECON_STATUSES, EXCEPTION_STATUSES,
+  csvEscape, safeDiv, RECON_STATUSES, EXCEPTION_STATUSES, normalizeCanonicalKey,
 } = require('./warroom-reconciliation');
 const {
   extractMandiriRow, reconcileMandiriTransactions, validateMandiriBalance,
@@ -215,14 +215,21 @@ async function syncHandler(req, res) {
     const balanceValidation = validateMandiriBalance(bankForEngine);
 
     for (const r of results) {
+      // canonical_transaction_key: SAMA formula & kolom dgn Rekonsiliasi
+      // OCBC (lihat runOcbcEngineAndPersist di warroom-reconciliation.js) --
+      // WAJIB, krn unique index recon_results (shared TABLE lintas bank)
+      // sekarang berbasis kolom ini, bukan lagi (id_transaksi, reference_no)
+      // literal. reconcileMandiriTransactions() SENDIRI TIDAK disentuh.
+      const canonicalKey = normalizeCanonicalKey(r.idTransaksi) || normalizeCanonicalKey(r.referenceNo);
       await client.query(
         `INSERT INTO recon_results
-           (batch_id, bank_code, id_transaksi, reference_no, id_outlet, id_produk, id_biller, fp_nominal, fp_time_response,
+           (batch_id, bank_code, id_transaksi, reference_no, canonical_transaction_key, id_outlet, id_produk, id_biller, fp_nominal, fp_time_response,
             bank_transaction_date, bank_principal, bank_fee, bank_credit, bank_total_debit,
             variance_principal, variance_fee, time_difference_minutes, matching_method, recon_status, aging_minutes, notes, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,NOW())
-         ON CONFLICT (batch_id, COALESCE(id_transaksi, ''), COALESCE(reference_no, '')) DO UPDATE SET
-           bank_code = EXCLUDED.bank_code, id_outlet = EXCLUDED.id_outlet, id_produk = EXCLUDED.id_produk,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,NOW())
+         ON CONFLICT (batch_id, canonical_transaction_key) DO UPDATE SET
+           bank_code = EXCLUDED.bank_code, id_transaksi = EXCLUDED.id_transaksi, reference_no = EXCLUDED.reference_no,
+           id_outlet = EXCLUDED.id_outlet, id_produk = EXCLUDED.id_produk,
            id_biller = EXCLUDED.id_biller, fp_nominal = EXCLUDED.fp_nominal, fp_time_response = EXCLUDED.fp_time_response,
            bank_transaction_date = EXCLUDED.bank_transaction_date, bank_principal = EXCLUDED.bank_principal,
            bank_fee = EXCLUDED.bank_fee, bank_credit = EXCLUDED.bank_credit, bank_total_debit = EXCLUDED.bank_total_debit,
@@ -231,16 +238,18 @@ async function syncHandler(req, res) {
            matching_method = EXCLUDED.matching_method, recon_status = EXCLUDED.recon_status,
            aging_minutes = EXCLUDED.aging_minutes, notes = EXCLUDED.notes, updated_at = NOW()`,
         [
-          batchId, BANK_CODE, r.idTransaksi, r.referenceNo, r.idOutlet, r.idProduk, r.idBiller, r.fpNominal, r.fpTimeResponse,
+          batchId, BANK_CODE, r.idTransaksi, r.referenceNo, canonicalKey, r.idOutlet, r.idProduk, r.idBiller, r.fpNominal, r.fpTimeResponse,
           formatDateJakarta(r.bankTransactionDate), r.bankPrincipal, r.bankFee, r.bankCredit, r.bankTotalDebit,
           r.variancePrincipal, r.varianceFee, r.timeDifferenceMinutes, r.matchingMethod, r.reconStatus, r.agingMinutes, r.notes,
         ]
       );
     }
 
-    const currentKeys = results.map(r => `${r.idTransaksi || ''}|${r.referenceNo || ''}`);
+    const currentKeys = results
+      .map(r => normalizeCanonicalKey(r.idTransaksi) || normalizeCanonicalKey(r.referenceNo))
+      .filter(Boolean);
     await client.query(
-      `DELETE FROM recon_results WHERE batch_id = $1 AND bank_code = $2 AND (COALESCE(id_transaksi,'') || '|' || COALESCE(reference_no,'')) <> ALL($3::text[])`,
+      `DELETE FROM recon_results WHERE batch_id = $1 AND bank_code = $2 AND canonical_transaction_key <> ALL($3::text[])`,
       [batchId, BANK_CODE, currentKeys.length ? currentKeys : ['']]
     );
 
