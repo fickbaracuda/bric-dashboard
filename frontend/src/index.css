@@ -5471,7 +5471,7 @@ body {
   .wrrm-time-bucket-grid { grid-template-columns: repeat(2, 1fr); }
 }
 
-/* Rekonsiliasi BRI — reuse wrr-*/wrrm-* generik di atas; kelas berikut HANYA
+/* Rekonsiliasi BRI — reuse class wrr- dan wrrm- generik di atas; kelas berikut HANYA
    utk elemen yang benar-benar baru (badge coverage/confidence/id conflict,
    warna aktif subtab navy BRI #00529C). */
 .wrrm-balance-badge--undetermined { background: #F3F4F6; color: #6B7280; }
