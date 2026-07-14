@@ -430,6 +430,17 @@ test('TEST 7e: fingerprint TETAP beda kalau Description benar-benar transaksi la
   const rowY = { ...rowX, description: 'CASA OUT NAMA SITI/HH82915Y' };
   assert.notStrictEqual(computeBankRowFingerprint(rowX), computeBankRowFingerprint(rowY));
 });
+test('TEST 7f: fingerprint SAMA meski detik transaction_date_time berbeda -- OCBC/Apps Script tidak stabil melaporkan detik utk mutasi yg sama antar sync (regresi insiden DUPLICATE_BANK produksi, mis. "07:49:00" lalu "07:49:20")', () => {
+  const rowX = { bankCode: 'OCBC', accountNo: '123', transactionDateTime: new Date('2026-07-14T07:49:00+07:00'), valueDate: '2026-07-14', referenceNo: '3557142860', description: 'ref X', debit: 102758, credit: null };
+  const rowY = { ...rowX, transactionDateTime: new Date('2026-07-14T07:49:20+07:00') };
+  assert.strictEqual(computeBankRowFingerprint(rowX), computeBankRowFingerprint(rowY),
+    'fingerprint HARUS sama utk transaction_date_time yg cuma beda detik dalam menit yg sama -- mutasi bank yg identik');
+});
+test('TEST 7g: fingerprint TETAP beda kalau transaction_date_time beda MENIT (bukan cuma detik)', () => {
+  const rowX = { bankCode: 'OCBC', accountNo: '123', transactionDateTime: new Date('2026-07-14T07:49:00+07:00'), valueDate: '2026-07-14', referenceNo: '3557142860', description: 'ref X', debit: 102758, credit: null };
+  const rowY = { ...rowX, transactionDateTime: new Date('2026-07-14T07:50:00+07:00') };
+  assert.notStrictEqual(computeBankRowFingerprint(rowX), computeBankRowFingerprint(rowY));
+});
 test('normalizeDescriptionForFingerprint: buang tanda baca/spasi, uppercase, pertahankan garis miring', () => {
   assert.strictEqual(normalizeDescriptionForFingerprint("NUR A'ISYAH/HH82915X"), 'NURAISYAH/HH82915X');
   assert.strictEqual(normalizeDescriptionForFingerprint('nur aisyah/HH82915X'), 'NURAISYAH/HH82915X');

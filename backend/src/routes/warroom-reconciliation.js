@@ -433,8 +433,26 @@ function normalizeForFingerprint(value) {
 function normalizeNumForFingerprint(value) {
   return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(2) : '';
 }
+/**
+ * INSIDEN NYATA (pola sama dgn balance & description sebelumnya): detik
+ * pada transaction_date_time utk 1 mutasi bank yang SAMA persis (reference_no,
+ * description, debit/credit identik) bisa berbeda antar sync (mis. terbaca
+ * "07:49:00" pada satu sync, "07:49:20" beberapa jam kemudian pada sync
+ * berikutnya) — kemungkinan besar krn OCBC/Apps Script tidak menyimpan detik
+ * yang stabil per baris. Fingerprint yang ikut memakai detik jadi BEDA utk
+ * mutasi yang SAMA -> baris arsip duplikat -> DUPLICATE_BANK palsu (match
+ * rate kolaps). Fix: buang detik & milidetik (truncate ke presisi MENIT)
+ * sebelum dipakai sbg bagian fingerprint — presisi menit sudah cukup unik
+ * digabung reference_no/description/debit/credit, dan ini KONSISTEN dgn
+ * calculateOcbcCoverage() yang juga membuang detik saat menghitung boundary
+ * minute (menit kalender dipercaya, detik tidak).
+ */
 function normalizeDateForFingerprint(value) {
-  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString();
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    const truncated = new Date(value);
+    truncated.setSeconds(0, 0);
+    return truncated.toISOString();
+  }
   return normalizeForFingerprint(value);
 }
 
