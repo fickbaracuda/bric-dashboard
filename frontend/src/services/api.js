@@ -370,6 +370,8 @@ export const getQuickWinQ3Analytics = (periode) =>
 /* WAR-ROOM — Rekonsiliasi FP vs Bank OCBC (TIDAK di-cache — data operasional, harus selalu fresh) */
 export const getReconciliationAnalytics = (params = {}) =>
   axios.get(`${API_URL}/api/warroom/reconciliation/analytics`, { params, headers: authHeaders() }).then(r => r.data);
+export const getReconciliationDailyReport = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/daily-report`, { params, headers: authHeaders() }).then(r => r.data);
 export const getReconciliationTransactions = (params = {}) =>
   axios.get(`${API_URL}/api/warroom/reconciliation/transactions`, { params, headers: authHeaders() }).then(r => r.data);
 // Export butuh Authorization header (JWT) -> tidak bisa lewat <a href> biasa,

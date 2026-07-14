@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import Layout from '../components/Layout';
 import {
   getReconciliationAnalytics, getReconciliationTransactions, exportReconciliationCsv,
-  resolveReconciliation, getReconciliationLogs, requestReconciliationSync,
+  resolveReconciliation, getReconciliationLogs, requestReconciliationSync, getReconciliationDailyReport,
 } from '../services/api';
 
 const COLOR = '#DC2626';
@@ -12,6 +12,7 @@ const TABS = [
   { key: 'exception', label: 'Exception Queue', icon: 'ti-alert-triangle' },
   { key: 'fee', label: 'Fee Analysis', icon: 'ti-receipt-2' },
   { key: 'raw', label: 'Raw Data & Audit', icon: 'ti-database' },
+  { key: 'laporan', label: 'Laporan Harian', icon: 'ti-file-report' },
 ];
 const EXCEPTION_STATUSES = [
   'PENDING_BANK', 'FP_ONLY', 'BANK_ONLY', 'NOMINAL_MISMATCH', 'FEE_MISMATCH',
@@ -666,6 +667,203 @@ function RawDataTab({ analytics, date, onExport, exporting }) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
+   TAB 6 — Laporan Harian (siap cetak/PDF, ringkasan Direktur)
+   ═══════════════════════════════════════════════════════════════════════ */
+const HEALTH_META = {
+  GREEN:  { label: 'GREEN',  color: '#059669', bg: '#DCFCE7' },
+  YELLOW: { label: 'YELLOW', color: '#B45309', bg: '#FEF3C7' },
+  RED:    { label: 'RED',    color: '#DC2626', bg: '#FEE2E2' },
+};
+
+/* Teks ringkas siap-tempel WhatsApp — HANYA plain text (bukan HTML/markdown
+   kompleks) supaya rapi ditempel di WhatsApp/email tanpa perlu diformat ulang. */
+function buildDailyReportCopyText(report) {
+  const lines = [
+    `Laporan Rekonsiliasi OCBC — ${fmtDate(report.meta?.date)}`,
+    `Status: ${report.health_status} (${report.report_status === 'RUNNING' ? 'Berjalan' : 'Selesai'})`,
+    '',
+    report.ringkasan_direktur,
+    '',
+    `Total Transaksi FP: ${fmtN(report.total_fp)}`,
+    `Total Nominal FP: ${fmtRp(report.total_nominal_fp)}`,
+    `Berhasil Direkonsiliasi: ${fmtN(report.matched_transaksi)}`,
+    `Valid Match Rate: ${fmtPct(report.valid_match_rate_transaction)}`,
+    `Actionable Exception: ${fmtN(report.actionable_exception_count)}`,
+    `Nominal Terdampak: ${fmtRp(report.nominal_terdampak_exception)}`,
+    `Reversal: ${fmtN(report.reversal?.count)} (${fmtRp(report.reversal?.nominal)})`,
+    '',
+    'Tindak Lanjut:',
+    ...(report.rekomendasi_tindak_lanjut || []).map(r => `- ${r}`),
+  ];
+  return lines.join('\n');
+}
+
+function DailyReportTab({ date }) {
+  const [report, setReport] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [copyMsg, setCopyMsg] = useState(null);
+  const requestIdRef = useRef(0);
+
+  const loadReport = useCallback((d) => {
+    if (!d) return;
+    const myRequestId = ++requestIdRef.current;
+    setLoading(true); setError(null);
+    getReconciliationDailyReport({ date: d, bank_code: 'OCBC' })
+      .then(res => { if (myRequestId === requestIdRef.current) setReport(res); })
+      .catch(e => { if (myRequestId === requestIdRef.current) setError(e.message || 'Gagal memuat laporan'); })
+      .finally(() => { if (myRequestId === requestIdRef.current) setLoading(false); });
+  }, []);
+
+  useEffect(() => { loadReport(date); }, [date, loadReport]);
+
+  const handlePrint = () => window.print();
+  const handleCopy = () => {
+    if (!report || report.empty) return;
+    const text = buildDailyReportCopyText(report);
+    (navigator.clipboard?.writeText(text) || Promise.reject())
+      .then(() => setCopyMsg('Ringkasan disalin ke clipboard — siap ditempel ke WhatsApp.'))
+      .catch(() => setCopyMsg('Gagal menyalin otomatis — salin manual dari Ringkasan Otomatis di bawah.'));
+    setTimeout(() => setCopyMsg(null), 5000);
+  };
+
+  if (loading) return <div className="wrr-loading"><i className="ti ti-loader-2 wrr-spin" /> Memuat laporan...</div>;
+  if (error) return <div className="wrr-error"><i className="ti ti-alert-circle" /> {error}</div>;
+  if (!report || report.empty) {
+    return (
+      <div className="wrr-empty">
+        <i className="ti ti-file-report" />
+        <div>{report?.message || 'Belum ada data rekonsiliasi OCBC untuk tanggal ini.'}</div>
+      </div>
+    );
+  }
+
+  const hm = HEALTH_META[report.health_status] || HEALTH_META.YELLOW;
+
+  return (
+    <div className="wrr-daily-report">
+      <div className="wrr-daily-report-toolbar wrr-print-hide">
+        <button className="wrr-btn" onClick={() => loadReport(date)}><i className="ti ti-refresh" /> Perbarui Laporan</button>
+        <button className="wrr-btn" onClick={handleCopy}><i className="ti ti-copy" /> Salin Ringkasan</button>
+        <button className="wrr-btn wrr-btn-primary" onClick={handlePrint}><i className="ti ti-printer" /> Cetak / Simpan PDF</button>
+        {copyMsg && <span className="wrr-daily-report-copy-msg">{copyMsg}</span>}
+      </div>
+
+      <div className="wrr-daily-report-header">
+        <div>
+          <div className="wrr-daily-report-title">Laporan Rekonsiliasi Harian — Bank OCBC</div>
+          <div className="wrr-daily-report-sub">
+            Tanggal: <strong>{fmtDate(report.meta?.date)}</strong> &middot; Sync terakhir: <strong>{fmtDateTime(report.active_batch?.synced_at)}</strong> &middot; Laporan dibuat: {fmtDateTime(report.generated_at)}
+          </div>
+        </div>
+        <div className="wrr-daily-report-badges">
+          <span className={'wrr-daily-report-status wrr-daily-report-status--' + report.report_status.toLowerCase()}>
+            {report.report_status === 'RUNNING' ? 'BERJALAN (HARI INI)' : 'SELESAI'}
+          </span>
+          <span className="wrr-daily-report-health" style={{ background: hm.bg, color: hm.color }}>{hm.label}</span>
+        </div>
+      </div>
+
+      <div className="wrr-panel wrr-daily-report-summary-box">
+        <div className="wrr-panel-title"><i className="ti ti-sparkles" style={{ color: COLOR }} /> Ringkasan Otomatis untuk Direktur</div>
+        <p style={{ margin: 0, lineHeight: 1.6 }}>{report.ringkasan_direktur}</p>
+      </div>
+
+      <div className="wrr-kpi-grid">
+        <KPICard label="Total Transaksi FP" value={fmtN(report.total_fp)} />
+        <KPICard label="Total Nominal FP" value={fmtRp(report.total_nominal_fp)} />
+        <KPICard label="Data Bank Diterima" value={fmtN(report.total_bank_row_count)} />
+        <KPICard label="Berhasil Direkonsiliasi" value={fmtN(report.matched_transaksi)} />
+        <KPICard label="Valid Match Rate" value={fmtPct(report.valid_match_rate_transaction)} />
+        <KPICard label="Actionable Exception" value={fmtN(report.actionable_exception_count)} alert={report.actionable_exception_count > 0} />
+        <KPICard label="Nominal Terdampak" value={fmtRp(report.nominal_terdampak_exception)} alert={report.nominal_terdampak_exception > 0} />
+        <KPICard label="Reversal" value={fmtN(report.reversal?.count)} alert={(report.reversal?.count || 0) > 0} />
+      </div>
+
+      <div className="wrr-panel">
+        <div className="wrr-panel-title"><i className="ti ti-chart-donut" style={{ color: COLOR }} /> Ringkasan Status</div>
+        <div className="wrr-table-wrap">
+          <table className="wrr-table">
+            <thead><tr><th>Status</th><th>Jumlah</th><th>Nominal</th></tr></thead>
+            <tbody>
+              {(report.status_distribution || []).filter(d => d.count > 0).map((d, i) => (
+                <tr key={i}><td><StatusBadge status={d.status} /></td><td>{fmtN(d.count)}</td><td>{fmtRp(d.nominal)}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="wrr-panel">
+        <div className="wrr-panel-title"><i className="ti ti-cash" style={{ color: COLOR }} /> Posisi Finansial</div>
+        <div className="wrr-dq-note-grid">
+          <div><span className="wrr-dq-note-label">Total Nominal FP</span><span className="wrr-dq-note-value">{fmtRpFull(report.financial_summary?.total_nominal_fp)}</span></div>
+          <div><span className="wrr-dq-note-label">Matched Nominal</span><span className="wrr-dq-note-value">{fmtRpFull(report.financial_summary?.matched_nominal)}</span></div>
+          <div><span className="wrr-dq-note-label">Nominal Terdampak Exception</span><span className="wrr-dq-note-value">{fmtRpFull(report.financial_summary?.nominal_terdampak_exception)}</span></div>
+          <div><span className="wrr-dq-note-label">Total Fee Bank</span><span className="wrr-dq-note-value">{fmtRpFull(report.financial_summary?.total_fee_bank)}</span></div>
+          <div><span className="wrr-dq-note-label">Nominal Reversal</span><span className="wrr-dq-note-value">{fmtRpFull(report.financial_summary?.reversal_nominal)}</span></div>
+        </div>
+      </div>
+
+      <div className="wrr-panel">
+        <div className="wrr-panel-title"><i className="ti ti-alert-triangle" style={{ color: COLOR }} /> Top 10 Exception</div>
+        {(!report.top_10_exception || report.top_10_exception.length === 0) ? (
+          <div className="wrr-empty-sub">Tidak ada exception pada tanggal ini.</div>
+        ) : (
+          <div className="wrr-table-wrap">
+            <table className="wrr-table">
+              <thead><tr><th>ID Transaksi</th><th>Nominal</th><th>Status</th><th>Outlet</th><th>Produk</th></tr></thead>
+              <tbody>
+                {report.top_10_exception.map((r, i) => (
+                  <tr key={i}>
+                    <td>{r.id_transaksi || r.reference_no || '-'}</td>
+                    <td>{fmtRp(r.nominal)}</td>
+                    <td><StatusBadge status={r.recon_status} /></td>
+                    <td>{r.id_outlet || '-'}</td>
+                    <td>{r.id_produk || '-'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <div className="wrr-panel">
+        <div className="wrr-panel-title"><i className="ti ti-history-toggle" style={{ color: COLOR }} /> Coverage Data Bank OCBC</div>
+        <div className="wrr-dq-note-grid">
+          <div><span className="wrr-dq-note-label">Batasan Sumber</span><span className="wrr-dq-note-value">{fmtN(report.coverage?.source_limit)} baris</span></div>
+          <div><span className="wrr-dq-note-label">Baris Bank Diterima</span><span className="wrr-dq-note-value">{fmtN(report.coverage?.bank_row_count)}</span></div>
+          <div><span className="wrr-dq-note-label">Data Terbatas?</span><span className="wrr-dq-note-value">{report.coverage?.is_source_truncated ? 'Ya' : 'Tidak'}</span></div>
+          <div><span className="wrr-dq-note-label">FP Dalam Cakupan</span><span className="wrr-dq-note-value">{fmtN(report.coverage?.fp_in_coverage)}</span></div>
+          <div><span className="wrr-dq-note-label">FP Di Luar Cakupan</span><span className="wrr-dq-note-value">{fmtN(report.coverage?.fp_outside_coverage)}</span></div>
+          <div><span className="wrr-dq-note-label">Boundary Partial</span><span className="wrr-dq-note-value">{fmtN(report.coverage?.fp_boundary_partial)}</span></div>
+        </div>
+      </div>
+
+      <div className="wrr-panel">
+        <div className="wrr-panel-title"><i className="ti ti-shield-check" style={{ color: COLOR }} /> Pemeriksaan Kualitas Data</div>
+        {!report.data_quality_warning?.has_issue ? (
+          <div className="wrr-empty-sub">Tidak ditemukan masalah kualitas data (tidak ada data lintas tanggal maupun duplikat canonical key).</div>
+        ) : (
+          <div className="wrr-warning-banner wrr-warning-banner-amber">
+            <i className="ti ti-alert-triangle" />
+            <div><p style={{ margin: 0 }}>{report.data_quality_warning.message}</p></div>
+          </div>
+        )}
+      </div>
+
+      <div className="wrr-panel">
+        <div className="wrr-panel-title"><i className="ti ti-list-check" style={{ color: COLOR }} /> Tindak Lanjut Utama</div>
+        <ul className="wrr-daily-report-recommend-list">
+          {(report.rekomendasi_tindak_lanjut || []).map((r, i) => <li key={i}>{r}</li>)}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
    Main
    ═══════════════════════════════════════════════════════════════════════ */
 export default function WarRoomReconciliationOcbc() {
@@ -816,6 +1014,7 @@ export default function WarRoomReconciliationOcbc() {
           {activeTab === 'exception' && <ReconTable date={date} scope="exception" onOpenAudit={setAuditId} initialStatus={jumpStatus} />}
           {activeTab === 'fee' && <FeeAnalysisTab analytics={analytics} />}
           {activeTab === 'raw' && <RawDataTab analytics={analytics} date={date} onExport={handleExport} exporting={exporting} />}
+          {activeTab === 'laporan' && <DailyReportTab date={date} />}
         </>)}
 
         {auditId && <AuditLogModal id={auditId} onClose={() => setAuditId(null)} />}

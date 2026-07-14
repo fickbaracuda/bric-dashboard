@@ -1588,6 +1588,308 @@ async function analyticsHandler(req, res) {
   }
 }
 
+/** Tanggal hari ini di Asia/Jakarta, "YYYY-MM-DD" — dipakai sbg default
+ * date & penentu RUNNING/CLOSED di Laporan Harian. BUKAN timezone server
+ * (VPS ini Asia/Shanghai, UTC+8, beda dari WIB). */
+function todayJakarta() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// GET /api/warroom/reconciliation/daily-report?date=YYYY-MM-DD&bank_code=OCBC
+// Laporan Harian — ringkasan siap-cetak utk Direktur (tab "Laporan Harian"
+// di WarRoomReconciliationOcbc.jsx). BEDA MENDASAR dari analyticsHandler:
+// TIDAK PERNAH fallback ke batch tanggal terakhir kalau tanggal yang
+// diminta/hari ini belum ada batch-nya (spec eksplisit: "Jangan fallback ke
+// batch tanggal sebelumnya", "Jangan mencampur data lintas tanggal") —
+// default date = HARI INI (Asia/Jakarta), BUKAN "SELECT ... ORDER BY
+// business_date DESC LIMIT 1" seperti analyticsHandler.
+//
+// active_batch.business_date dipakai sbg SATU-SATUNYA sumber kebenaran
+// tanggal laporan (di-query lewat WHERE business_date = $1, jadi otomatis
+// terjamin — guard eksplisit di bawah cuma pertahanan berlapis kalau kelak
+// query ini diubah orang lain).
+// ─────────────────────────────────────────────────────────────────────────
+async function dailyReportHandler(req, res) {
+  try {
+    const bankCode = nullIfEmpty(req.query.bank_code) || 'OCBC';
+    const todayStr = todayJakarta();
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(req.query.date || '') ? req.query.date : todayStr;
+    const generatedAt = new Date().toISOString();
+    const reportStatus = date === todayStr ? 'RUNNING' : 'CLOSED';
+
+    const batchRes = await pool.query(
+      'SELECT *, business_date::text AS business_date FROM recon_sync_batches WHERE business_date = $1 AND bank_code = $2',
+      [date, bankCode]
+    );
+    const batch = batchRes.rows[0] || null;
+
+    if (!batch) {
+      return res.json({
+        empty: true,
+        message: 'Belum ada data rekonsiliasi OCBC untuk tanggal ini.',
+        meta: { date, bank_code: bankCode },
+        generated_at: generatedAt,
+        report_status: reportStatus,
+      });
+    }
+
+    // Guard integritas: active_batch.business_date HARUS persis sama dgn
+    // `date` yang diminta (dijamin oleh WHERE di atas — cek eksplisit di
+    // sini murni pertahanan berlapis, supaya kalau suatu saat query berubah
+    // jadi tidak ter-scope per tanggal, ini gagal LANTANG, bukan diam-diam
+    // mencampur data lintas tanggal).
+    if (batch.business_date !== date) {
+      throw new Error(`Integrity guard gagal: active_batch.business_date (${batch.business_date}) != date diminta (${date})`);
+    }
+
+    const [resultsRes, fpCountRes, snapshotRes] = await Promise.all([
+      pool.query('SELECT *, bank_transaction_date::text AS bank_transaction_date FROM recon_results WHERE batch_id = $1', [batch.id]),
+      pool.query('SELECT COUNT(*) AS c, COALESCE(SUM(nominal),0) AS s FROM recon_fp_transactions WHERE batch_id = $1', [batch.id]),
+      pool.query('SELECT * FROM recon_bank_snapshots WHERE batch_id = $1 ORDER BY synced_at DESC LIMIT 1', [batch.id]),
+    ]);
+    const snapshot = snapshotRes.rows[0] || null;
+
+    // Cross-date guard — SAMA pola dgn analyticsHandler: baris recon_results
+    // yang bank_transaction_date-nya BUKAN business_date batch ini adalah
+    // data stale, dikecualikan SELURUHNYA dari laporan (tidak pernah
+    // mencampur data lintas tanggal).
+    const crossDateRows = resultsRes.rows.filter(r => r.bank_transaction_date !== null && r.bank_transaction_date !== date);
+    const resultsAfterCrossDateGuard = resultsRes.rows.filter(r => r.bank_transaction_date === null || r.bank_transaction_date === date);
+
+    // Diagnostic duplicate canonical key (HARUS selalu 0 stlh fix unique
+    // index batch_id+canonical_transaction_key) — dihitung dari data
+    // SEBELUM dedupe supaya kasus REVERSAL+BANK_ONLY utk key yang sama
+    // masih bisa terdeteksi.
+    const canonicalGroups = new Map();
+    for (const r of resultsAfterCrossDateGuard) {
+      const key = r.canonical_transaction_key;
+      if (!key) continue;
+      if (!canonicalGroups.has(key)) canonicalGroups.set(key, []);
+      canonicalGroups.get(key).push(r);
+    }
+    let duplicateCanonicalResultCount = 0;
+    let reversalAlsoBankOnlyCount = 0;
+    for (const rows of canonicalGroups.values()) {
+      if (rows.length <= 1) continue;
+      duplicateCanonicalResultCount += rows.length;
+      const statuses = rows.map(r => r.recon_status);
+      if (statuses.includes('REVERSAL') && statuses.includes('BANK_ONLY')) reversalAlsoBankOnlyCount++;
+    }
+
+    // "Satu canonical_transaction_key hanya dihitung satu kali" (spec KPI) —
+    // dedupe eksplisit SETELAH diagnostic di atas, sbg jaminan berlapis
+    // tambahan di luar unique index DB (kalau index tsb somehow belum aktif
+    // di suatu lingkungan, laporan tetap tidak menghitung dobel).
+    const dedupeMap = new Map();
+    for (const r of resultsAfterCrossDateGuard) {
+      const key = r.canonical_transaction_key || `__row_${r.id}`;
+      if (!dedupeMap.has(key)) dedupeMap.set(key, r);
+    }
+    const results = [...dedupeMap.values()];
+
+    const totalTransaksiFp = Number(fpCountRes.rows[0]?.c || 0);
+    const totalNominalFp = Number(fpCountRes.rows[0]?.s || 0);
+
+    const byStatus = {};
+    for (const s of RECON_STATUSES) byStatus[s] = { count: 0, nominal: 0 };
+    for (const r of results) {
+      if (r.recon_status === null) continue;
+      const s = byStatus[r.recon_status] ? r.recon_status : 'NEED_REVIEW';
+      byStatus[s].count++;
+      byStatus[s].nominal += Number(r.fp_nominal || 0);
+    }
+    const matchedCount = byStatus.MATCHED.count + byStatus.MATCHED_NO_FEE.count;
+    const matchedNominal = byStatus.MATCHED.nominal + byStatus.MATCHED_NO_FEE.nominal;
+    const totalFeeBank = results.reduce((s, r) => s + (r.bank_fee !== null ? Number(r.bank_fee) : 0), 0);
+
+    // Exception KPI rule (spec eksplisit): HANYA coverage_status =
+    // IN_BANK_COVERAGE DAN is_actionable = true. OUTSIDE_BANK_COVERAGE dan
+    // BOUNDARY_PARTIAL BUKAN kegagalan — tidak pernah dihitung exception.
+    const fpResultRows = results.filter(r => r.id_transaksi !== null); // exclude baris sintetis BANK_ONLY
+    const inCoverageRows = fpResultRows.filter(r => r.coverage_status === 'IN_BANK_COVERAGE');
+    const outsideCoverageRows = fpResultRows.filter(r => r.coverage_status === 'OUTSIDE_BANK_COVERAGE');
+    const boundaryPartialRows = fpResultRows.filter(r => r.coverage_status === 'BOUNDARY_PARTIAL');
+    const matchedInCoverageRows = inCoverageRows.filter(r => r.recon_status === 'MATCHED' || r.recon_status === 'MATCHED_NO_FEE');
+    const actionableExceptionRows = results.filter(r =>
+      r.coverage_status === 'IN_BANK_COVERAGE' && r.is_actionable && !['MATCHED', 'MATCHED_NO_FEE'].includes(r.recon_status)
+    );
+
+    const fpInBankCoverage = inCoverageRows.length;
+    const fpNominalInBankCoverage = inCoverageRows.reduce((s, r) => s + Number(r.fp_nominal || 0), 0);
+    const matchedInCoverage = matchedInCoverageRows.length;
+    const matchedNominalInCoverage = matchedInCoverageRows.reduce((s, r) => s + Number(r.fp_nominal || 0), 0);
+    const validMatchRateTransaction = safeDiv(matchedInCoverage, fpInBankCoverage);
+    const validMatchRateNominal = safeDiv(matchedNominalInCoverage, fpNominalInBankCoverage);
+
+    const nominalTerdampak = actionableExceptionRows.reduce(
+      (s, r) => s + Number(r.fp_nominal !== null ? r.fp_nominal : (r.bank_total_debit || 0)), 0
+    );
+
+    const status_distribution = RECON_STATUSES.map(s => ({ status: s, count: byStatus[s].count, nominal: byStatus[s].nominal }));
+
+    // Coverage OCBC (5.000-baris limitation) — SAMA blok dgn analyticsHandler.
+    let archiveStats = { c: 0, oldest: null, newest: null };
+    if (snapshot) {
+      const archiveParams = [bankCode];
+      let archiveWhere = 'bank_code = $1';
+      if (snapshot.account_no) { archiveParams.push(snapshot.account_no); archiveWhere += ` AND account_no = $${archiveParams.length}`; }
+      const archiveRes = await pool.query(
+        `SELECT COUNT(*) AS c, MIN(transaction_date_time) AS oldest, MAX(transaction_date_time) AS newest FROM recon_bank_archive WHERE ${archiveWhere}`,
+        archiveParams
+      );
+      archiveStats = archiveRes.rows[0] || archiveStats;
+    }
+    const coverage = {
+      source_limit: snapshot?.source_limit ?? DEFAULT_SOURCE_LIMIT,
+      bank_row_count: snapshot?.row_count ?? batch.bank_row_count,
+      is_source_truncated: snapshot?.is_truncated ?? false,
+      snapshot_oldest_time: snapshot?.snapshot_oldest_time ?? null,
+      snapshot_newest_time: snapshot?.snapshot_newest_time ?? null,
+      trusted_coverage_start: snapshot?.trusted_coverage_start ?? null,
+      coverage_end: snapshot?.coverage_end ?? null,
+      archive_row_count: Number(archiveStats.c || 0),
+      fp_in_coverage: fpInBankCoverage,
+      fp_outside_coverage: outsideCoverageRows.length,
+      fp_boundary_partial: boundaryPartialRows.length,
+    };
+
+    const dataQualityWarning = {
+      cross_date_result_count: crossDateRows.length,
+      duplicate_canonical_result_count: duplicateCanonicalResultCount,
+      reversal_also_bank_only_count: reversalAlsoBankOnlyCount,
+      has_issue: crossDateRows.length > 0 || duplicateCanonicalResultCount > 0,
+      message: [
+        crossDateRows.length > 0
+          ? `Ditemukan ${crossDateRows.length} baris hasil rekonsiliasi dengan bank_transaction_date di luar tanggal ${date} (data stale, dikecualikan otomatis).`
+          : null,
+        duplicateCanonicalResultCount > 0
+          ? `Ditemukan ${duplicateCanonicalResultCount} baris hasil rekonsiliasi berbagi canonical_transaction_key yang sama (${reversalAlsoBankOnlyCount} di antaranya pasangan REVERSAL+BANK_ONLY).`
+          : null,
+      ].filter(Boolean).join(' ') || null,
+    };
+
+    const financial_summary = {
+      total_nominal_fp: totalNominalFp,
+      matched_nominal: matchedNominal,
+      nominal_terdampak_exception: nominalTerdampak,
+      total_fee_bank: totalFeeBank,
+      reversal_nominal: byStatus.REVERSAL.nominal,
+    };
+
+    const top_10_exception = [...actionableExceptionRows]
+      .sort((a, b) => {
+        const av = Number(a.fp_nominal !== null ? a.fp_nominal : (a.bank_total_debit || 0));
+        const bv = Number(b.fp_nominal !== null ? b.fp_nominal : (b.bank_total_debit || 0));
+        return bv - av;
+      })
+      .slice(0, 10)
+      .map(r => ({
+        id_transaksi: r.id_transaksi || null,
+        reference_no: r.reference_no || null,
+        nominal: Number(r.fp_nominal !== null ? r.fp_nominal : (r.bank_total_debit || 0)),
+        recon_status: r.recon_status,
+        coverage_status: r.coverage_status,
+        id_outlet: r.id_outlet || null,
+        id_produk: r.id_produk || null,
+      }));
+
+    // ── Health status (spec eksplisit) ──
+    const syncFailed = batch.status !== 'success';
+    const hasDataQualityIssue = dataQualityWarning.has_issue;
+    let healthStatus = 'GREEN';
+    if (
+      syncFailed ||
+      (validMatchRateTransaction !== null && validMatchRateTransaction < 0.95) ||
+      hasDataQualityIssue ||
+      reversalAlsoBankOnlyCount > 0
+    ) {
+      healthStatus = 'RED';
+    } else if (
+      (validMatchRateTransaction !== null && validMatchRateTransaction < 0.99) ||
+      actionableExceptionRows.length > 0
+    ) {
+      healthStatus = 'YELLOW';
+    }
+
+    // ── Ringkasan otomatis Direktur (teks siap tempel WhatsApp) ──
+    const pctMatch = validMatchRateTransaction !== null ? (validMatchRateTransaction * 100).toFixed(1) : '-';
+    const summaryLines = [
+      `Laporan Rekonsiliasi OCBC — ${date}`,
+      `Dari ${fmtNumId(totalTransaksiFp)} transaksi FP senilai ${fmtRpId(totalNominalFp)}, sebanyak ${fmtNumId(matchedCount)} transaksi (${pctMatch}%) berhasil direkonsiliasi dengan Bank OCBC senilai ${fmtRpId(matchedNominal)}.`,
+      actionableExceptionRows.length > 0
+        ? `Terdapat ${fmtNumId(actionableExceptionRows.length)} transaksi exception senilai ${fmtRpId(nominalTerdampak)} yang memerlukan tindak lanjut.`
+        : `Tidak ada transaksi exception yang perlu ditindaklanjuti.`,
+      byStatus.REVERSAL.count > 0 ? `Ditemukan ${fmtNumId(byStatus.REVERSAL.count)} transaksi reversal senilai ${fmtRpId(byStatus.REVERSAL.nominal)}.` : null,
+      hasDataQualityIssue ? `PERHATIAN: ditemukan masalah kualitas data — ${dataQualityWarning.message}` : null,
+      `Status kesehatan rekonsiliasi hari ini: ${healthStatus}.`,
+    ].filter(Boolean);
+    const ringkasan_direktur = summaryLines.join(' ');
+
+    // ── Rekomendasi tindak lanjut ──
+    const rekomendasi = [];
+    if (hasDataQualityIssue) {
+      rekomendasi.push('Segera jalankan script perbaikan data quality (repair-reconciliation-cross-date.js / repair-reversal-bank-only-duplicates.js) sebelum laporan difinalisasi.');
+    }
+    if (syncFailed) {
+      rekomendasi.push('Sinkronisasi batch ini belum berstatus sukses — cek Apps Script/Execution Log dan jalankan sync ulang.');
+    }
+    if (actionableExceptionRows.length > 0) {
+      rekomendasi.push(`Tindak lanjuti ${fmtNumId(actionableExceptionRows.length)} transaksi exception senilai ${fmtRpId(nominalTerdampak)} melalui tab Exception Queue.`);
+    }
+    if (byStatus.REVERSAL.count > 0) {
+      rekomendasi.push(`Periksa ${fmtNumId(byStatus.REVERSAL.count)} transaksi reversal untuk memastikan tidak ada dampak ke laporan keuangan.`);
+    }
+    if (validMatchRateTransaction !== null && validMatchRateTransaction < 0.99) {
+      rekomendasi.push('Match rate di bawah target 99% — eskalasi ke tim terkait untuk investigasi lebih lanjut.');
+    }
+    if (rekomendasi.length === 0) {
+      rekomendasi.push('Tidak ada tindak lanjut mendesak — seluruh transaksi FP telah berhasil direkonsiliasi dalam cakupan data bank.');
+    }
+
+    res.json({
+      empty: false,
+      generated_at: generatedAt,
+      report_status: reportStatus,
+      health_status: healthStatus,
+      meta: {
+        date, bank_code: bankCode, batch_no: batch.batch_no,
+        last_sync: batch.synced_at,
+      },
+      active_batch: {
+        batch_id: batch.id, bank_code: batch.bank_code, business_date: batch.business_date,
+        account_no: batch.account_no, synced_at: batch.synced_at, status: batch.status,
+      },
+      total_fp: totalTransaksiFp,
+      total_nominal_fp: totalNominalFp,
+      total_bank_row_count: coverage.bank_row_count,
+      matched_transaksi: matchedCount,
+      valid_match_rate_transaction: validMatchRateTransaction,
+      valid_match_rate_nominal: validMatchRateNominal,
+      actionable_exception_count: actionableExceptionRows.length,
+      nominal_terdampak_exception: nominalTerdampak,
+      reversal: { count: byStatus.REVERSAL.count, nominal: byStatus.REVERSAL.nominal },
+      status_distribution,
+      financial_summary,
+      coverage,
+      data_quality_warning: dataQualityWarning,
+      top_10_exception,
+      ringkasan_direktur,
+      rekomendasi_tindak_lanjut: rekomendasi,
+    });
+  } catch (e) {
+    console.error('reconciliation daily-report error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+}
+
+function fmtNumId(n) {
+  return Number(n || 0).toLocaleString('id-ID');
+}
+function fmtRpId(n) {
+  return `Rp ${Math.round(Number(n || 0)).toLocaleString('id-ID')}`;
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // GET /api/warroom/reconciliation/transactions
 // ─────────────────────────────────────────────────────────────────────────
@@ -1858,6 +2160,7 @@ async function actionLogsHandler(req, res) {
 module.exports = {
   syncHandler,
   analyticsHandler,
+  dailyReportHandler,
   transactionsHandler,
   exportHandler,
   resolveHandler,

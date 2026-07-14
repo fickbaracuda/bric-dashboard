@@ -156,6 +156,7 @@ app.get('/api/warroom/quick-win-q3/analytics',  requireAuth, quickWinQ3Routes.an
 app.post('/api/warroom/reconciliation/sync',        reconciliationRoutes.syncHandler); // token auth (APPS_SCRIPT_TOKEN), no JWT
 app.get('/api/warroom/reconciliation/sync-request-status', reconciliationRoutes.syncRequestStatusHandler); // token auth, no JWT — dipanggil Apps Script (OCBC & Mandiri)
 app.get('/api/warroom/reconciliation/analytics',    requireAuth, reconciliationRoutes.analyticsHandler);
+app.get('/api/warroom/reconciliation/daily-report', requireAuth, reconciliationRoutes.dailyReportHandler);
 app.get('/api/warroom/reconciliation/transactions', requireAuth, reconciliationRoutes.transactionsHandler);
 app.get('/api/warroom/reconciliation/export',       requireAuth, reconciliationRoutes.exportHandler);
 app.post('/api/warroom/reconciliation/request-sync', requireAuth, reconciliationRoutes.requestSyncHandler); // tombol "Sync Now" — generik utk OCBC & Mandiri (bank_code di body)

@@ -268,6 +268,7 @@ berturut-turut menghasilkan `result_count`/jumlah archive row identik.
 | `POST /api/warroom/reconciliation/sync` | `APPS_SCRIPT_TOKEN` (token SHARED, bukan token baru) | Terima chunk FP/bank, jalankan engine di chunk terakhir |
 | `GET /api/warroom/reconciliation/sync-request-status?bank_code=` | `APPS_SCRIPT_TOKEN` | Dipanggil Apps Script tiap 1 menit — cek apakah tombol "Sync Now" ditekan sejak sync terakhir |
 | `GET /api/warroom/reconciliation/analytics?date=&bank_code=` | JWT | Summary (+ `valid_match_rate_*`, `actionable_exception_count`), distribusi status, validasi rekening, fee analysis, blok `coverage`, `active_batch` (batch_id/bank_code/business_date/account_no/synced_at), `data_quality_warning` (cross_date_result_count, seharusnya selalu null), recent batches. Kalau `date` diberikan tapi batch tidak ada, `empty:true` — TIDAK fallback ke batch tanggal lain |
+| `GET /api/warroom/reconciliation/daily-report?date=&bank_code=` | JWT | **Laporan Harian** (tab 6) — lihat bagian tersendiri di bawah |
 | `GET /api/warroom/reconciliation/transactions?date=&status=&coverage_status=&is_actionable=&id_outlet=&id_produk=&search=&page=&limit=&sort=&order=` | JWT | List berpaginasi; `status` & `coverage_status` boleh comma-separated. Field baru per baris: `coverage_status`, `coverage_reason`, `is_actionable`, `eligible_for_match_rate`, `archive_match` |
 | `GET /api/warroom/reconciliation/export?...` | JWT | CSV (di-fetch sbg blob di frontend krn butuh header Authorization) — + 5 kolom baru (Coverage Status/Reason/Actionable/Eligible for Match Rate/Archive Match) |
 | `POST /api/warroom/reconciliation/request-sync` | JWT | Tombol "Sync Now" — body `{bank_code}`, generik utk OCBC & Mandiri, hanya mencatat permintaan di `recon_sync_requests` |
@@ -362,7 +363,7 @@ menampilkan ringkasan cakupan di Execution Log.
 - Page: `frontend/src/pages/WarRoomReconciliationOcbc.jsx`
 - Menu: Payment Agent > War Room > **Rekonsiliasi OCBC** (badge `REK`, `#DC2626`)
 - CSS prefix: `wrr-*`, dark/light via CSS variable BRIC standar
-- 5 tab: Executive Summary, Hasil Rekonsiliasi, Exception Queue, Fee Analysis, Raw Data & Audit
+- 6 tab (urutan tetap): Executive Summary, Hasil Rekonsiliasi, Exception Queue, Fee Analysis, Raw Data & Audit, **Laporan Harian**
 - **Executive Summary**: banner "Data OCBC Terbatas" muncul kalau
   `coverage.is_source_truncated=true`; panel "Cakupan Data Bank OCBC"
   (Bank Coverage Start/End, Trusted Coverage Start, Bank Rows Received,
@@ -392,6 +393,117 @@ menampilkan ringkasan cakupan di Execution Log.
   respons baru datang dulu). Kalau `active_batch.business_date` dari server
   ternyata beda dari tanggal yang diminta user, frontend menampilkan error
   data integrity dan TIDAK merender hasil.
+
+## Laporan Harian (Tab 6) — laporan siap-cetak untuk Direktur
+
+### Tujuan
+Ringkasan rekonsiliasi harian OCBC yang bisa langsung ditunjukkan/dicetak
+untuk Direktur — bukan dashboard operasional (itu tugas 5 tab lainnya).
+Posisi tab **wajib paling akhir**, urutan 5 tab sebelumnya tidak berubah,
+dan **tidak ada menu sidebar baru** — akses tetap lewat
+`/war-room/rekonsiliasi-ocbc` yang sudah ada.
+
+### Sumber data — TIDAK PERNAH fallback tanggal
+Endpoint `GET /api/warroom/reconciliation/daily-report?date=YYYY-MM-DD&bank_code=OCBC`
+(`dailyReportHandler` di `warroom-reconciliation.js`) berbeda mendasar dari
+`analyticsHandler`: kalau `date` tidak dikirim, default-nya **hari ini di
+Asia/Jakarta** (`todayJakarta()`) — **BUKAN** "batch terakhir yang ada"
+seperti `analyticsHandler`. Kalau batch untuk tanggal itu belum ada, respons
+`{ empty: true, message: "Belum ada data rekonsiliasi OCBC untuk tanggal
+ini." }` — **tidak pernah** menampilkan angka 0 seolah valid, dan **tidak
+pernah** diam-diam menampilkan data batch tanggal lain.
+
+`active_batch.business_date` adalah **satu-satunya sumber kebenaran**
+tanggal laporan (query `WHERE business_date = $1 AND bank_code = $2`, lalu
+diverifikasi ulang lewat guard eksplisit — kalau pernah tidak sama,
+handler melempar error keras alih-alih diam-diam mencampur data). Seluruh
+agregasi (`recon_results`, `recon_fp_transactions`) di-filter
+`batch_id` batch itu saja. Cross-date guard yang sama dengan
+`analyticsHandler` tetap berlaku (baris `bank_transaction_date` yang bukan
+`date` diminta dikecualikan dari SELURUH perhitungan, dilaporkan lewat
+`data_quality_warning.cross_date_result_count`).
+
+**Dedupe canonical key**: sebagai jaminan berlapis TAMBAHAN di luar unique
+index `(batch_id, canonical_transaction_key)` yang sudah ada, hasil
+di-dedupe eksplisit per `canonical_transaction_key` (ambil 1 baris per
+key) SEBELUM dipakai untuk KPI apa pun — memastikan "satu
+`canonical_transaction_key` hanya dihitung satu kali" walau suatu saat
+index unique-nya somehow tidak aktif di sebuah lingkungan.
+
+### Aturan KPI
+- **Berhasil direkonsiliasi** = `MATCHED + MATCHED_NO_FEE` (`matched_transaksi`).
+- **Match rate** WAJIB pakai `valid_match_rate_transaction` (coverage-aware,
+  sama formula dgn `analyticsHandler`: `matched_in_coverage / fp_in_bank_coverage`).
+- **Exception** (utk `actionable_exception_count`, `nominal_terdampak_exception`,
+  `top_10_exception`) HANYA baris dengan `coverage_status = IN_BANK_COVERAGE`
+  **DAN** `is_actionable = true` **DAN** `recon_status` bukan
+  MATCHED/MATCHED_NO_FEE. `OUTSIDE_BANK_COVERAGE` dan `BOUNDARY_PARTIAL`
+  bukan kegagalan — tidak pernah dihitung sbg exception di laporan ini
+  (persis prinsip yang sama dgn seluruh modul OCBC, lihat bagian
+  "Keterbatasan 5.000 Baris" di atas).
+
+### Health Status (GREEN/YELLOW/RED)
+Dihitung server-side (`dailyReportHandler`), field `health_status`:
+
+| Kondisi | Status |
+|---|---|
+| `valid_match_rate_transaction ≥ 99%` DAN tidak ada actionable exception DAN tidak ada data quality issue | **GREEN** |
+| `95% ≤ match rate < 99%` ATAU masih ada actionable exception (tapi tidak memenuhi kondisi RED) | **YELLOW** |
+| `match rate < 95%` ATAU sync batch belum berstatus `success` ATAU ada data quality issue (cross-date/duplicate canonical) ATAU ditemukan kombinasi REVERSAL+BANK_ONLY utk canonical key yang sama | **RED** |
+
+Urutan evaluasi: RED dicek lebih dulu (menang atas YELLOW), lalu YELLOW,
+default GREEN.
+
+### Response `daily-report` (field utama)
+`empty`, `message`, `generated_at`, `report_status` (`RUNNING` kalau
+`date` = hari ini WIB, `CLOSED` kalau tanggal sebelumnya), `health_status`,
+`meta` (date/bank_code/batch_no/last_sync), `active_batch`, `total_fp`,
+`total_nominal_fp`, `total_bank_row_count`, `matched_transaksi`,
+`valid_match_rate_transaction`, `valid_match_rate_nominal`,
+`actionable_exception_count`, `nominal_terdampak_exception`, `reversal`
+(`{count, nominal}`), `status_distribution`, `financial_summary`
+(`total_nominal_fp`/`matched_nominal`/`nominal_terdampak_exception`/
+`total_fee_bank`/`reversal_nominal`), `coverage` (blok sama dgn
+`analyticsHandler`), `data_quality_warning` (`{cross_date_result_count,
+duplicate_canonical_result_count, reversal_also_bank_only_count,
+has_issue, message}`), `top_10_exception` (array, diurutkan nominal
+terbesar), `ringkasan_direktur` (string narasi otomatis Bahasa Indonesia),
+`rekomendasi_tindak_lanjut` (array string).
+
+### Frontend (`DailyReportTab` di `WarRoomReconciliationOcbc.jsx`)
+Header laporan (judul + tanggal + waktu sync terakhir + waktu laporan
+dibuat), badge status `BERJALAN (HARI INI)`/`SELESAI`, badge kesehatan
+GREEN/YELLOW/RED berwarna, panel "Ringkasan Otomatis untuk Direktur", 8 KPI
+utama (`wrr-kpi-grid`), panel Ringkasan Status, Posisi Finansial, Top 10
+Exception, Coverage Data Bank OCBC, Pemeriksaan Kualitas Data, dan Tindak
+Lanjut Utama.
+
+Tiga tombol:
+- **Perbarui Laporan** — refetch endpoint tanpa reload halaman.
+- **Salin Ringkasan** — `navigator.clipboard.writeText()` teks plain siap
+  tempel WhatsApp (`buildDailyReportCopyText()`), fallback pesan manual
+  kalau clipboard API gagal/diblokir browser.
+- **Cetak / Simpan PDF** — `window.print()` native (bukan library PDF
+  eksternal).
+
+### CSS Print (A4)
+`@media print` di `index.css`: `@page { size: A4; margin: 15mm; }`,
+`-webkit-print-color-adjust: exact` (badge warna tetap tercetak, tidak
+di-strip default browser). Disembunyikan total saat print: `.sidebar`,
+`.topbar`, `.gsheet-bar`, `.presence-footer`, `.aic-fab`/`.aic-panel` (AI
+Chat), `.wrr-header` (date selector + tombol Sync Now/Refresh), `.wrr-tabs`
+(tab navigation), seluruh `.wrr-btn` (termasuk toolbar Perbarui/Salin/Cetak
+sendiri — tidak masuk akal ada tombol di kertas), dan elemen apa pun
+berclass `.wrr-print-hide`. `.wrr-panel` diberi `break-inside: avoid`
+supaya 1 panel tidak terpotong di tengah antar halaman. Aturan ini berlaku
+GLOBAL (bukan cuma tab Laporan Harian) — cetak dari tab lain war-room
+manapun otomatis ikut rapi tanpa sidebar/navbar juga.
+
+### Empty state
+Kalau batch tanggal yang dipilih belum ada: pesan **"Belum ada data
+rekonsiliasi OCBC untuk tanggal ini."** ditampilkan (ikon + teks polos),
+TIDAK ada KPI card/angka 0 yang dirender sama sekali (`report.empty === true`
+mem-short-circuit seluruh render sebelum sampai ke KPI grid).
 
 ## Testing
 `node backend/scripts/test-reconciliation-ocbc.js` — 10 acceptance test
