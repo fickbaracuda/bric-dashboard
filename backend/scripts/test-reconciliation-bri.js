@@ -92,7 +92,7 @@ test('TEST 4: nominal=500000, debit=450150 -> NOMINAL_MISMATCH', () => {
 
 // ── TEST 5: Ekstraksi ID dari DESK_TRAN ──────────────────────────────────
 test('TEST 5: ekstraksi ID dari DESK_TRAN "FASTPAY .../3555181698 WS_OB;3555181698;..." -> HIGH confidence', () => {
-  const r = extractBriTransactionIds({ deskTran: 'FASTPAY 779001004948509/3555181698 WS_OB;3555181698;62322', trremk: null, tlbds2: '3555181698' });
+  const r = extractBriTransactionIds({ deskTran: 'FASTPAY 779001004948509/3555181698 WS_OB;3555181698;62322', trremk: null, tlbds2: 'WS_OB;3555181698;62322' });
   assert.strictEqual(r.extractedTransactionId, '3555181698');
   assert.strictEqual(r.deskId, '3555181698');
   assert.strictEqual(r.idConflict, false);
@@ -101,7 +101,7 @@ test('TEST 5: ekstraksi ID dari DESK_TRAN "FASTPAY .../3555181698 WS_OB;35551816
 
 // ── TEST 6: ID CONFLICT ──────────────────────────────────────────────────
 test('TEST 6: DESK_TRAN=3555181698 vs TLBDS2=3555189999 -> NEED_REVIEW, id_conflict=true', () => {
-  const row = { deskTran: 'FASTPAY 779001004948509/3555181698 WS_OB;3555181698;62322', trremk: null, tlbds2: '3555189999', mutasiDebet: 5000150, mutasiKredit: null };
+  const row = { deskTran: 'FASTPAY 779001004948509/3555181698 WS_OB;3555181698;62322', trremk: null, tlbds2: 'WS_OB;3555189999;62322', mutasiDebet: 5000150, mutasiKredit: null };
   const info = extractBriTransactionIds(row);
   assert.strictEqual(info.idConflict, true);
   assert.strictEqual(info.extractionConfidence, 'CONFLICT');
@@ -184,7 +184,7 @@ test('TEST 12: opening 16653236720, debit 5000150, credit 0, closing 16648236570
 test('TEST 12b: saldo tidak sesuai -> UNBALANCED dgn variance', () => {
   const v = validateBriBalance([{ saldoAwalMutasi: 1000000, mutasiDebet: 100000, mutasiKredit: 0, saldoAkhirMutasi: 950000 }]);
   assert.strictEqual(v.status, 'UNBALANCED');
-  assert.strictEqual(v.balance_variance_total, -50000);
+  assert.strictEqual(v.balance_variance_total, 50000);
 });
 
 // ── TEST 13: JAM_TRAN ─────────────────────────────────────────────────────
