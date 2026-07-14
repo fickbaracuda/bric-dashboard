@@ -161,10 +161,59 @@ function downloadBlob(blob, filename) {
   URL.revokeObjectURL(url);
 }
 
+/* Tabel ringkas "Transaksi Tidak Match" di Executive Summary — HANYA
+   muncul kalau ada exception actionable (FP_ONLY/BANK_ONLY/dst), isinya
+   sengaja minimal (ID Transaksi + Nominal saja) supaya cepat dibaca sekilas
+   tanpa perlu buka tab Exception Queue. Reference ditampilkan sbg fallback
+   ID Transaksi utk baris BANK_ONLY/REVERSAL-tanpa-FP (id_transaksi NULL),
+   nominal fallback ke Total Debit bank kalau nominal FP tidak ada. */
+function UnmatchedQuickTable({ date }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const requestIdRef = useRef(0);
+
+  useEffect(() => {
+    if (!date) return;
+    const myRequestId = ++requestIdRef.current;
+    setLoading(true);
+    getReconciliationTransactions({
+      date, status: EXCEPTION_STATUSES.join(','), is_actionable: 'true',
+      limit: 20, sort: 'updated_at', order: 'desc',
+    })
+      .then(res => { if (myRequestId === requestIdRef.current) setRows(res.rows || []); })
+      .catch(() => { if (myRequestId === requestIdRef.current) setRows([]); })
+      .finally(() => { if (myRequestId === requestIdRef.current) setLoading(false); });
+  }, [date]);
+
+  if (loading || rows.length === 0) return null;
+
+  return (
+    <div className="wrr-panel">
+      <div className="wrr-panel-title">
+        <i className="ti ti-alert-triangle" style={{ color: COLOR }} /> Transaksi Tidak Match
+        <InfoIcon text="Daftar ringkas transaksi yang belum match (FP Only, Bank Only, Duplicate, dst) — hanya ID Transaksi & nominal. Lihat tab Exception Queue untuk detail lengkap & aksi penyelesaian." />
+      </div>
+      <div className="wrr-table-wrap">
+        <table className="wrr-table">
+          <thead><tr><th>ID Transaksi</th><th>Nominal</th></tr></thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i}>
+                <td>{r.id_transaksi || r.reference_no || '-'}</td>
+                <td>{fmtRp(r.fp_nominal !== null ? r.fp_nominal : r.bank_total_debit)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 /* ═══════════════════════════════════════════════════════════════════════
    TAB 1 — Executive Summary
    ═══════════════════════════════════════════════════════════════════════ */
-function SummaryTab({ analytics, onSelectStatus }) {
+function SummaryTab({ analytics, onSelectStatus, date }) {
   const s = analytics?.summary;
   const sv = analytics?.statement_validation;
   const cov = analytics?.coverage;
@@ -232,6 +281,8 @@ function SummaryTab({ analytics, onSelectStatus }) {
         <KPICard label="Actionable Exception" value={fmtN(s?.actionable_exception_count)} alert={(s?.actionable_exception_count || 0) > 0}
           info="Jumlah exception yang BENAR-BENAR perlu ditindaklanjuti tim — sudah dikecualikan transaksi di luar cakupan/boundary data bank yang bukan kegagalan sungguhan." />
       </div>
+
+      <UnmatchedQuickTable date={date} />
 
       <div className="wrr-panel">
         <div className="wrr-panel-title">
@@ -752,7 +803,7 @@ export default function WarRoomReconciliationOcbc() {
             ))}
           </div>
 
-          {activeTab === 'summary' && <SummaryTab analytics={analytics} onSelectStatus={handleSelectStatus} />}
+          {activeTab === 'summary' && <SummaryTab analytics={analytics} onSelectStatus={handleSelectStatus} date={date} />}
           {activeTab === 'hasil' && <ReconTable date={date} scope="all" onOpenAudit={setAuditId} initialStatus={jumpStatus} />}
           {activeTab === 'exception' && <ReconTable date={date} scope="exception" onOpenAudit={setAuditId} initialStatus={jumpStatus} />}
           {activeTab === 'fee' && <FeeAnalysisTab analytics={analytics} />}
