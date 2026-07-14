@@ -77,11 +77,34 @@ function reconBriCleanNum_(value) {
   return isFinite(n) ? n : null;
 }
 
-/** Date object (dari getValues()) atau string -> string apa adanya (WIB), TIDAK dikonversi ke angka. */
+/**
+ * Date object (dari getValues()) atau string -> HANYA TANGGAL (WIB), "yyyy-MM-dd".
+ * Dipakai KHUSUS utk TGL_TRAN/TGL_EFEKTIF (kolom BRI yang memang cuma
+ * tanggal — presisi jam datang terpisah dari JAM_TRAN, digabung di backend).
+ * JANGAN dipakai utk time_response DATA FP (butuh presisi jam) — lihat
+ * reconBriToDateTimeIso_ di bawah.
+ */
 function reconBriToIso_(value) {
   if (value === null || value === undefined || value === '') return null;
   if (Object.prototype.toString.call(value) === '[object Date]' && !isNaN(value)) {
     return Utilities.formatDate(value, 'Asia/Jakarta', 'yyyy-MM-dd');
+  }
+  return String(value).trim();
+}
+
+/**
+ * Date object (dari getValues()) atau string -> TANGGAL + JAM lengkap (WIB).
+ * Dipakai utk time_response DATA FP — WAJIB presisi jam-menit-detik supaya
+ * grace period (PENDING_BANK vs FP_ONLY), coverage window
+ * (FP_COVERAGE_WINDOW = min/max time_response ± toleransi), dan analisis
+ * selisih waktu (Time & Posting Analysis) tidak semuanya collapse ke
+ * tengah malam (bug yang pernah terjadi: time_response terkirim sbg
+ * "2026-07-11" tanpa jam sama sekali karena salah pakai formatter tanggal-saja).
+ */
+function reconBriToDateTimeIso_(value) {
+  if (value === null || value === undefined || value === '') return null;
+  if (Object.prototype.toString.call(value) === '[object Date]' && !isNaN(value)) {
+    return Utilities.formatDate(value, 'Asia/Jakarta', "yyyy-MM-dd'T'HH:mm:ss");
   }
   return String(value).trim();
 }
@@ -139,7 +162,7 @@ function reconBriReadFp_(ss) {
       id_transaksi: idTransaksi,
       nominal: reconBriCleanNum_(reconBriCol_(row, headerIndex, 'nominal', 1)),
       id_produk: reconBriToStringId_(reconBriCol_(row, headerIndex, 'id_produk', 2)),
-      time_response: reconBriToIso_(reconBriCol_(row, headerIndex, 'time_response', 3)),
+      time_response: reconBriToDateTimeIso_(reconBriCol_(row, headerIndex, 'time_response', 3)),
       id_outlet: reconBriToStringId_(reconBriCol_(row, headerIndex, 'id_outlet', 4)),
       id_biller: reconBriToStringId_(reconBriCol_(row, headerIndex, 'id_biller', 5)),
       source_row: r + 1,
