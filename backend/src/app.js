@@ -174,6 +174,7 @@ app.post('/api/warroom/reconciliation/mandiri/:id/resolve', requireAuth, reconci
 app.get('/api/warroom/reconciliation/mandiri/:id/logs',     requireAuth, reconciliationMandiriRoutes.actionLogsHandler);
 app.post('/api/warroom/reconciliation/bri/sync',        reconciliationBriRoutes.syncHandler); // token auth (APPS_SCRIPT_TOKEN), no JWT
 app.get('/api/warroom/reconciliation/bri/analytics',    requireAuth, reconciliationBriRoutes.analyticsHandler);
+app.get('/api/warroom/reconciliation/bri/daily-report', requireAuth, reconciliationBriRoutes.dailyReportHandler);
 app.get('/api/warroom/reconciliation/bri/transactions', requireAuth, reconciliationBriRoutes.transactionsHandler);
 app.get('/api/warroom/reconciliation/bri/raw-bank',     requireAuth, reconciliationBriRoutes.rawBankHandler);
 app.get('/api/warroom/reconciliation/bri/raw-fp',       requireAuth, reconciliationBriRoutes.rawFpHandler);

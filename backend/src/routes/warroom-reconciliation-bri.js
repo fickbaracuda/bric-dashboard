@@ -25,6 +25,7 @@ const pool = require('../db');
 const {
   extractToken, nullIfEmpty, cleanNum, isValidIdTransaksi,
   csvEscape, safeDiv, RECON_STATUSES, EXCEPTION_STATUSES, normalizeCanonicalKey,
+  todayJakarta,
 } = require('./warroom-reconciliation');
 const {
   classifyBriRow, parseBriTransactionTime, formatDateJakartaBri, parseFlexibleBriDateTime,
@@ -35,6 +36,20 @@ const {
 const SYNC_TOKEN = process.env.APPS_SCRIPT_TOKEN; // token SHARED — sama dgn war-room lain, bukan token baru
 const BANK_CODE = 'BRI';
 
+// Threshold health status terpusat (spec: "Threshold wajib terpusat dan
+// terdokumentasi"). Angka MATERIAL (id conflict/unbalanced/outside coverage)
+// dipilih supaya sejumlah KECIL kejadian (mis. 1-4 ID conflict) menurunkan
+// status dari GREEN tapi TIDAK langsung RED — hanya kalau jumlahnya besar
+// (berpotensi mengindikasikan masalah sistemik, bukan kasus tepi biasa)
+// status naik jadi RED. Lihat computeBriHealthStatus().
+const BRI_HEALTH_THRESHOLDS = {
+  GREEN_MIN_MATCH_RATE: 0.99,
+  YELLOW_MIN_MATCH_RATE: 0.95,
+  ID_CONFLICT_MATERIAL_COUNT: 5,
+  UNBALANCED_MATERIAL_COUNT: 5,
+  OUTSIDE_COVERAGE_MATERIAL_RATIO: 0.05,
+};
+
 function timeDelayBucket(minutes) {
   if (minutes === null || minutes === undefined || !Number.isFinite(minutes)) return null;
   const abs = Math.abs(minutes);
@@ -42,6 +57,143 @@ function timeDelayBucket(minutes) {
   if (abs <= 15) return 'warning';
   if (abs <= 30) return 'delayed';
   return 'exception';
+}
+
+// Status hasil yang berarti "grup bank sudah DIPASANGKAN/dikonsumsi" oleh
+// suatu transaksi FP — dipakai utk deteksi consumed_also_bank_only_count.
+const CONSUMED_STATUSES = ['MATCHED', 'MATCHED_NO_FEE', 'FEE_MISMATCH', 'NOMINAL_MISMATCH', 'REVERSAL', 'DUPLICATE_BANK'];
+
+/**
+ * Dedupe hasil berdasarkan canonical_transaction_key — PERTAHANAN TAMBAHAN
+ * di luar UNIQUE(batch_id, canonical_transaction_key) DB (spec: "Jangan
+ * hanya mengandalkan unique index. Diagnostic tetap harus ditampilkan").
+ * Baris PERTAMA per key dipertahankan. Baris tanpa canonical key (null)
+ * masing-masing dianggap unik (fallback __row_<id>).
+ */
+function dedupeBriResultsByCanonicalKey(results) {
+  const map = new Map();
+  for (const r of results) {
+    const key = r.canonical_transaction_key || `__row_${r.id}`;
+    if (!map.has(key)) map.set(key, r);
+  }
+  return [...map.values()];
+}
+
+/**
+ * Quality checks berbasis `recon_results` (SEBELUM dedupe, spec: kasus
+ * consumed+bank_only harus tetap terdeteksi dari data mentah) —
+ * invalid_business_date_count, duplicate_canonical_result_count,
+ * consumed_also_bank_only_count. PURE (tidak menyentuh DB).
+ */
+function computeBriResultQualityChecks(results, businessDate) {
+  const invalidBusinessDateCount = results.filter(r =>
+    r.bank_transaction_date !== null && r.bank_transaction_date !== businessDate &&
+    r.reversal_lookup_source !== 'CROSS_DATE_LOOKUP'
+  ).length;
+
+  const canonicalGroups = new Map();
+  for (const r of results) {
+    const key = r.canonical_transaction_key;
+    if (!key) continue;
+    if (!canonicalGroups.has(key)) canonicalGroups.set(key, []);
+    canonicalGroups.get(key).push(r);
+  }
+  let duplicateCanonicalResultCount = 0;
+  let consumedAlsoBankOnlyCount = 0;
+  for (const rows of canonicalGroups.values()) {
+    if (rows.length <= 1) continue;
+    duplicateCanonicalResultCount += rows.length - 1;
+    const statuses = rows.map(r => r.recon_status);
+    if (statuses.includes('BANK_ONLY') && statuses.some(s => CONSUMED_STATUSES.includes(s))) consumedAlsoBankOnlyCount++;
+  }
+
+  return {
+    invalid_business_date_count: invalidBusinessDateCount,
+    duplicate_canonical_result_count: duplicateCanonicalResultCount,
+    consumed_also_bank_only_count: consumedAlsoBankOnlyCount,
+  };
+}
+
+/**
+ * Actionable Exception — dipindah dari frontend ke backend (spec). Hanya 9
+ * EXCEPTION_STATUSES, dedupe by canonical key, TIDAK PERNAH menghitung
+ * OUTSIDE_FP_COVERAGE (dijamin ganda: engine briAdapter.js sendiri tidak
+ * pernah memasukkan grup OUTSIDE_FP_COVERAGE ke `results`, filter di sini
+ * murni pertahanan berlapis eksplisit). Nominal: fp_nominal, fallback
+ * bank_total_debit (gross debit) utk BANK_ONLY yang tidak punya fp_nominal.
+ */
+function computeBriActionableException(results) {
+  const rows = results.filter(r =>
+    EXCEPTION_STATUSES.includes(r.recon_status) && r.coverage_status !== 'OUTSIDE_FP_COVERAGE'
+  );
+  const nominal = rows.reduce((s, r) => s + Number(r.fp_nominal !== null ? r.fp_nominal : (r.bank_total_debit || 0)), 0);
+  return { count: rows.length, nominal };
+}
+
+/**
+ * Health Status BRI — threshold terpusat di BRI_HEALTH_THRESHOLDS. RED
+ * dievaluasi LEBIH DULU, lalu YELLOW, fallback GREEN (spec eksplisit).
+ * Cross-date reversal VALID (reversal_lookup_source=CROSS_DATE_LOOKUP)
+ * BUKAN kondisi RED/YELLOW apa pun di sini — itu fitur bisnis, bukan
+ * masalah data (lihat cross_date_reversal_count, dilaporkan terpisah,
+ * TIDAK pernah masuk input fungsi ini).
+ */
+function computeBriHealthStatus({
+  validMatchRateTransaction, actionableExceptionCount, syncStatus,
+  invalidBusinessDateCount, duplicateCanonicalResultCount, consumedAlsoBankOnlyCount,
+  idConflictCount, unbalancedBankRowCount, extractionMediumCount, outsideCoverageRatio, hasPostingDelay,
+}) {
+  const T = BRI_HEALTH_THRESHOLDS;
+  const syncFailed = syncStatus !== 'success';
+  const rate = validMatchRateTransaction;
+
+  if (
+    syncFailed ||
+    (rate !== null && rate < T.YELLOW_MIN_MATCH_RATE) ||
+    invalidBusinessDateCount > 0 ||
+    duplicateCanonicalResultCount > 0 ||
+    consumedAlsoBankOnlyCount > 0 ||
+    idConflictCount >= T.ID_CONFLICT_MATERIAL_COUNT ||
+    unbalancedBankRowCount >= T.UNBALANCED_MATERIAL_COUNT
+  ) {
+    return 'RED';
+  }
+
+  if (
+    (rate !== null && rate < T.GREEN_MIN_MATCH_RATE) ||
+    actionableExceptionCount > 0 ||
+    hasPostingDelay ||
+    extractionMediumCount > 0 ||
+    idConflictCount > 0 ||
+    unbalancedBankRowCount > 0 ||
+    (outsideCoverageRatio !== null && outsideCoverageRatio > T.OUTSIDE_COVERAGE_MATERIAL_RATIO)
+  ) {
+    return 'YELLOW';
+  }
+
+  return 'GREEN';
+}
+
+function fmtNumId(n) {
+  return Number(n || 0).toLocaleString('id-ID');
+}
+function fmtRpId(n) {
+  return `Rp ${Math.round(Number(n || 0)).toLocaleString('id-ID')}`;
+}
+const INDO_MONTHS = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+function formatWibLong(date) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(date).reduce((acc, p) => { acc[p.type] = p.value; return acc; }, {});
+  const monthName = INDO_MONTHS[Number(parts.month) - 1] || parts.month;
+  return `${Number(parts.day)} ${monthName} ${parts.year} pukul ${parts.hour}:${parts.minute} WIB`;
+}
+function joinWithDan(items) {
+  const arr = (items || []).filter(Boolean);
+  if (arr.length === 0) return '';
+  if (arr.length === 1) return arr[0];
+  if (arr.length === 2) return `${arr[0]} dan ${arr[1]}`;
+  return `${arr.slice(0, -1).join(', ')}, dan ${arr[arr.length - 1]}`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -366,7 +518,10 @@ async function analyticsHandler(req, res) {
       });
     }
 
-    const batchRes = await pool.query('SELECT * FROM recon_sync_batches WHERE business_date = $1 AND bank_code = $2', [date, BANK_CODE]);
+    const batchRes = await pool.query(
+      'SELECT *, business_date::text AS business_date FROM recon_sync_batches WHERE business_date = $1 AND bank_code = $2',
+      [date, BANK_CODE]
+    );
     const batch = batchRes.rows[0] || null;
     if (!batch) {
       return res.json({
@@ -375,7 +530,7 @@ async function analyticsHandler(req, res) {
       });
     }
 
-    const [resultsRes, fpCountRes, bankScopeRes, bankBalanceRes, bankIdCountRes] = await Promise.all([
+    const [resultsRes, fpCountRes, bankScopeRes, bankBalanceRes, bankIdCountRes, extractionRes] = await Promise.all([
       pool.query('SELECT *, bank_transaction_date::text AS bank_transaction_date FROM recon_results WHERE batch_id = $1 AND bank_code = $2', [batch.id, BANK_CODE]),
       pool.query('SELECT COUNT(*) AS c, COALESCE(SUM(nominal),0) AS s FROM recon_fp_transactions WHERE batch_id = $1', [batch.id]),
       pool.query(
@@ -384,8 +539,39 @@ async function analyticsHandler(req, res) {
       ),
       pool.query('SELECT balance_check_status, COUNT(*) AS c, COALESCE(SUM(balance_variance),0) AS variance FROM recon_bank_transactions WHERE batch_id = $1 GROUP BY balance_check_status', [batch.id]),
       pool.query('SELECT COUNT(DISTINCT extracted_transaction_id) AS c FROM recon_bank_transactions WHERE batch_id = $1 AND extracted_transaction_id IS NOT NULL', [batch.id]),
+      pool.query(
+        `SELECT extraction_confidence, extraction_method, bank_row_type, id_conflict, COUNT(*) AS c
+         FROM recon_bank_transactions WHERE batch_id = $1 GROUP BY 1,2,3,4`,
+        [batch.id]
+      ),
     ]);
-    const results = resultsRes.rows;
+
+    // Guard integritas — SAMA pola dgn Rekonsiliasi OCBC/Mandiri:
+    // active_batch.business_date HARUS persis sama dgn `date` yang diminta
+    // (dijamin oleh WHERE business_date=$1 di atas — cek eksplisit ini
+    // murni pertahanan berlapis, gagal LANTANG bukan diam-diam mencampur data).
+    if (batch.business_date !== date) {
+      throw new Error(`Integrity guard gagal: active_batch.business_date (${batch.business_date}) != date diminta (${date})`);
+    }
+
+    // rawResults: SEMUA baris apa adanya (belum difilter cross-date/dedupe) —
+    // dipakai HANYA utk data_quality_warning (perlu melihat duplikat/consumed
+    // SEBELUM dibersihkan supaya bisa terdeteksi, spec: "Jangan hanya
+    // mengandalkan unique index. Diagnostic tetap harus ditampilkan").
+    const rawResults = resultsRes.rows;
+    const qualityChecks = computeBriResultQualityChecks(rawResults, date);
+
+    // "Invalid business date tidak masuk KPI" (spec) — SEMUA agregasi di
+    // bawah (summary/fee_analysis/time_analysis/actionable exception) WAJIB
+    // memakai `results` versi bersih ini, BUKAN rawResults. Cross-date
+    // reversal VALID (CROSS_DATE_LOOKUP) tidak pernah dikecualikan di sini.
+    const resultsValidDate = rawResults.filter(r =>
+      r.bank_transaction_date === null || r.bank_transaction_date === date ||
+      r.reversal_lookup_source === 'CROSS_DATE_LOOKUP'
+    );
+    // "Satu canonical_transaction_key hanya boleh dihitung satu kali" (spec) —
+    // dedupe eksplisit sbg jaminan tambahan di luar unique index DB.
+    const results = dedupeBriResultsByCanonicalKey(resultsValidDate);
 
     const totalTransaksiFp = Number(fpCountRes.rows[0]?.c || 0);
     const totalNominalFp = Number(fpCountRes.rows[0]?.s || 0);
@@ -414,6 +600,7 @@ async function analyticsHandler(req, res) {
     const expectedTotalFee = transactionWithFeeCount * expectedFee;
 
     const bankOutsideCoverage = results.filter(r => r.coverage_status === 'OUTSIDE_FP_COVERAGE').length;
+    const actionableException = computeBriActionableException(results);
 
     const summary = {
       total_fp: totalTransaksiFp,
@@ -441,6 +628,8 @@ async function analyticsHandler(req, res) {
       net_bank_movement: grossDebitTotal - creditTotal,
       valid_match_rate_transaction: safeDiv(matchedCount, totalTransaksiFp),
       valid_match_rate_nominal: safeDiv(matchedNominal, totalNominalFp),
+      actionable_exception_count: actionableException.count,
+      actionable_exception_nominal: actionableException.nominal,
     };
 
     const status_distribution = RECON_STATUSES.map(s => ({ status: s, count: byStatus[s].count, nominal: byStatus[s].nominal }));
@@ -527,11 +716,67 @@ async function analyticsHandler(req, res) {
       total_variance: varianceTotal,
     };
 
-    const quality = {
-      id_conflict_count: results.filter(r => r.id_conflict).length,
-      duplicate_canonical_result_count: 0, // dijaga 0 lewat UNIQUE(batch_id, canonical_transaction_key)
-      consumed_also_bank_only_count: 0, // dijaga 0 lewat consumedBankKeys di briAdapter.js
-      cross_date_result_count: results.filter(r => r.reversal_lookup_source === 'CROSS_DATE_LOOKUP').length,
+    // Extraction summary — dari GROUP BY recon_bank_transactions (RAW, semua
+    // baris terklasifikasi, bukan hanya yg punya recon_results — spec:
+    // hitungan confidence/method/OUT_OF_SCOPE harus di level baris mentah).
+    let highConf = 0, mediumConf = 0, conflictConf = 0, noneConf = 0;
+    let idConflictRowCount = 0, needReviewConflictCount = 0, outOfScopeCount = 0;
+    let idFromDeskTran = 0, idFromTrremk = 0, idFromTlbds2 = 0;
+    for (const r of extractionRes.rows) {
+      const c = Number(r.c);
+      if (r.extraction_confidence === 'HIGH') highConf += c;
+      else if (r.extraction_confidence === 'MEDIUM') mediumConf += c;
+      else if (r.extraction_confidence === 'CONFLICT') conflictConf += c;
+      else noneConf += c;
+      if (r.id_conflict) idConflictRowCount += c;
+      if (r.id_conflict && r.bank_row_type === 'NEED_REVIEW') needReviewConflictCount += c;
+      if (r.bank_row_type === 'OUT_OF_SCOPE') outOfScopeCount += c;
+      if (r.extraction_method === 'DESK_TRAN') idFromDeskTran += c;
+      else if (r.extraction_method === 'TRREMK') idFromTrremk += c;
+      else if (r.extraction_method === 'TLBDS2') idFromTlbds2 += c;
+    }
+    const extraction_summary = {
+      high_confidence_count: highConf,
+      medium_confidence_count: mediumConf,
+      conflict_count: conflictConf,
+      none_confidence_count: noneConf,
+      id_conflict_count: idConflictRowCount,
+      id_from_desk_tran_count: idFromDeskTran,
+      id_from_trremk_count: idFromTrremk,
+      id_from_tlbds2_count: idFromTlbds2,
+      need_review_conflict_count: needReviewConflictCount,
+      out_of_scope_count: outOfScopeCount,
+    };
+
+    const crossDateReversalCount = results.filter(r => r.reversal_lookup_source === 'CROSS_DATE_LOOKUP').length;
+
+    // data_quality_warning — has_issue HANYA dari 3 sinyal integritas inti
+    // (spec eksplisit). ID conflict & saldo unbalanced TETAP ditampilkan
+    // jelas di sini, tapi dampaknya ke health status ikut threshold
+    // MATERIAL (lihat computeBriHealthStatus), bukan has_issue biner.
+    const hasIssue = qualityChecks.invalid_business_date_count > 0 ||
+      qualityChecks.duplicate_canonical_result_count > 0 ||
+      qualityChecks.consumed_also_bank_only_count > 0;
+    const data_quality_warning = {
+      invalid_business_date_count: qualityChecks.invalid_business_date_count,
+      duplicate_canonical_result_count: qualityChecks.duplicate_canonical_result_count,
+      consumed_also_bank_only_count: qualityChecks.consumed_also_bank_only_count,
+      id_conflict_count: idConflictRowCount,
+      unbalanced_bank_row_count: unbalancedRows,
+      has_issue: hasIssue,
+      message: [
+        qualityChecks.invalid_business_date_count > 0
+          ? `Ditemukan ${qualityChecks.invalid_business_date_count} baris hasil dgn bank_transaction_date di luar tanggal ${date} (data stale, dikecualikan otomatis dari KPI).`
+          : null,
+        qualityChecks.duplicate_canonical_result_count > 0
+          ? `Ditemukan ${qualityChecks.duplicate_canonical_result_count} baris hasil berbagi canonical_transaction_key yang sama.`
+          : null,
+        qualityChecks.consumed_also_bank_only_count > 0
+          ? `Ditemukan ${qualityChecks.consumed_also_bank_only_count} canonical key yang sudah dipasangkan ke FP tapi juga muncul sbg BANK_ONLY.`
+          : null,
+        idConflictRowCount > 0 ? `${idConflictRowCount} mutasi memiliki konflik ekstraksi ID antar DESK_TRAN/TRREMK/TLBDS2.` : null,
+        unbalancedRows > 0 ? `${unbalancedRows} baris mutasi tidak balance (saldo awal-debit+kredit != saldo akhir).` : null,
+      ].filter(Boolean).join(' ') || null,
     };
 
     res.json({
@@ -544,11 +789,341 @@ async function analyticsHandler(req, res) {
         expected_fee: expectedFee, grace_period_minutes: batch.grace_period_minutes,
         coverage_tolerance_minutes: batch.coverage_tolerance_minutes, reversal_lookup_days: batch.reversal_lookup_days,
       },
-      summary, status_distribution, coverage, fee_analysis, time_analysis, balance_validation, quality,
+      active_batch: {
+        batch_id: batch.id, bank_code: batch.bank_code, business_date: date,
+        account_no: batch.account_no, synced_at: batch.synced_at, sync_status: batch.status,
+      },
+      summary, status_distribution, coverage, fee_analysis, time_analysis, balance_validation,
+      extraction_summary, cross_date_reversal_count: crossDateReversalCount, data_quality_warning,
       recent_batches: recentBatches,
     });
   } catch (e) {
     console.error('reconciliation-bri analytics error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// GET /api/warroom/reconciliation/bri/daily-report?date=YYYY-MM-DD
+// Laporan Harian — ringkasan siap-cetak utk Direktur (tab "Laporan Harian" di
+// WarRoomReconciliationBri.jsx). BEDA MENDASAR dari analyticsHandler: TIDAK
+// PERNAH fallback ke batch tanggal terakhir kalau tanggal yang diminta/hari
+// ini belum ada batch-nya — default date = HARI INI (Asia/Jakarta).
+// ─────────────────────────────────────────────────────────────────────────
+async function dailyReportHandler(req, res) {
+  try {
+    const todayStr = todayJakarta();
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(req.query.date || '') ? req.query.date : todayStr;
+    const generatedAt = new Date().toISOString();
+    const reportStatus = date === todayStr ? 'RUNNING' : 'CLOSED';
+
+    const batchRes = await pool.query(
+      'SELECT *, business_date::text AS business_date FROM recon_sync_batches WHERE business_date = $1 AND bank_code = $2',
+      [date, BANK_CODE]
+    );
+    const batch = batchRes.rows[0] || null;
+
+    if (!batch) {
+      return res.json({
+        success: true, empty: true,
+        message: 'Belum ada data rekonsiliasi BRI untuk tanggal ini.',
+        generated_at: generatedAt, report_status: reportStatus,
+        meta: { date, bank_code: BANK_CODE },
+      });
+    }
+
+    // Guard integritas — SAMA pola dgn analyticsHandler & OCBC/Mandiri.
+    if (batch.business_date !== date) {
+      throw new Error(`Integrity guard gagal: active_batch.business_date (${batch.business_date}) != date diminta (${date})`);
+    }
+
+    const [resultsRes, fpCountRes, bankScopeRes, bankBalanceRes, extractionRes, bankIdCountRes] = await Promise.all([
+      pool.query('SELECT *, bank_transaction_date::text AS bank_transaction_date FROM recon_results WHERE batch_id = $1 AND bank_code = $2', [batch.id, BANK_CODE]),
+      pool.query('SELECT COUNT(*) AS c, COALESCE(SUM(nominal),0) AS s FROM recon_fp_transactions WHERE batch_id = $1', [batch.id]),
+      pool.query('SELECT bank_row_type, COUNT(*) AS c FROM recon_bank_transactions WHERE batch_id = $1 GROUP BY bank_row_type', [batch.id]),
+      pool.query('SELECT balance_check_status, COUNT(*) AS c, COALESCE(SUM(balance_variance),0) AS variance FROM recon_bank_transactions WHERE batch_id = $1 GROUP BY balance_check_status', [batch.id]),
+      pool.query('SELECT extraction_confidence, extraction_method, bank_row_type, id_conflict, COUNT(*) AS c FROM recon_bank_transactions WHERE batch_id = $1 GROUP BY 1,2,3,4', [batch.id]),
+      pool.query('SELECT COUNT(DISTINCT extracted_transaction_id) AS c FROM recon_bank_transactions WHERE batch_id = $1 AND extracted_transaction_id IS NOT NULL', [batch.id]),
+    ]);
+    const uniqueBankTransactionId = Number(bankIdCountRes.rows[0]?.c || 0);
+
+    const rawResults = resultsRes.rows;
+    const qualityChecks = computeBriResultQualityChecks(rawResults, date);
+    const resultsValidDate = rawResults.filter(r =>
+      r.bank_transaction_date === null || r.bank_transaction_date === date ||
+      r.reversal_lookup_source === 'CROSS_DATE_LOOKUP'
+    );
+    const results = dedupeBriResultsByCanonicalKey(resultsValidDate);
+
+    const totalTransaksiFp = Number(fpCountRes.rows[0]?.c || 0);
+    const totalNominalFp = Number(fpCountRes.rows[0]?.s || 0);
+
+    const scopeCounts = {};
+    for (const r of bankScopeRes.rows) scopeCounts[r.bank_row_type || 'UNKNOWN'] = Number(r.c);
+    const validFastpayRows = (scopeCounts.DEBIT_TRANSFER || 0) + (scopeCounts.CREDIT_REVERSAL || 0);
+    const outOfScopeRows = scopeCounts.OUT_OF_SCOPE || 0;
+    const totalBankRows = Object.values(scopeCounts).reduce((s, v) => s + v, 0);
+
+    const byStatus = {};
+    for (const s of RECON_STATUSES) byStatus[s] = { count: 0, nominal: 0 };
+    for (const r of results) {
+      const s = byStatus[r.recon_status] ? r.recon_status : 'NEED_REVIEW';
+      byStatus[s].count++;
+      byStatus[s].nominal += Number(r.fp_nominal || 0);
+    }
+    const matchedCount = byStatus.MATCHED.count + byStatus.MATCHED_NO_FEE.count;
+    const matchedNominal = byStatus.MATCHED.nominal + byStatus.MATCHED_NO_FEE.nominal;
+    const grossDebitTotal = results.reduce((s, r) => s + (r.bank_total_debit !== null ? Number(r.bank_total_debit) : 0), 0);
+    const totalActualFee = results.reduce((s, r) => s + (r.bank_fee !== null ? Number(r.bank_fee) : 0), 0);
+    const expectedFee = Number(batch.expected_fee) || DEFAULT_FEE_BRI;
+    const transactionWithFeeCount = results.filter(r => r.bank_fee !== null).length;
+    const expectedTotalFee = transactionWithFeeCount * expectedFee;
+    const bankOnlyRows = results.filter(r => r.recon_status === 'BANK_ONLY');
+    const bankOnlyGrossDebit = bankOnlyRows.reduce((s, r) => s + (r.bank_total_debit !== null ? Number(r.bank_total_debit) : 0), 0);
+    const bankOnlyEstimatedPrincipal = bankOnlyRows.reduce((s, r) => s + (r.estimated_bank_principal !== null ? Number(r.estimated_bank_principal) : 0), 0);
+    const nominalMismatchAbs = results
+      .filter(r => r.recon_status === 'NOMINAL_MISMATCH')
+      .reduce((s, r) => s + Math.abs(Number(r.fp_nominal || 0) - Number(r.bank_total_debit || 0)), 0);
+
+    const validMatchRateTransaction = safeDiv(matchedCount, totalTransaksiFp);
+    const validMatchRateNominal = safeDiv(matchedNominal, totalNominalFp);
+    const actionableException = computeBriActionableException(results);
+
+    const status_distribution = RECON_STATUSES.map(s => ({ status: s, count: byStatus[s].count, nominal: byStatus[s].nominal }));
+
+    const bankOutsideCoverage = results.filter(r => r.coverage_status === 'OUTSIDE_FP_COVERAGE').length;
+    const coverageRaw = (batch.raw_summary && batch.raw_summary.coverage) || {};
+    const coverage_summary = {
+      scope_mode: batch.scope_mode,
+      coverage_start: coverageRaw.coverage_start || null,
+      coverage_end: coverageRaw.coverage_end || null,
+      coverage_tolerance_minutes: batch.coverage_tolerance_minutes,
+      bank_in_coverage: results.filter(r => r.coverage_status !== 'OUTSIDE_FP_COVERAGE').length,
+      bank_outside_coverage: bankOutsideCoverage,
+      out_of_scope_rows: outOfScopeRows,
+      fastpay_rows_in_scope: validFastpayRows,
+    };
+    const outsideCoverageRatio = totalBankRows > 0 ? bankOutsideCoverage / totalBankRows : null;
+
+    let highConf = 0, mediumConf = 0, conflictConf = 0, noneConf = 0;
+    let idConflictRowCount = 0, needReviewConflictCount = 0, outOfScopeExtractionCount = 0;
+    let idFromDeskTran = 0, idFromTrremk = 0, idFromTlbds2 = 0;
+    for (const r of extractionRes.rows) {
+      const c = Number(r.c);
+      if (r.extraction_confidence === 'HIGH') highConf += c;
+      else if (r.extraction_confidence === 'MEDIUM') mediumConf += c;
+      else if (r.extraction_confidence === 'CONFLICT') conflictConf += c;
+      else noneConf += c;
+      if (r.id_conflict) idConflictRowCount += c;
+      if (r.id_conflict && r.bank_row_type === 'NEED_REVIEW') needReviewConflictCount += c;
+      if (r.bank_row_type === 'OUT_OF_SCOPE') outOfScopeExtractionCount += c;
+      if (r.extraction_method === 'DESK_TRAN') idFromDeskTran += c;
+      else if (r.extraction_method === 'TRREMK') idFromTrremk += c;
+      else if (r.extraction_method === 'TLBDS2') idFromTlbds2 += c;
+    }
+    const extraction_summary = {
+      high_confidence_count: highConf, medium_confidence_count: mediumConf,
+      conflict_count: conflictConf, none_confidence_count: noneConf,
+      id_conflict_count: idConflictRowCount,
+      id_from_desk_tran_count: idFromDeskTran, id_from_trremk_count: idFromTrremk, id_from_tlbds2_count: idFromTlbds2,
+      need_review_conflict_count: needReviewConflictCount, out_of_scope_count: outOfScopeExtractionCount,
+    };
+
+    const timeDiffs = results.map(r => r.time_difference_minutes).filter(v => v !== null && v !== undefined && Number.isFinite(Number(v))).map(Number);
+    const absDiffs = timeDiffs.map(Math.abs).sort((a, b) => a - b);
+    const sumMinutes = absDiffs.reduce((s, v) => s + v, 0);
+    const average_minutes = absDiffs.length ? sumMinutes / absDiffs.length : null;
+    const median_minutes = absDiffs.length ? absDiffs[Math.floor((absDiffs.length - 1) / 2)] : null;
+    const p95_minutes = absDiffs.length ? absDiffs[Math.min(absDiffs.length - 1, Math.floor(absDiffs.length * 0.95))] : null;
+    const maximum_minutes = absDiffs.length ? absDiffs[absDiffs.length - 1] : null;
+    const buckets = { normal: 0, warning: 0, delayed: 0, exception: 0 };
+    for (const d of timeDiffs) { const b = timeDelayBucket(d); if (b) buckets[b]++; }
+    const time_posting_summary = {
+      average_minutes, median_minutes, p95_minutes, maximum_minutes,
+      bucket_0_5: buckets.normal, bucket_5_15: buckets.warning, bucket_15_30: buckets.delayed, bucket_over_30: buckets.exception,
+    };
+    const hasPostingDelay = buckets.exception > 0;
+
+    let balancedRows = 0, unbalancedRows = 0, undeterminedRows = 0, varianceTotal = 0;
+    for (const r of bankBalanceRes.rows) {
+      if (r.balance_check_status === 'BALANCED') balancedRows = Number(r.c);
+      else if (r.balance_check_status === 'UNBALANCED') { unbalancedRows = Number(r.c); varianceTotal = Number(r.variance); }
+      else undeterminedRows += Number(r.c);
+    }
+    const totalBalanceRowsChecked = balancedRows + unbalancedRows + undeterminedRows;
+    const balance_validation = {
+      status: unbalancedRows > 0 ? 'UNBALANCED' : (balancedRows > 0 ? 'BALANCED' : 'UNDETERMINED'),
+      total_rows_checked: totalBalanceRowsChecked,
+      balanced_rows: balancedRows, unbalanced_rows: unbalancedRows, undetermined_rows: undeterminedRows,
+      total_variance: varianceTotal,
+      pct_balanced: safeDiv(balancedRows, totalBalanceRowsChecked),
+    };
+
+    const crossDateReversalCount = results.filter(r => r.reversal_lookup_source === 'CROSS_DATE_LOOKUP').length;
+    const hasIssue = qualityChecks.invalid_business_date_count > 0 ||
+      qualityChecks.duplicate_canonical_result_count > 0 ||
+      qualityChecks.consumed_also_bank_only_count > 0;
+    const data_quality_warning = {
+      invalid_business_date_count: qualityChecks.invalid_business_date_count,
+      duplicate_canonical_result_count: qualityChecks.duplicate_canonical_result_count,
+      consumed_also_bank_only_count: qualityChecks.consumed_also_bank_only_count,
+      id_conflict_count: idConflictRowCount,
+      unbalanced_bank_row_count: unbalancedRows,
+      has_issue: hasIssue,
+      message: [
+        qualityChecks.invalid_business_date_count > 0
+          ? `Ditemukan ${qualityChecks.invalid_business_date_count} baris hasil dgn bank_transaction_date di luar tanggal ${date} (data stale, dikecualikan otomatis dari KPI).`
+          : null,
+        qualityChecks.duplicate_canonical_result_count > 0
+          ? `Ditemukan ${qualityChecks.duplicate_canonical_result_count} baris hasil berbagi canonical_transaction_key yang sama.`
+          : null,
+        qualityChecks.consumed_also_bank_only_count > 0
+          ? `Ditemukan ${qualityChecks.consumed_also_bank_only_count} canonical key yang sudah dipasangkan ke FP tapi juga muncul sbg BANK_ONLY.`
+          : null,
+        idConflictRowCount > 0 ? `${idConflictRowCount} mutasi memiliki konflik ekstraksi ID antar DESK_TRAN/TRREMK/TLBDS2.` : null,
+        unbalancedRows > 0 ? `${unbalancedRows} baris mutasi tidak balance (saldo awal-debit+kredit != saldo akhir).` : null,
+      ].filter(Boolean).join(' ') || null,
+    };
+
+    const financial_summary = {
+      total_nominal_fp: totalNominalFp,
+      matched_nominal: matchedNominal,
+      total_gross_debit: grossDebitTotal,
+      actual_fee_total: totalActualFee,
+      expected_fee_total: expectedTotalFee,
+      fee_variance: totalActualFee - expectedTotalFee,
+      actionable_exception_nominal: actionableException.nominal,
+      reversal_nominal: byStatus.REVERSAL.nominal,
+      bank_only_gross_debit: bankOnlyGrossDebit,
+      bank_only_estimated_principal: bankOnlyEstimatedPrincipal,
+      bank_only_estimated_principal_label: 'ESTIMASI',
+      nominal_mismatch_absolute: nominalMismatchAbs,
+    };
+
+    const top_10_exception = results
+      .filter(r => EXCEPTION_STATUSES.includes(r.recon_status) && r.coverage_status !== 'OUTSIDE_FP_COVERAGE')
+      .sort((a, b) => {
+        const av = Number(a.fp_nominal !== null ? a.fp_nominal : (a.bank_total_debit || 0));
+        const bv = Number(b.fp_nominal !== null ? b.fp_nominal : (b.bank_total_debit || 0));
+        return bv - av;
+      })
+      .slice(0, 10)
+      .map(r => ({
+        id_transaksi: r.id_transaksi || null,
+        canonical_transaction_key: r.canonical_transaction_key || null,
+        id_outlet: r.id_outlet || null, id_produk: r.id_produk || null, id_biller: r.id_biller || null,
+        account_no: batch.account_no,
+        recon_status: r.recon_status,
+        fp_nominal: r.fp_nominal !== null ? Number(r.fp_nominal) : null,
+        bank_gross_debit: r.bank_total_debit !== null ? Number(r.bank_total_debit) : null,
+        bank_principal: r.bank_principal !== null ? Number(r.bank_principal) : null,
+        estimated_bank_principal: r.estimated_bank_principal !== null ? Number(r.estimated_bank_principal) : null,
+        bank_fee: r.bank_fee !== null ? Number(r.bank_fee) : null,
+        variance_principal: r.variance_principal !== null ? Number(r.variance_principal) : null,
+        variance_fee: r.variance_fee !== null ? Number(r.variance_fee) : null,
+        time_difference_minutes: r.time_difference_minutes,
+        matching_method: r.matching_method || null,
+        extraction_confidence: r.extraction_confidence || null,
+        id_conflict: !!r.id_conflict,
+        coverage_status: r.coverage_status || null,
+        reversal_lookup_source: r.reversal_lookup_source || null,
+        notes: r.notes || null,
+      }));
+
+    const healthStatus = computeBriHealthStatus({
+      validMatchRateTransaction, actionableExceptionCount: actionableException.count,
+      syncStatus: batch.status,
+      invalidBusinessDateCount: qualityChecks.invalid_business_date_count,
+      duplicateCanonicalResultCount: qualityChecks.duplicate_canonical_result_count,
+      consumedAlsoBankOnlyCount: qualityChecks.consumed_also_bank_only_count,
+      idConflictCount: idConflictRowCount, unbalancedBankRowCount: unbalancedRows,
+      extractionMediumCount: mediumConf, outsideCoverageRatio, hasPostingDelay,
+    });
+
+    // ── Ringkasan otomatis Direktur — deterministic, TANPA AI/API eksternal ──
+    const pctMatch = validMatchRateTransaction !== null ? (validMatchRateTransaction * 100).toFixed(2).replace('.', ',') : '-';
+    const exceptionStatusesPresent = RECON_STATUSES.filter(s => EXCEPTION_STATUSES.includes(s) && byStatus[s].count > 0);
+    const lines = [];
+    lines.push(
+      `Per ${formatWibLong(new Date())}, sebanyak ${fmtNumId(matchedCount)} dari ${fmtNumId(totalTransaksiFp)} transaksi FP telah berhasil direkonsiliasi dengan Bank BRI, dengan valid match rate sebesar ${pctMatch}%.`
+    );
+    lines.push(
+      actionableException.count > 0
+        ? `Saat ini terdapat ${fmtNumId(actionableException.count)} transaksi yang memerlukan tindak lanjut dengan nilai terdampak sebesar ${fmtRpId(actionableException.nominal)}.`
+        : `Tidak ada transaksi exception yang perlu ditindaklanjuti.`
+    );
+    if (exceptionStatusesPresent.length > 0) {
+      lines.push(`Permasalahan terbesar berasal dari ${joinWithDan(exceptionStatusesPresent)}.`);
+    }
+    if (byStatus.REVERSAL.count > 0) {
+      lines.push(
+        crossDateReversalCount > 0
+          ? `Sebanyak ${fmtNumId(byStatus.REVERSAL.count)} transaksi teridentifikasi sebagai reversal, termasuk ${fmtNumId(crossDateReversalCount)} reversal yang ditemukan melalui pencarian lintas tanggal.`
+          : `Sebanyak ${fmtNumId(byStatus.REVERSAL.count)} transaksi teridentifikasi sebagai reversal.`
+      );
+    }
+    if (idConflictRowCount > 0) {
+      lines.push(`Ditemukan ${fmtNumId(idConflictRowCount)} konflik ID antara DESK_TRAN, TRREMK, dan TLBDS2 yang memerlukan pemeriksaan manual.`);
+    }
+    if (hasIssue) {
+      lines.push(`PERHATIAN: ${data_quality_warning.message}`);
+    }
+    lines.push(`Status kesehatan rekonsiliasi hari ini adalah ${healthStatus}.`);
+    const ringkasan_direktur = lines.join(' ');
+
+    // ── Rekomendasi tindak lanjut ──
+    const rekomendasi = [];
+    if (hasIssue) {
+      rekomendasi.push('Segera periksa & bersihkan data quality issue (invalid business date/duplikat canonical/consumed juga bank only) sebelum laporan difinalisasi.');
+    }
+    if (batch.status !== 'success') {
+      rekomendasi.push('Sinkronisasi batch ini belum berstatus sukses — cek Apps Script/Execution Log dan jalankan sync ulang.');
+    }
+    if (actionableException.count > 0) {
+      rekomendasi.push(`Tindak lanjuti ${fmtNumId(actionableException.count)} transaksi exception senilai ${fmtRpId(actionableException.nominal)} melalui tab Exception Queue.`);
+    }
+    if (idConflictRowCount > 0) {
+      rekomendasi.push(`Periksa manual ${fmtNumId(idConflictRowCount)} mutasi dgn konflik ekstraksi ID (DESK_TRAN/TRREMK/TLBDS2 tidak konsisten).`);
+    }
+    if (unbalancedRows > 0) {
+      rekomendasi.push(`Periksa ${fmtNumId(unbalancedRows)} baris mutasi BRI yang saldonya tidak balance.`);
+    }
+    if (validMatchRateTransaction !== null && validMatchRateTransaction < BRI_HEALTH_THRESHOLDS.GREEN_MIN_MATCH_RATE) {
+      rekomendasi.push('Match rate di bawah target 99% — eskalasi ke tim terkait untuk investigasi lebih lanjut.');
+    }
+    if (rekomendasi.length === 0) {
+      rekomendasi.push('Tidak ada tindak lanjut mendesak — seluruh transaksi FP telah berhasil direkonsiliasi dgn Bank BRI.');
+    }
+
+    res.json({
+      success: true, empty: false,
+      generated_at: generatedAt, report_status: reportStatus, health_status: healthStatus,
+      meta: { date, bank_code: BANK_CODE, batch_no: batch.batch_no, last_sync: batch.synced_at },
+      active_batch: {
+        batch_id: batch.id, bank_code: batch.bank_code, business_date: date,
+        account_no: batch.account_no, synced_at: batch.synced_at, sync_status: batch.status,
+      },
+      total_fp: totalTransaksiFp,
+      total_nominal_fp: totalNominalFp,
+      total_bank_row_count: totalBankRows,
+      unique_bank_transaction_id: uniqueBankTransactionId,
+      matched_transaksi: matchedCount,
+      matched_nominal: matchedNominal,
+      valid_match_rate_transaction: validMatchRateTransaction,
+      valid_match_rate_nominal: validMatchRateNominal,
+      actionable_exception_count: actionableException.count,
+      actionable_exception_nominal: actionableException.nominal,
+      reversal: { count: byStatus.REVERSAL.count, nominal: byStatus.REVERSAL.nominal },
+      cross_date_reversal_count: crossDateReversalCount,
+      status_distribution,
+      financial_summary, coverage_summary, extraction_summary, time_posting_summary, balance_validation,
+      data_quality_warning,
+      top_10_exception,
+      ringkasan_direktur,
+      rekomendasi_tindak_lanjut: rekomendasi,
+    });
+  } catch (e) {
+    console.error('reconciliation-bri daily-report error:', e.message);
     res.status(500).json({ error: e.message });
   }
 }
@@ -832,6 +1407,7 @@ async function actionLogsHandler(req, res) {
 module.exports = {
   syncHandler,
   analyticsHandler,
+  dailyReportHandler,
   transactionsHandler,
   rawBankHandler,
   rawFpHandler,
@@ -843,4 +1419,9 @@ module.exports = {
   timeDelayBucket,
   buildTransactionsQuery,
   mapResultRow,
+  dedupeBriResultsByCanonicalKey,
+  computeBriResultQualityChecks,
+  computeBriActionableException,
+  computeBriHealthStatus,
+  BRI_HEALTH_THRESHOLDS,
 };

@@ -412,6 +412,8 @@ export const getReconciliationMandiriLogs = (id) =>
 /* WAR-ROOM — Rekonsiliasi FP vs Bank BRI (TIDAK di-cache — data operasional, harus selalu fresh) */
 export const getReconciliationBriAnalytics = (params = {}) =>
   axios.get(`${API_URL}/api/warroom/reconciliation/bri/analytics`, { params, headers: authHeaders() }).then(r => r.data);
+export const getReconciliationBriDailyReport = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/bri/daily-report`, { params, headers: authHeaders() }).then(r => r.data);
 export const getReconciliationBriTransactions = (params = {}) =>
   axios.get(`${API_URL}/api/warroom/reconciliation/bri/transactions`, { params, headers: authHeaders() }).then(r => r.data);
 export const getReconciliationBriRawBank = (params = {}) =>

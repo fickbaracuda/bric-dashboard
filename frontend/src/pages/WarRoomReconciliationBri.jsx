@@ -5,6 +5,7 @@ import {
   resolveReconciliationBri, getReconciliationBriLogs, getReconciliationBriRawBank,
   getReconciliationBriRawFp, getReconciliationBriResolutionHistory, requestReconciliationSync,
 } from '../services/api';
+import DailyReportBriTab from '../components/reconciliation/DailyReportBriTab';
 
 // Halaman ini REUSE layout/komponen generik "wrr-*"/"wrrm-*" yang sudah
 // dibangun utk Rekonsiliasi OCBC & Mandiri (tabs/panel/kpi/table/modal/
@@ -21,6 +22,7 @@ const TABS = [
   { key: 'fee', label: 'Fee Analysis', icon: 'ti-receipt-2' },
   { key: 'time', label: 'Time & Posting Analysis', icon: 'ti-clock' },
   { key: 'raw', label: 'Raw Data & Audit', icon: 'ti-database' },
+  { key: 'daily-report', label: 'Laporan Harian', icon: 'ti-file-report' },
 ];
 const EXCEPTION_STATUSES = [
   'PENDING_BANK', 'FP_ONLY', 'BANK_ONLY', 'NOMINAL_MISMATCH', 'FEE_MISMATCH',
@@ -214,9 +216,9 @@ function SummaryTab({ analytics, onSelectStatus, date }) {
   const s = analytics?.summary;
   const cov = analytics?.coverage;
   const bv = analytics?.balance_validation;
-  const totalException = (analytics?.status_distribution || [])
-    .filter(d => EXCEPTION_STATUSES.includes(d.status))
-    .reduce((sum, d) => sum + (d.count || 0), 0);
+  // Actionable Exception dihitung di BACKEND (computeBriActionableException di
+  // warroom-reconciliation-bri.js) — BUKAN lagi dihitung ulang di frontend.
+  const totalException = s?.actionable_exception_count ?? 0;
   return (
     <>
       <div className="wrr-panel">
@@ -916,6 +918,7 @@ export default function WarRoomReconciliationBri() {
           {activeTab === 'fee' && <FeeAnalysisTab analytics={analytics} />}
           {activeTab === 'time' && <TimeAnalysisTab analytics={analytics} />}
           {activeTab === 'raw' && <RawDataTab analytics={analytics} date={date} onExport={handleExport} exporting={exporting} />}
+          {activeTab === 'daily-report' && <DailyReportBriTab date={date} />}
         </>)}
 
         {auditId && <AuditLogModal id={auditId} onClose={() => setAuditId(null)} />}

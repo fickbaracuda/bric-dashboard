@@ -4,11 +4,14 @@
 // backend/scripts/test-reconciliation-{ocbc,mandiri}.js (belum ada test
 // framework di project ini). Run: node backend/scripts/test-reconciliation-bri.js
 //
-// Mencakup TEST 1-14 dari spek Rekonsiliasi BRI (pure function, briAdapter.js).
-// TEST 15 (idempotensi sync), TEST 16 (resolusi manual bertahan setelah
-// resync), TEST 17 (regresi OCBC & Mandiri) adalah perilaku level DB/endpoint
-// — diverifikasi langsung di server (lihat laporan implementasi), BUKAN di
-// level pure-function di sini, sama seperti pola test OCBC/Mandiri.
+// Mencakup TEST 1-14 dari spek Rekonsiliasi BRI (pure function, briAdapter.js)
+// PLUS blok "LAPORAN HARIAN" (dedupe/data quality/actionable exception/health
+// status, pure function di warroom-reconciliation-bri.js — briAdapter.js
+// TIDAK disentuh sama sekali oleh paket parity ini).
+// Skenario idempotensi sync, resolusi manual bertahan setelah resync, dan
+// regresi OCBC & Mandiri adalah perilaku level DB/endpoint — diverifikasi
+// langsung di server (lihat laporan implementasi), BUKAN di level
+// pure-function di sini, sama seperti pola test OCBC/Mandiri.
 
 const assert = require('assert');
 const {
@@ -16,6 +19,10 @@ const {
   calculateBriCoverage, reconcileBriTransactions, applyBriReversalCrossDateLookup,
   validateBriBalance, buildBriFingerprint, DEFAULT_FEE_BRI,
 } = require('../src/reconciliation/briAdapter');
+const {
+  dedupeBriResultsByCanonicalKey, computeBriResultQualityChecks,
+  computeBriActionableException, computeBriHealthStatus, BRI_HEALTH_THRESHOLDS,
+} = require('../src/routes/warroom-reconciliation-bri');
 
 const tests = [];
 function test(name, fn) { tests.push({ name, fn }); }
@@ -254,6 +261,156 @@ test('buildBriFingerprint: source_row_number TIDAK memengaruhi fingerprint (tida
 test('classifyBriRow: tidak ada teks Description sama sekali -> UNKNOWN', () => {
   const c = classifyBriRow({ deskTran: '', trremk: '', tlbds2: null, mutasiDebet: 100, mutasiKredit: null });
   assert.strictEqual(c.bankRowType, 'UNKNOWN');
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// LAPORAN HARIAN — active_batch, data_quality_warning, actionable
+// exception, health status (warroom-reconciliation-bri.js, bukan
+// briAdapter.js — logic ekstraksi/klasifikasi/matching BRI TIDAK disentuh).
+// ═══════════════════════════════════════════════════════════════════════
+let nextResultId = 1;
+function resultRow(overrides = {}) {
+  return {
+    id: nextResultId++,
+    canonical_transaction_key: '3555181698',
+    recon_status: 'MATCHED',
+    bank_transaction_date: '2026-07-11',
+    reversal_lookup_source: null,
+    fp_nominal: 500000,
+    bank_total_debit: 500150,
+    coverage_status: 'IN_FP_COVERAGE',
+    ...overrides,
+  };
+}
+
+// ── dedupeBriResultsByCanonicalKey ───────────────────────────────────────
+test('dedupeBriResultsByCanonicalKey: 2 baris berbagi canonical key -> dihitung 1x, baris pertama dipertahankan', () => {
+  const rows = [resultRow({ canonical_transaction_key: 'X1', recon_status: 'MATCHED' }), resultRow({ canonical_transaction_key: 'X1', recon_status: 'BANK_ONLY' })];
+  const deduped = dedupeBriResultsByCanonicalKey(rows);
+  assert.strictEqual(deduped.length, 1);
+  assert.strictEqual(deduped[0].recon_status, 'MATCHED');
+});
+
+// ── computeBriResultQualityChecks ────────────────────────────────────────
+test('computeBriResultQualityChecks: bank_transaction_date beda dari business_date -> invalid_business_date_count', () => {
+  const rows = [resultRow({ bank_transaction_date: '2026-07-09' })];
+  const q = computeBriResultQualityChecks(rows, '2026-07-11');
+  assert.strictEqual(q.invalid_business_date_count, 1);
+});
+test('computeBriResultQualityChecks: cross-date VALID (reversal_lookup_source=CROSS_DATE_LOOKUP) TIDAK dihitung invalid_business_date_count', () => {
+  const rows = [resultRow({ bank_transaction_date: '2026-07-09', reversal_lookup_source: 'CROSS_DATE_LOOKUP', recon_status: 'REVERSAL' })];
+  const q = computeBriResultQualityChecks(rows, '2026-07-11');
+  assert.strictEqual(q.invalid_business_date_count, 0);
+});
+test('computeBriResultQualityChecks: 2 baris berbagi canonical key -> duplicate_canonical_result_count = 1', () => {
+  const rows = [resultRow({ canonical_transaction_key: 'DUP1' }), resultRow({ canonical_transaction_key: 'DUP1' })];
+  const q = computeBriResultQualityChecks(rows, '2026-07-11');
+  assert.strictEqual(q.duplicate_canonical_result_count, 1);
+});
+test('computeBriResultQualityChecks: key sama, 1 MATCHED + 1 BANK_ONLY -> consumed_also_bank_only_count = 1', () => {
+  const rows = [resultRow({ canonical_transaction_key: 'CON1', recon_status: 'MATCHED' }), resultRow({ canonical_transaction_key: 'CON1', recon_status: 'BANK_ONLY' })];
+  const q = computeBriResultQualityChecks(rows, '2026-07-11');
+  assert.strictEqual(q.consumed_also_bank_only_count, 1);
+});
+test('computeBriResultQualityChecks: data bersih -> semua count 0', () => {
+  const rows = [resultRow({ canonical_transaction_key: 'A' }), resultRow({ canonical_transaction_key: 'B', recon_status: 'BANK_ONLY', fp_nominal: null })];
+  const q = computeBriResultQualityChecks(rows, '2026-07-11');
+  assert.strictEqual(q.invalid_business_date_count, 0);
+  assert.strictEqual(q.duplicate_canonical_result_count, 0);
+  assert.strictEqual(q.consumed_also_bank_only_count, 0);
+});
+
+// ── computeBriActionableException ────────────────────────────────────────
+test('computeBriActionableException: hanya 9 EXCEPTION_STATUSES dihitung, MATCHED/MATCHED_NO_FEE tidak ikut', () => {
+  const rows = [
+    resultRow({ recon_status: 'MATCHED' }),
+    resultRow({ recon_status: 'MATCHED_NO_FEE' }),
+    resultRow({ recon_status: 'FP_ONLY', fp_nominal: 200000, bank_total_debit: null }),
+    resultRow({ recon_status: 'BANK_ONLY', fp_nominal: null, bank_total_debit: 300150 }),
+  ];
+  const r = computeBriActionableException(rows);
+  assert.strictEqual(r.count, 2);
+  assert.strictEqual(r.nominal, 200000 + 300150);
+});
+test('computeBriActionableException: OUTSIDE_FP_COVERAGE TIDAK dihitung meski status exception', () => {
+  const rows = [resultRow({ recon_status: 'BANK_ONLY', coverage_status: 'OUTSIDE_FP_COVERAGE', fp_nominal: null, bank_total_debit: 500000 })];
+  const r = computeBriActionableException(rows);
+  assert.strictEqual(r.count, 0);
+  assert.strictEqual(r.nominal, 0);
+});
+
+// ── computeBriHealthStatus ────────────────────────────────────────────────
+function healthInput(overrides = {}) {
+  return {
+    validMatchRateTransaction: 1, actionableExceptionCount: 0, syncStatus: 'success',
+    invalidBusinessDateCount: 0, duplicateCanonicalResultCount: 0, consumedAlsoBankOnlyCount: 0,
+    idConflictCount: 0, unbalancedBankRowCount: 0, extractionMediumCount: 0,
+    outsideCoverageRatio: 0, hasPostingDelay: false,
+    ...overrides,
+  };
+}
+test('computeBriHealthStatus: semua bersih -> GREEN', () => {
+  assert.strictEqual(computeBriHealthStatus(healthInput()), 'GREEN');
+});
+test('computeBriHealthStatus: match rate 95-99% -> YELLOW', () => {
+  assert.strictEqual(computeBriHealthStatus(healthInput({ validMatchRateTransaction: 0.97 })), 'YELLOW');
+});
+test('computeBriHealthStatus: masih ada actionable exception -> YELLOW', () => {
+  assert.strictEqual(computeBriHealthStatus(healthInput({ actionableExceptionCount: 3 })), 'YELLOW');
+});
+test('computeBriHealthStatus: id_conflict_count 1-4 (di bawah material) -> YELLOW, bukan RED', () => {
+  assert.strictEqual(computeBriHealthStatus(healthInput({ idConflictCount: 2 })), 'YELLOW');
+});
+test('computeBriHealthStatus: unbalanced_bank_row_count 1-4 (di bawah material) -> YELLOW, bukan RED', () => {
+  assert.strictEqual(computeBriHealthStatus(healthInput({ unbalancedBankRowCount: 3 })), 'YELLOW');
+});
+test('computeBriHealthStatus: extraction confidence MEDIUM ada -> YELLOW', () => {
+  assert.strictEqual(computeBriHealthStatus(healthInput({ extractionMediumCount: 1 })), 'YELLOW');
+});
+test('computeBriHealthStatus: ada posting delay -> YELLOW', () => {
+  assert.strictEqual(computeBriHealthStatus(healthInput({ hasPostingDelay: true })), 'YELLOW');
+});
+test('computeBriHealthStatus: OUTSIDE_FP_COVERAGE ratio material (>5%) -> YELLOW', () => {
+  assert.strictEqual(computeBriHealthStatus(healthInput({ outsideCoverageRatio: 0.2 })), 'YELLOW');
+});
+test('computeBriHealthStatus: match rate <95% -> RED', () => {
+  assert.strictEqual(computeBriHealthStatus(healthInput({ validMatchRateTransaction: 0.80 })), 'RED');
+});
+test('computeBriHealthStatus: sync gagal -> RED', () => {
+  assert.strictEqual(computeBriHealthStatus(healthInput({ syncStatus: 'pending' })), 'RED');
+});
+test('computeBriHealthStatus: invalid_business_date_count > 0 -> RED', () => {
+  assert.strictEqual(computeBriHealthStatus(healthInput({ invalidBusinessDateCount: 1 })), 'RED');
+});
+test('computeBriHealthStatus: duplicate_canonical_result_count > 0 -> RED', () => {
+  assert.strictEqual(computeBriHealthStatus(healthInput({ duplicateCanonicalResultCount: 1 })), 'RED');
+});
+test('computeBriHealthStatus: consumed_also_bank_only_count > 0 -> RED', () => {
+  assert.strictEqual(computeBriHealthStatus(healthInput({ consumedAlsoBankOnlyCount: 1 })), 'RED');
+});
+test('computeBriHealthStatus: id_conflict_count material (>=5) -> RED', () => {
+  assert.strictEqual(computeBriHealthStatus(healthInput({ idConflictCount: 5 })), 'RED');
+});
+test('computeBriHealthStatus: unbalanced_bank_row_count material (>=5) -> RED', () => {
+  assert.strictEqual(computeBriHealthStatus(healthInput({ unbalancedBankRowCount: 5 })), 'RED');
+});
+test('computeBriHealthStatus: RED menang atas YELLOW kalau keduanya terpenuhi', () => {
+  assert.strictEqual(computeBriHealthStatus(healthInput({ actionableExceptionCount: 3, duplicateCanonicalResultCount: 1 })), 'RED');
+});
+test('computeBriHealthStatus: cross-date reversal VALID tidak pernah jadi input -> tidak memengaruhi status (GREEN tetap GREEN)', () => {
+  // Fungsi ini TIDAK menerima parameter cross-date reversal sama sekali (spec:
+  // "Cross-date reversal valid tidak otomatis membuat status RED") — cukup
+  // pastikan tidak ada jalur di computeBriHealthStatus yg membaca field itu.
+  assert.strictEqual(computeBriHealthStatus(healthInput()), 'GREEN');
+});
+test('computeBriHealthStatus: match rate null (tidak ada FP) + semua bersih -> GREEN', () => {
+  assert.strictEqual(computeBriHealthStatus(healthInput({ validMatchRateTransaction: null })), 'GREEN');
+});
+test('BRI_HEALTH_THRESHOLDS: konfigurasi terpusat 99%/95%/material thresholds', () => {
+  assert.strictEqual(BRI_HEALTH_THRESHOLDS.GREEN_MIN_MATCH_RATE, 0.99);
+  assert.strictEqual(BRI_HEALTH_THRESHOLDS.YELLOW_MIN_MATCH_RATE, 0.95);
+  assert.strictEqual(BRI_HEALTH_THRESHOLDS.ID_CONFLICT_MATERIAL_COUNT, 5);
+  assert.strictEqual(BRI_HEALTH_THRESHOLDS.UNBALANCED_MATERIAL_COUNT, 5);
 });
 
 // ── Runner ──────────────────────────────────────────────────────────────────
