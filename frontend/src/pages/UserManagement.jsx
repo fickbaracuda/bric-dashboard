@@ -1,13 +1,14 @@
 import { useState, useEffect } from 'react';
 import Layout from '../components/Layout';
-import { getUsers, createUser, updateUser, deleteUser } from '../services/api';
+import { getUsers, createUser, updateUser, deleteUser, getUserUnits } from '../services/api';
 import { getUser } from '../utils/auth';
 
-const UNITS = [
-  'Payment Agent', 'SpeedCash', 'Travel B2C', 'Pulsagram',
-  'Winme', 'InstaQris', 'DOMPET DIGITAL SPEEDCASH',
-  'WINME&INSTAQRIS', 'Semua Unit'
-];
+// Daftar unit diambil dari backend (GET /api/users/units, satu-satunya
+// sumber kebenaran di backend/src/routes/users.js) — SENGAJA tidak
+// di-hardcode ulang di sini lagi, supaya tidak pernah divergen dari
+// backend seperti yang pernah terjadi (unit "FA"/"OP" sempat tidak
+// muncul di dropdown ini walau sudah ditambahkan di backend).
+const FALLBACK_UNITS = ['Semua Unit'];
 
 const ROLES = [
   { value: 'viewer', label: 'Viewer — Hanya bisa lihat' },
@@ -35,7 +36,7 @@ function Modal({ title, onClose, children }) {
   );
 }
 
-function UserForm({ initial, onSave, onCancel, loading, error, isEdit }) {
+function UserForm({ initial, onSave, onCancel, loading, error, isEdit, units }) {
   const [form, setForm] = useState(initial || emptyForm);
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
@@ -55,7 +56,7 @@ function UserForm({ initial, onSave, onCancel, loading, error, isEdit }) {
         <div className="form-field">
           <label className="form-label">Unit</label>
           <select className="form-input" value={form.unit} onChange={e => set('unit', e.target.value)}>
-            {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+            {units.map(u => <option key={u} value={u}>{u}</option>)}
           </select>
         </div>
         <div className="form-field">
@@ -91,6 +92,7 @@ export default function UserManagement() {
   const [saving,  setSaving]  = useState(false);
   const [formErr, setFormErr] = useState('');
   const [toast,   setToast]   = useState('');
+  const [units,   setUnits]   = useState(FALLBACK_UNITS);
   const currentUser = getUser();
 
   const load = () => {
@@ -100,7 +102,10 @@ export default function UserManagement() {
       .catch(e => { setError(e.response?.data?.error || e.message); setLoading(false); });
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    getUserUnits().then(setUnits).catch(() => setUnits(FALLBACK_UNITS));
+  }, []);
 
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(''), 3000); };
 
@@ -256,7 +261,7 @@ export default function UserManagement() {
       {/* Modal Tambah */}
       {modal === 'add' && (
         <Modal title="Tambah User Baru" onClose={() => setModal(null)}>
-          <UserForm onSave={handleAdd} onCancel={() => setModal(null)} loading={saving} error={formErr} />
+          <UserForm onSave={handleAdd} onCancel={() => setModal(null)} loading={saving} error={formErr} units={units} />
         </Modal>
       )}
 
@@ -267,7 +272,7 @@ export default function UserManagement() {
             initial={{ ...selected, password: '' }}
             onSave={handleEdit}
             onCancel={() => setModal(null)}
-            loading={saving} error={formErr} isEdit
+            loading={saving} error={formErr} isEdit units={units}
           />
         </Modal>
       )}

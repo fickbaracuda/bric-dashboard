@@ -49,6 +49,10 @@ export const deleteUser = async (id) => {
   const res = await axios.delete(`${API_URL}/api/users/${id}`, { headers: authHeaders() });
   return res.data;
 };
+export const getUserUnits = async () => {
+  const res = await axios.get(`${API_URL}/api/users/units`, { headers: authHeaders() });
+  return res.data;
+};
 
 export const getScoreboard = async (bulan, metric = 'kpi') => {
   const res = await axios.get(`${API_URL}/api/scoreboard/units`, {
