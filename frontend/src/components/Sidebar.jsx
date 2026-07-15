@@ -138,6 +138,12 @@ export default function Sidebar({ onClose }) {
   const navigate   = useNavigate();
   const location   = useLocation();
   const user       = getUser();
+  // Unit OP (Tim Operation) & FA (Finance) HANYA boleh akses menu
+  // Rekonsiliasi dan submenu-nya — seluruh menu lain disembunyikan.
+  // Pembatasan sungguhan (bukan cuma sembunyikan link) ada di
+  // ProtectedRoute.jsx, yang me-redirect kalau mereka coba buka URL lain
+  // langsung lewat address bar.
+  const isReconOnly = ['OP', 'FA'].includes(user?.unit);
   const [members,   setMembers]   = useState([]);
   const [membersPA, setMembersPA] = useState([]);
   const [membersSC, setMembersSC] = useState([]);
@@ -231,6 +237,8 @@ export default function Sidebar({ onClose }) {
       <nav className="sidebar-nav">
         <div className="sidebar-nav-label">MENU</div>
 
+        {!isReconOnly && (
+        <>
         {/* Unit Scoreboard */}
         <NavLink to="/scoreboard" onClick={onClose}
           className={({ isActive }) => 'sidebar-link' + (isActive ? ' sidebar-link--active' : '')}>
@@ -756,6 +764,8 @@ export default function Sidebar({ onClose }) {
             </div>
           </Accordion>
         </div>
+        </>
+        )}
 
         <div className="sidebar-menu-sep" />
 
@@ -818,7 +828,7 @@ export default function Sidebar({ onClose }) {
         </div>
 
         {/* Server Monitor (admin only) */}
-        {user?.role === 'admin' && (
+        {!isReconOnly && user?.role === 'admin' && (
           <>
           <div className="sidebar-menu-sep" />
           <NavLink to="/server-monitor" onClick={onClose}
@@ -830,7 +840,7 @@ export default function Sidebar({ onClose }) {
         )}
 
         {/* Kelola User (admin only) */}
-        {user?.role === 'admin' && (
+        {!isReconOnly && user?.role === 'admin' && (
           <>
           <div className="sidebar-menu-sep" />
           <NavLink to="/users" onClick={onClose}

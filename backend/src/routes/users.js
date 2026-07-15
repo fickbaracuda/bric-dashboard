@@ -6,7 +6,7 @@ const pool    = require('../db');
 const UNITS = [
   'Payment Agent', 'SpeedCash', 'Travel B2C', 'Pulsagram',
   'Winme', 'InstaQris', 'DOMPET DIGITAL SPEEDCASH',
-  'WINME&INSTAQRIS', 'Semua Unit', 'FA'
+  'WINME&INSTAQRIS', 'Semua Unit', 'FA', 'OP'
 ];
 
 // Middleware: hanya admin yang bisa akses user management
