@@ -16,7 +16,7 @@ export default function Login() {
     setLoading(true);
     try {
       const data = await login(username, password);
-      saveAuth(data.token, { username: data.username, role: data.role });
+      saveAuth(data.token, { username: data.username, role: data.role, unit: data.unit });
       navigate('/scoreboard', { replace: true });
     } catch (err) {
       setError(err.response?.data?.error || 'Login gagal. Periksa username dan password.');

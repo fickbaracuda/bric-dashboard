@@ -36,6 +36,7 @@ const quickWinQ3Routes    = require('./routes/warroom-quick-win-q3');
 const reconciliationRoutes = require('./routes/warroom-reconciliation');
 const reconciliationMandiriRoutes = require('./routes/warroom-reconciliation-mandiri');
 const reconciliationBriRoutes = require('./routes/warroom-reconciliation-bri');
+const financeBalanceRequestsRoutes = require('./routes/finance-balance-requests');
 const systemRoutes        = require('./routes/system');
 const requireAuth         = require('./middleware/auth');
 
@@ -82,6 +83,7 @@ app.use('/api/auth/login', loginLimiter);
 app.use('/api/auth',       authRoutes);
 app.use('/api/scoreboard', requireAuth, scoreboardRoutes);
 app.use('/api/users',      requireAuth, usersRoutes);
+app.use('/api/finance/balance-requests', requireAuth, financeBalanceRequestsRoutes);
 app.use('/api/winme',          requireAuth, winmeRoutes);
 app.use('/api/paymentagent',   requireAuth, paymentAgentRoutes);
 app.use('/api/dompetdigital',  requireAuth, dompetDigitalRoutes);

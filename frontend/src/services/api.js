@@ -389,6 +389,16 @@ export const getReconciliationLogs = (id) =>
 export const requestReconciliationSync = (bankCode) =>
   axios.post(`${API_URL}/api/warroom/reconciliation/request-sync`, { bank_code: bankCode }, { headers: authHeaders() }).then(r => r.data);
 
+/* Permintaan Tambahan Saldo (Tim Operation -> Finance/unit FA) — endpoint
+   TIDAK di-cache, ditambah query timestamp supaya browser/proxy tidak
+   pernah menyimpan response GET (data pending harus selalu real-time). */
+export const createFinanceBalanceRequest = (payload) =>
+  axios.post(`${API_URL}/api/finance/balance-requests`, payload, { headers: authHeaders() }).then(r => r.data);
+export const getPendingFinanceBalanceRequests = () =>
+  axios.get(`${API_URL}/api/finance/balance-requests/pending`, { params: { t: Date.now() }, headers: authHeaders() }).then(r => r.data);
+export const acknowledgeFinanceBalanceRequest = (id) =>
+  axios.post(`${API_URL}/api/finance/balance-requests/${id}/acknowledge`, {}, { headers: authHeaders() }).then(r => r.data);
+
 /* WAR-ROOM — Rekonsiliasi FP vs Bank Mandiri (TIDAK di-cache — data operasional, harus selalu fresh) */
 export const getReconciliationMandiriAnalytics = (params = {}) =>
   axios.get(`${API_URL}/api/warroom/reconciliation/mandiri/analytics`, { params, headers: authHeaders() }).then(r => r.data);

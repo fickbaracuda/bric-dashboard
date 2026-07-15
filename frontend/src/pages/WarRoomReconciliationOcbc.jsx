@@ -4,6 +4,7 @@ import {
   getReconciliationAnalytics, getReconciliationTransactions, exportReconciliationCsv,
   resolveReconciliation, getReconciliationLogs, requestReconciliationSync, getReconciliationDailyReport,
 } from '../services/api';
+import BalanceRequestButton from '../components/reconciliation/BalanceRequestButton';
 
 const COLOR = '#DC2626';
 const TABS = [
@@ -977,6 +978,7 @@ export default function WarRoomReconciliationOcbc() {
             {analytics?.meta?.last_sync && (
               <span className="wrr-badge wrr-badge-sync"><i className="ti ti-plug-connected" /> Sync: {fmtDateTime(analytics.meta.last_sync)}</span>
             )}
+            <BalanceRequestButton bankCode="OCBC" />
           </div>
         </div>
         {syncRequestMsg && <div className="wrr-empty-sub" style={{ marginBottom: 12 }}>{syncRequestMsg}</div>}

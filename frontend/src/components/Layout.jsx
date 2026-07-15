@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import Sidebar from './Sidebar';
 import AiChat from './AiChat';
+import FinanceBalanceAlert from './FinanceBalanceAlert';
 import { pingPresence } from '../services/api';
 import { resolveInitialTheme, setTheme } from '../utils/theme';
 import { applyChartTheme } from '../utils/chartTheme';
@@ -120,6 +121,9 @@ export default function Layout({ children, syncedAt, bulan, gsheetUrl, gsheetLab
 
         {/* AI Chat floating button */}
         <AiChat />
+
+        {/* Hard notification "Permintaan Tambahan Saldo" — HANYA render utk user unit FA (return null selain itu) */}
+        <FinanceBalanceAlert />
 
         {/* GSheet link bar */}
         {gsheetUrl && (

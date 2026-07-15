@@ -6,6 +6,7 @@ import {
   getReconciliationMandiriRawFp, getReconciliationMandiriResolutionHistory, requestReconciliationSync,
 } from '../services/api';
 import DailyReportMandiriTab from '../components/reconciliation/DailyReportMandiriTab';
+import BalanceRequestButton from '../components/reconciliation/BalanceRequestButton';
 
 // Halaman ini REUSE layout/komponen generik "wrr-*" yang sudah dibangun untuk
 // Rekonsiliasi OCBC (frontend/src/pages/WarRoomReconciliationOcbc.jsx) —
@@ -874,6 +875,7 @@ export default function WarRoomReconciliationMandiri() {
             {analytics?.meta?.last_sync && (
               <span className="wrr-badge wrr-badge-sync" style={{ background: ACCENT, color: '#111827' }}><i className="ti ti-plug-connected" /> Sync: {fmtDateTime(analytics.meta.last_sync)}</span>
             )}
+            <BalanceRequestButton bankCode="MANDIRI" />
           </div>
         </div>
         {syncRequestMsg && <div className="wrr-empty-sub" style={{ marginBottom: 12 }}>{syncRequestMsg}</div>}

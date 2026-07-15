@@ -6,6 +6,7 @@ import {
   getReconciliationBriRawFp, getReconciliationBriResolutionHistory, requestReconciliationSync,
 } from '../services/api';
 import DailyReportBriTab from '../components/reconciliation/DailyReportBriTab';
+import BalanceRequestButton from '../components/reconciliation/BalanceRequestButton';
 
 // Halaman ini REUSE layout/komponen generik "wrr-*"/"wrrm-*" yang sudah
 // dibangun utk Rekonsiliasi OCBC & Mandiri (tabs/panel/kpi/table/modal/
@@ -890,6 +891,7 @@ export default function WarRoomReconciliationBri() {
             {analytics?.meta?.last_sync && (
               <span className="wrr-badge wrr-badge-sync" style={{ background: ACCENT, color: '#fff' }}><i className="ti ti-plug-connected" /> Sync: {fmtDateTime(analytics.meta.last_sync)}</span>
             )}
+            <BalanceRequestButton bankCode="BRI" />
           </div>
         </div>
         {syncRequestMsg && <div className="wrr-empty-sub" style={{ marginBottom: 12 }}>{syncRequestMsg}</div>}
