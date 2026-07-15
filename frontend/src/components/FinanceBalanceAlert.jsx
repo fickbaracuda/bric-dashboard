@@ -163,6 +163,12 @@ export default function FinanceBalanceAlert() {
         setAcking(false);
         inFlightRef.current = false; // pastikan poll berikutnya tidak diblok flag lama
         poll();
+        // Panel "Permintaan Diproses" (FaTransferPanel.jsx, komponen TERPISAH
+        // di halaman Rekonsiliasi) tidak tahu acknowledge ini terjadi kecuali
+        // lewat poll 8 detik miliknya sendiri -- tanpa event ini, tombol
+        // "Diproses" baru muncul saat halaman di-refresh manual. Pola SAMA
+        // dgn event `membersUpdated` yang sudah ada (Sidebar.jsx).
+        window.dispatchEvent(new CustomEvent('bric:financeBalanceAcknowledged'));
       });
   }
 

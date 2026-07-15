@@ -50,6 +50,15 @@ export default function FaTransferPanel({ bankCode }) {
     return () => { aliveRef.current = false; clearInterval(id); };
   }, [load]);
 
+  // FinanceBalanceAlert.jsx (hard notification, komponen TERPISAH) memancarkan
+  // event ini SEGERA setelah "SAYA TERIMA" diklik -- tanpa listener ini, panel
+  // ini baru tahu ada permintaan baru lewat poll 8 detiknya sendiri (atau
+  // butuh refresh manual). Pola sama dgn event `membersUpdated` yg sudah ada.
+  useEffect(() => {
+    window.addEventListener('bric:financeBalanceAcknowledged', load);
+    return () => window.removeEventListener('bric:financeBalanceAcknowledged', load);
+  }, [load]);
+
   // Kalau list kosong (semua sudah ditransfer -- entah oleh FA ini sendiri
   // atau FA lain di sesi berbeda), tutup modal yang mungkin sedang terbuka.
   // TANPA ini, `open` bisa tetap `true` walau komponen sempat return null
