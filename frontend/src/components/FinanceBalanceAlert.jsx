@@ -14,6 +14,12 @@ const AUDIO_PREF_KEY = 'bric_finance_alert_audio_enabled';
 const BLINK_TITLE_ALERT = '⚠ PERMINTAAN SALDO';
 const BLINK_TITLE_NORMAL = 'BRIC';
 
+function fmtRp(v) {
+  const n = Number(v);
+  if (v === null || v === undefined || !Number.isFinite(n)) return '-';
+  return `Rp ${Math.round(n).toLocaleString('id-ID')}`;
+}
+
 /** Satu beep sederhana via Web Audio API (TIDAK PERNAH audio dari URL eksternal). */
 function playBeep(ctx, durationMs) {
   try {
@@ -178,6 +184,7 @@ export default function FinanceBalanceAlert() {
             <div className="fba-bank">Bank: {current.bank_code}</div>
             <p>Tim Operation membutuhkan tambahan saldo.</p>
             <div className="fba-requester">Nama Requester: {current.requester_name}</div>
+            <div className="fba-balance">Sisa Saldo: {fmtRp(current.remaining_balance)}</div>
             {otherCount > 0 && <div className="fba-more">Terdapat {otherCount} permintaan lainnya.</div>}
             {!audioReady && (
               <button className="fba-enable-audio-btn" onClick={enableAudio}>

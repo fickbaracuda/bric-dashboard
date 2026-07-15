@@ -55,11 +55,21 @@ function validateRequesterName(raw) {
   return { value: trimmed };
 }
 
+/** Sisa Saldo: wajib diisi, angka, tidak boleh negatif (nol tetap sah — mis. saldo sudah benar-benar habis). */
+function validateRemainingBalance(raw) {
+  if (raw === undefined || raw === null || raw === '') return { error: 'Sisa Saldo wajib diisi.' };
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return { error: 'Sisa Saldo harus berupa angka.' };
+  if (n < 0) return { error: 'Sisa Saldo tidak boleh negatif.' };
+  return { value: n };
+}
+
 function mapRequest(r) {
   return {
     id: r.id,
     bank_code: r.bank_code,
     requester_name: r.requester_name,
+    remaining_balance: r.remaining_balance !== null && r.remaining_balance !== undefined ? Number(r.remaining_balance) : null,
     status: r.status,
     requested_at: r.requested_at,
     acknowledged_by_username: r.acknowledged_by_username || null,
@@ -80,6 +90,10 @@ router.post('/', createLimiter, async (req, res) => {
     const nameCheck = validateRequesterName(req.body?.requester_name);
     if (nameCheck.error) return res.status(400).json({ error: nameCheck.error });
     const requesterName = nameCheck.value;
+
+    const balanceCheck = validateRemainingBalance(req.body?.remaining_balance);
+    if (balanceCheck.error) return res.status(400).json({ error: balanceCheck.error });
+    const remainingBalance = balanceCheck.value;
 
     const userId = req.user?.id || null;
     const username = req.user?.username || null;
@@ -102,9 +116,9 @@ router.post('/', createLimiter, async (req, res) => {
     }
 
     const insertRes = await pool.query(
-      `INSERT INTO finance_balance_requests (bank_code, requester_name, requested_by_user_id, requested_by_username)
-       VALUES ($1, $2, $3, $4) RETURNING *`,
-      [bankCode, requesterName, userId, username]
+      `INSERT INTO finance_balance_requests (bank_code, requester_name, remaining_balance, requested_by_user_id, requested_by_username)
+       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [bankCode, requesterName, remainingBalance, userId, username]
     );
 
     res.json({
@@ -126,7 +140,7 @@ router.get('/pending', requireFA, async (req, res) => {
     const [countRes, rowsRes] = await Promise.all([
       pool.query(`SELECT COUNT(*) AS c FROM finance_balance_requests WHERE status = 'PENDING'`),
       pool.query(
-        `SELECT id, bank_code, requester_name, status, requested_at
+        `SELECT id, bank_code, requester_name, remaining_balance, status, requested_at
          FROM finance_balance_requests WHERE status = 'PENDING'
          ORDER BY requested_at ASC LIMIT $1`,
         [PENDING_LIMIT]
@@ -195,4 +209,5 @@ router.post('/:id/acknowledge', requireFA, async (req, res) => {
 module.exports = router;
 // exported utk unit test (backend/scripts/test-finance-balance-requests.js)
 module.exports.validateRequesterName = validateRequesterName;
+module.exports.validateRemainingBalance = validateRemainingBalance;
 module.exports.VALID_BANK_CODES = VALID_BANK_CODES;

@@ -5556,6 +5556,12 @@ body {
   color: var(--text-1); font-size: 13.5px; font-family: inherit;
 }
 .fbr-input:focus { outline: none; border-color: #F59E0B; }
+.fbr-input-prefix-wrap { display: flex; align-items: stretch; }
+.fbr-input-prefix {
+  display: flex; align-items: center; padding: 0 10px; border: 1px solid var(--border); border-right: none;
+  border-radius: 8px 0 0 8px; background: var(--bg-hover); color: var(--text-2); font-size: 13.5px; font-weight: 700;
+}
+.fbr-input-with-prefix { border-radius: 0 8px 8px 0; flex: 1; min-width: 0; }
 .fbr-error { color: #DC2626; font-size: 12.5px; margin-bottom: 12px; }
 .fbr-success { display: flex; align-items: center; gap: 8px; color: #059669; font-size: 13.5px; font-weight: 600; padding: 8px 0; }
 .fbr-modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px; }
@@ -5604,6 +5610,7 @@ body {
 .fba-bank { font-size: 20px; font-weight: 800; margin-bottom: 10px; }
 .fba-alert p { font-size: 15px; margin: 0 0 14px; color: #FEE2E2; }
 .fba-requester { font-size: 17px; font-weight: 700; margin-bottom: 8px; }
+.fba-balance { font-size: 17px; font-weight: 700; margin-bottom: 8px; color: #FDE68A; }
 .fba-more { font-size: 12.5px; color: #FCA5A5; margin-bottom: 16px; }
 .fba-ack-btn {
   display: inline-block; width: 100%; margin-top: 14px; padding: 16px 24px; border-radius: 12px;
@@ -5631,7 +5638,7 @@ body {
   .fba-alert { padding: 26px 20px; }
   .fba-icon { font-size: 40px; }
   .fba-alert h1 { font-size: 19px; }
-  .fba-bank, .fba-requester { font-size: 15px; }
+  .fba-bank, .fba-requester, .fba-balance { font-size: 15px; }
   .fba-ack-btn { font-size: 15px; padding: 14px 18px; }
 }
 

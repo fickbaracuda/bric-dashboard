@@ -12,7 +12,7 @@
 // (lihat laporan implementasi), sama seperti pola test rekonsiliasi.
 
 const assert = require('assert');
-const { validateRequesterName, VALID_BANK_CODES } = require('../src/routes/finance-balance-requests');
+const { validateRequesterName, validateRemainingBalance, VALID_BANK_CODES } = require('../src/routes/finance-balance-requests');
 
 const tests = [];
 function test(name, fn) { tests.push({ name, fn }); }
@@ -54,6 +54,29 @@ test('requester_name mengandung tag HTML (<script>) -> ditolak', () => {
 test('requester_name mengandung karakter < atau > apa pun -> ditolak', () => {
   assert.ok(validateRequesterName('Budi <b>').error);
   assert.ok(validateRequesterName('Budi > Santoso').error);
+});
+
+// ── remaining_balance (Sisa Saldo) validation ────────────────────────────
+test('remaining_balance kosong -> ditolak', () => {
+  assert.ok(validateRemainingBalance('').error);
+  assert.ok(validateRemainingBalance(undefined).error);
+  assert.ok(validateRemainingBalance(null).error);
+});
+test('remaining_balance bukan angka -> ditolak', () => {
+  assert.ok(validateRemainingBalance('abc').error);
+});
+test('remaining_balance negatif -> ditolak', () => {
+  assert.ok(validateRemainingBalance(-1000).error);
+  assert.ok(validateRemainingBalance('-1').error);
+});
+test('remaining_balance 0 -> diterima (saldo memang bisa habis total)', () => {
+  const r = validateRemainingBalance(0);
+  assert.strictEqual(r.error, undefined);
+  assert.strictEqual(r.value, 0);
+});
+test('remaining_balance angka valid (number atau string digit) -> diterima', () => {
+  assert.strictEqual(validateRemainingBalance(1500000).value, 1500000);
+  assert.strictEqual(validateRemainingBalance('1500000').value, 1500000);
 });
 
 // ── bank_code validation ─────────────────────────────────────────────────
