@@ -5300,10 +5300,13 @@ body {
    Rekonsiliasi) — tinggi seragam, tabel di dalamnya scroll vertikal sendiri
    kalau datanya banyak, supaya tinggi card tidak ikut membengkak. */
 .wrr-mini-panel-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 16px; }
+.wrr-two-col-row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; align-items: start; margin-bottom: 16px; }
+.wrr-two-col-row > .wrr-panel { margin-bottom: 0; }
 .wrr-mini-panel { display: flex; flex-direction: column; margin-bottom: 0; }
 .wrr-mini-table-wrap { max-height: 280px; overflow-y: auto; }
 @media (max-width: 900px) {
   .wrr-mini-panel-row { grid-template-columns: 1fr; }
+  .wrr-two-col-row { grid-template-columns: 1fr; }
 }
 
 .wrr-kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }

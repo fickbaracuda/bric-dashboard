@@ -282,6 +282,7 @@ function SummaryTab({ analytics, onSelectStatus, date }) {
           info="Ditemukan mutasi credit/reversal (sebatch atau cross-date lookup) utk id transaksi yang sama." />
       </div>
 
+      <div className="wrr-two-col-row">
       <div className="wrr-panel">
         <div className="wrr-panel-title">
           <i className="ti ti-scale" style={{ color: COLOR }} /> Validasi Saldo BRI
@@ -315,6 +316,7 @@ function SummaryTab({ analytics, onSelectStatus, date }) {
             </tbody>
           </table>
         </div>
+      </div>
       </div>
     </>
   );

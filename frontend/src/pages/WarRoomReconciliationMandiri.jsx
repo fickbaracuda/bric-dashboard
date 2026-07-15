@@ -269,6 +269,7 @@ function SummaryTab({ analytics, onSelectStatus, date }) {
           info="Transaksi yang punya baris Credit Amount (pembatalan/refund) di Mandiri." />
       </div>
 
+      <div className="wrr-two-col-row">
       <div className="wrr-panel">
         <div className="wrr-panel-title">
           <i className="ti ti-scale" style={{ color: COLOR }} /> Validasi Saldo Mandiri
@@ -305,6 +306,7 @@ function SummaryTab({ analytics, onSelectStatus, date }) {
             </tbody>
           </table>
         </div>
+      </div>
       </div>
     </>
   );

@@ -315,6 +315,7 @@ function SummaryTab({ analytics, onSelectStatus, date }) {
           info="Transaksi yang punya baris credit/pembatalan (reversal) di bank." />
       </div>
 
+      <div className="wrr-two-col-row">
       <div className="wrr-panel">
         <div className="wrr-panel-title">
           <i className="ti ti-building-bank" style={{ color: COLOR }} /> Validasi Rekening
@@ -366,6 +367,7 @@ function SummaryTab({ analytics, onSelectStatus, date }) {
             </tbody>
           </table>
         </div>
+      </div>
       </div>
     </>
   );
