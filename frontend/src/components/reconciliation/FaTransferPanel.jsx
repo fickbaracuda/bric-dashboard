@@ -50,6 +50,15 @@ export default function FaTransferPanel({ bankCode }) {
     return () => { aliveRef.current = false; clearInterval(id); };
   }, [load]);
 
+  // Kalau list kosong (semua sudah ditransfer -- entah oleh FA ini sendiri
+  // atau FA lain di sesi berbeda), tutup modal yang mungkin sedang terbuka.
+  // TANPA ini, `open` bisa tetap `true` walau komponen sempat return null
+  // (rows kosong), lalu tiba-tiba modal muncul lagi sendiri begitu ada
+  // permintaan BARU diterima nanti — padahal user tidak pernah klik tombol.
+  useEffect(() => {
+    if (rows.length === 0) setOpen(false);
+  }, [rows]);
+
   function handleMarkTransferred(id) {
     if (markingId) return;
     setMarkingId(id);
@@ -77,29 +86,27 @@ export default function FaTransferPanel({ bankCode }) {
 
             {error && <div className="fbr-error">{error}</div>}
 
-            {rows.length === 0 ? (
-              <div className="fbr-history-empty">Tidak ada permintaan yang sedang diproses.</div>
-            ) : (
-              <div className="fbr-fa-transfer-list">
-                {rows.map(r => (
-                  <div key={r.id} className="fbr-fa-transfer-row">
-                    <div className="fbr-fa-transfer-info">
-                      <div className="fbr-fa-transfer-name">{r.requester_name}</div>
-                      <div className="fbr-fa-transfer-meta">
-                        Sisa saldo: {fmtRp(r.remaining_balance)} &middot; diterima {fmtDateTime(r.acknowledged_at)}
-                      </div>
+            {/* rows tidak pernah kosong di sini -- komponen sudah return null
+                di atas kalau rows.length === 0 (lihat baris awal function). */}
+            <div className="fbr-fa-transfer-list">
+              {rows.map(r => (
+                <div key={r.id} className="fbr-fa-transfer-row">
+                  <div className="fbr-fa-transfer-info">
+                    <div className="fbr-fa-transfer-name">{r.requester_name}</div>
+                    <div className="fbr-fa-transfer-meta">
+                      Sisa saldo: {fmtRp(r.remaining_balance)} &middot; diterima {fmtDateTime(r.acknowledged_at)}
                     </div>
-                    <button
-                      className="fbr-btn fbr-btn-primary"
-                      onClick={() => handleMarkTransferred(r.id)}
-                      disabled={markingId === r.id}
-                    >
-                      {markingId === r.id ? 'Memproses...' : 'Dana Sudah Ditransfer'}
-                    </button>
                   </div>
-                ))}
-              </div>
-            )}
+                  <button
+                    className="fbr-btn fbr-btn-primary"
+                    onClick={() => handleMarkTransferred(r.id)}
+                    disabled={markingId === r.id}
+                  >
+                    {markingId === r.id ? 'Memproses...' : 'Dana Sudah Ditransfer'}
+                  </button>
+                </div>
+              ))}
+            </div>
 
             <div className="fbr-modal-actions">
               <button className="fbr-btn fbr-btn-secondary" onClick={() => setOpen(false)}>Tutup</button>
