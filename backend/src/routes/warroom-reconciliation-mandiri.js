@@ -448,7 +448,7 @@ async function analyticsHandler(req, res) {
     }
 
     const batchRes = await pool.query(
-      'SELECT * FROM recon_sync_batches WHERE business_date = $1 AND bank_code = $2',
+      'SELECT *, business_date::text AS business_date FROM recon_sync_batches WHERE business_date = $1 AND bank_code = $2',
       [date, BANK_CODE]
     );
     const batch = batchRes.rows[0] || null;
