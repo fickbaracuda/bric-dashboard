@@ -228,6 +228,50 @@ Denominator HANYA transaksi dengan `eligible_for_match_rate=true`
 (coverage_status=IN_BANK_COVERAGE) — transaksi di luar cakupan tidak boleh
 menurunkan angka ini hanya karena data pembandingnya memang terpotong.
 
+## Validasi Tanggal Baris FP saat Sync — cegah FP_ONLY massal di hari baru
+**Insiden nyata**: Apps Script menghitung `business_date` dari `new Date()`
+(kalender hari itu) tiap kali sync jalan. Kalau sheet "DATA FP"/"DATA BANK
+OCBC" **belum sempat direfresh operator** untuk hari baru pada saat
+reactive trigger (tiap 1 menit) menembak — isinya masih data hari
+KEMARIN — seluruh baris FP kemarin ikut tersimpan tapi diberi label
+`business_date` HARI INI. Karena `recon_bank_archive` untuk business_date
+baru itu genuinely masih kosong (bank row kemarin tersimpan di archive
+dengan business_date-nya SENDIRI, bukan business_date batch — lihat
+"Business Date Scoping" di atas), SELURUH FP yang salah tanggal ini jadi
+`FP_ONLY` massal, walau datanya sudah match sempurna kemarin begitu
+dihitung ulang di bawah business_date yang benar.
+
+**Fix (server-side, `syncHandler` di `warroom-reconciliation.js`)**:
+setiap baris FP yang `time_response`-nya (di-anchor Asia/Jakarta via
+`formatDateJakartaOcbc()`) **beda** dari `business_date` payload
+dilewati saat insert (tidak ikut ke `recon_fp_transactions`), dilaporkan
+lewat counter `fpSkippedOutsideDate` (`console.warn`, dan field response
+sync `fp_rows_skipped_outside_date`). ***Baris bank TIDAK difilter*** —
+archive sudah mengatribusikan business_date per baris dari
+`transaction_date_time`-nya sendiri, jadi baris bank "kemarin" yang ikut
+terkirim aman, tidak pernah dipakai untuk matching batch hari ini.
+
+Proteksi ini **sengaja diduplikasi** di dua tempat (defense-in-depth):
+- **Apps Script** (`apps-script-reconciliation-ocbc.js::reconValidateDates_`)
+  — memfilter SEBELUM payload dikirim (lebih hemat kuota, FP di luar
+  business_date dikecualikan dari `chunks`, bank tetap dikirim apa adanya).
+- **Backend** (`syncHandler`) — filter identik, aktif TERLEPAS dari versi
+  Apps Script yang sedang live di-deploy user (kalau Apps Script yang
+  terpasang belum di-update ke versi yang punya `reconValidateDates_`,
+  backend tetap melindungi).
+
+**Kalau ini terjadi dan sudah kadung tersimpan** (batch hari ini penuh FP
+salah tanggal SEBELUM fix di atas di-deploy): hapus baris
+`recon_fp_transactions` milik batch itu yang `time_response`-nya (Asia/
+Jakarta) tidak sama dengan `business_date` batch, lalu jalankan ulang
+`runOcbcEngineAndPersist()` untuk batch tsb (pola yang sama dengan
+`repair-reconciliation-cross-date.js`, cukup query manual — tidak ada
+script khusus terpisah karena kasus ini seharusnya sudah tidak terjadi
+lagi setelah fix di atas aktif). Setelah dibersihkan, batch akan
+menampilkan status kosong yang jujur (`total_fp: 0`, bukan `FP_ONLY`
+massal) sampai sheet benar-benar direfresh dengan data hari itu dan sync
+berikutnya mengisi dengan benar.
+
 ## Database
 Migration: `backend/src/migrations/create_reconciliation_ocbc.sql` (tabel dasar)
 + `backend/src/migrations/add_reconciliation_ocbc_coverage.sql` (coverage + archive)
@@ -265,7 +309,7 @@ berturut-turut menghasilkan `result_count`/jumlah archive row identik.
 ## Backend Endpoints (`backend/src/routes/warroom-reconciliation.js`)
 | Endpoint | Auth | Keterangan |
 |---|---|---|
-| `POST /api/warroom/reconciliation/sync` | `APPS_SCRIPT_TOKEN` (token SHARED, bukan token baru) | Terima chunk FP/bank, jalankan engine di chunk terakhir |
+| `POST /api/warroom/reconciliation/sync` | `APPS_SCRIPT_TOKEN` (token SHARED, bukan token baru) | Terima chunk FP/bank, jalankan engine di chunk terakhir. Response menyertakan `fp_rows_skipped_outside_date` (lihat bagian "Validasi Tanggal Baris FP" di atas) |
 | `GET /api/warroom/reconciliation/sync-request-status?bank_code=` | `APPS_SCRIPT_TOKEN` | Dipanggil Apps Script tiap 1 menit — cek apakah tombol "Sync Now" ditekan sejak sync terakhir |
 | `GET /api/warroom/reconciliation/analytics?date=&bank_code=` | JWT | Summary (+ `valid_match_rate_*`, `actionable_exception_count`), distribusi status, validasi rekening, fee analysis, blok `coverage`, `active_batch` (batch_id/bank_code/business_date/account_no/synced_at), `data_quality_warning` (cross_date_result_count, seharusnya selalu null), recent batches. Kalau `date` diberikan tapi batch tidak ada, `empty:true` — TIDAK fallback ke batch tanggal lain |
 | `GET /api/warroom/reconciliation/daily-report?date=&bank_code=` | JWT | **Laporan Harian** (tab 6) — lihat bagian tersendiri di bawah |
@@ -518,11 +562,15 @@ REVERSAL-DUP TEST 1-8 (REVERSAL dgn pasangan FP -> 1 result bukan 2,
 MATCHED/NOMINAL_MISMATCH tetap consumed tidak jadi BANK_ONLY kedua,
 BANK_ONLY valid, credit-only/fee-only bukan BANK_ONLY, fallback description
 dgn credit, exact+fallback sama-sama match -> 1 group) +
-`normalizeCanonicalKey` (preserve leading zero) — 63 test total. Skenario
+`normalizeCanonicalKey` (preserve leading zero) + TEST 7f/7g (fingerprint
+SAMA meski detik `transaction_date_time` berbeda dalam menit yang sama —
+regresi insiden DUPLICATE_BANK produksi 2.049 baris, lihat Troubleshooting;
+fingerprint TETAP beda kalau beda MENIT) — **69 test total**. Skenario
 DB/live (resync, idempotensi, resolution manual existing, cross-date,
-regresi Mandiri) diverifikasi end-to-end lewat server sungguhan (pola yang
-sama dgn TEST 8/TEST 10 coverage-aware — lihat catatan di file test soal
-kenapa `runOcbcEngineAndPersist` sendiri tidak bisa di-unit-test tanpa DB).
+regresi Mandiri, filter FP di luar business_date) diverifikasi end-to-end
+lewat server sungguhan (pola yang sama dgn TEST 8/TEST 10 coverage-aware —
+lihat catatan di file test soal kenapa `runOcbcEngineAndPersist` sendiri
+tidak bisa di-unit-test tanpa DB).
 
 **Repair data cross-date yang terlanjur salah**:
 `node backend/scripts/repair-reconciliation-cross-date.js` (default
@@ -679,3 +727,50 @@ lokal Windows tidak tersedia).
   `CREATE UNIQUE INDEX` akan gagal. Cek juga field
   `data_quality_warning.duplicate_canonical_result_count`/
   `reversal_also_bank_only_count` di response analytics — harus SELALU 0.
+- **`DUPLICATE_BANK` mendadak membludak (mis. 2.049 exception dari total
+  ~2.200 FP) padahal Description/reference terlihat aman di sheet, tidak
+  ada tanda pola baru yang rusak**: insiden nyata KETIGA dengan pola sama
+  seperti `balance` & `description` sebelumnya — kali ini `transaction_date_time`.
+  OCBC/Apps Script tidak melaporkan **detik** yang stabil untuk 1 mutasi
+  bank yang identik antar sync (mis. `07:49:00` pada sync pertama, `07:49:20`
+  beberapa jam kemudian untuk mutasi yang PERSIS sama — reference_no,
+  description, debit sama semua). Karena `computeBankRowFingerprint()`
+  memakai `transactionDateTime.toISOString()` (presisi detik+milidetik),
+  mutasi yang sama menghasilkan `row_fingerprint` BARU tiap kali detiknya
+  berbeda → baris arsip duplikat → grouping by reference menemukan >1
+  "principal" → `DUPLICATE_BANK` mendominasi. Diagnosis: bandingkan baris
+  `recon_bank_archive` untuk 1 `reference_no` yang muncul di `DUPLICATE_BANK`
+  — kalau ada 4 baris (bukan 2) dengan pasangan nilai debit yang sama
+  persis tapi `transaction_date_time` beda beberapa detik/menit, ini
+  penyebabnya. Fix permanen: `normalizeDateForFingerprint()` men-**truncate
+  detik & milidetik** (`setSeconds(0, 0)`) sebelum dipakai sbg bagian
+  fingerprint — presisi menit sudah cukup unik digabung reference_no/
+  description/debit/credit, dan ini KONSISTEN dgn `calculateOcbcCoverage()`
+  yang juga membuang detik saat menghitung boundary minute. Regresi:
+  TEST 7f/7g di `test-reconciliation-ocbc.js`. **Perbaikan data yang sudah
+  terlanjur duplikat**: jalankan ulang
+  `node backend/scripts/repair-bank-archive-fingerprint.js` (dry-run
+  default, `--apply` setelah diverifikasi) — script yang SAMA dipakai utk
+  insiden `description` sebelumnya, generik terhadap fungsi
+  `computeBankRowFingerprint()` yang mana pun sedang aktif — lalu jalankan
+  ulang `runOcbcEngineAndPersist()` untuk batch-batch yang terdampak supaya
+  `recon_results` ikut terhitung ulang dari archive yang sudah bersih
+  (tidak ada script khusus terpisah — cukup query batch terkait & panggil
+  fungsi itu langsung, pola yang sama dgn `repair-reconciliation-cross-date.js`).
+- **`FP_ONLY` meledak besar setiap kali business_date berganti (mis. hari
+  baru mulai jam 00:00 WIB), padahal kemarin match rate sudah tinggi/100%,
+  dan begitu dicek sheet "DATA FP"/"DATA BANK OCBC" ternyata isinya masih
+  data kemarin**: insiden nyata — lihat bagian "Validasi Tanggal Baris FP
+  saat Sync" di atas. Root cause: `business_date` dihitung Apps Script dari
+  `new Date()` (kalender hari itu), TAPI sheet sumber belum sempat
+  direfresh operator untuk hari baru saat reactive trigger sempat jalan —
+  baris FP kemarin ikut tersimpan di bawah label business_date hari ini,
+  dan archive bank untuk business_date baru itu genuinely kosong. Fix
+  permanen: `syncHandler` sekarang melewati (skip insert) baris FP yang
+  `time_response`-nya (Asia/Jakarta) beda dari `business_date` payload.
+  **Data yang sudah kadung tersimpan salah** (batch hari ini penuh FP salah
+  tanggal dari SEBELUM fix ini aktif): hapus baris `recon_fp_transactions`
+  batch tsb yang tanggalnya tidak cocok, lalu jalankan ulang
+  `runOcbcEngineAndPersist()` — batch akan kembali menampilkan status
+  kosong yang jujur (bukan `FP_ONLY` massal) sampai sheet betul-betul
+  direfresh dengan data hari itu.
