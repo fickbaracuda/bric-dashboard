@@ -415,14 +415,45 @@ menampilkan ringkasan cakupan di Execution Log.
   `valid_match_rate_transaction`/`valid_match_rate_nominal` (bukan
   `match_rate_transaksi`/`match_rate_nominal` lama) + KPI
   `actionable_exception_count`.
-- **Hasil Rekonsiliasi & Exception Queue**: kolom baru "Cakupan" (badge
+- **Hasil Rekonsiliasi & Exception Queue** (`ReconTable`, komponen SAMA
+  dipakai dua tab lewat prop `scope="all"|"exception"`): kolom ID
+  Transaksi, Nominal FP, Reference Bank, Principal, Fee, Total Debit,
+  Credit/Reversal, Selisih Fee (merah kalau ≠0), Waktu FP, Waktu Bank,
+  Outlet, Produk, Matching Method, Status (badge), **Cakupan** (badge
   `coverage_status` — `IN_BANK_COVERAGE` biru, `OUTSIDE_BANK_COVERAGE`
   "Di Luar Cakupan Data OCBC" abu-abu, `BOUNDARY_PARTIAL` "Batas Data OCBC
   Terpotong" kuning — **tidak pernah merah**, keduanya bukan kegagalan
-  transaksi). Filter coverage TERSEDIA (opsional) di Hasil Rekonsiliasi;
-  Exception Queue **WAJIB** `coverage_status=IN_BANK_COVERAGE&is_actionable=true`
-  (hardcoded, bukan pilihan user) supaya transaksi di luar cakupan/boundary
-  tidak pernah nyasar ke sana.
+  transaksi). Search (ID Transaksi/Reference/Outlet), sort per-kolom
+  (`SortableTh`, klik header), paginasi (25/50/100/500 per halaman).
+  Filter status: "Semua Status" (Hasil Rekonsiliasi, 11 status) vs "Semua
+  Exception" (Exception Queue, 9 status selain MATCHED/MATCHED_NO_FEE).
+  Filter coverage TERSEDIA (opsional, dropdown) HANYA di Hasil
+  Rekonsiliasi; Exception Queue **WAJIB**
+  `coverage_status=IN_BANK_COVERAGE&is_actionable=true` (hardcoded di
+  kode, bukan pilihan user) supaya transaksi di luar cakupan/boundary
+  tidak pernah nyasar ke sana. Kolom aksi (HANYA Exception Queue): tombol
+  **Resolve** (buka `ResolveModal` — pilih status baru dari 11 status +
+  catatan, submit ke `POST .../resolve`, otomatis tercatat di
+  `recon_action_logs` dgn `matching_method='MANUAL_RESOLUTION'`) dan
+  **Riwayat** (buka `AuditLogModal` — tabel riwayat audit 1 baris hasil
+  dari `GET .../:id/logs`, kolom Waktu/Aksi/Status Sebelum/Status
+  Sesudah/Catatan/Oleh).
+- **Fee Analysis** (`FeeAnalysisTab`): 5 KPI (Expected Fee — default Rp25
+  BI-FAST, Actual Fee Total, Actual Fee Rata-rata, Transaksi dengan Fee,
+  Fee Variance — alert kalau >0, sumber `FEE_MISMATCH`), tabel Distribusi
+  Fee (kelompok: sesuai expected/Rp0/lainnya), 3 tabel breakdown (Fee per
+  Produk, Fee per Outlet — Top 20, Fee per Biller), semua dari blok
+  `fee_analysis` response analytics.
+- **Raw Data & Audit** (`RawDataTab`): panel "Info Sync Batch Ini" (Batch
+  No, Jumlah Baris FP, Jumlah Baris Bank, Sync Terakhir, Spreadsheet ID)
+  + tombol **Export CSV** (fetch `GET .../export` sbg blob krn butuh
+  header Authorization, lalu trigger download manual — bukan `<a href>`
+  biasa), panel "Riwayat Sync (14 Batch Terakhir)" (tabel Batch/Tanggal/
+  Bank/Baris FP/Baris Bank/Sync Terakhir/Status dari `recent_batches`).
+  Catatan: tab ini TIDAK menampilkan raw baris FP/bank mentah satu per
+  satu (beda dari pola Mandiri/BRI yang punya sub-tab Raw FP/Raw Bank
+  terpisah) — OCBC cukup lewat Export CSV utk kebutuhan audit baris
+  mentah.
 - **Header**: menampilkan tanggal batch AKTIF (`active_batch.business_date`
   dari response analytics — sumber kebenaran server, bukan cuma filter
   tanggal frontend), mis. "Rekonsiliasi OCBC — 14 Juli 2026".
