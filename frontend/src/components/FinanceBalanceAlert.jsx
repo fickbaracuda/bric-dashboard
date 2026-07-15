@@ -20,6 +20,8 @@ function fmtRp(v) {
   return `Rp ${Math.round(n).toLocaleString('id-ID')}`;
 }
 
+const BEEP_VOLUME = 0.9; // "auto volume tinggi" -- mendekati maksimum tanpa clipping berlebihan
+
 /** Satu beep sederhana via Web Audio API (TIDAK PERNAH audio dari URL eksternal). */
 function playBeep(ctx, durationMs) {
   try {
@@ -27,7 +29,7 @@ function playBeep(ctx, durationMs) {
     const gain = ctx.createGain();
     osc.type = 'square';
     osc.frequency.value = 880;
-    gain.gain.value = 0.18;
+    gain.gain.value = BEEP_VOLUME;
     osc.connect(gain);
     gain.connect(ctx.destination);
     osc.start();
@@ -44,7 +46,6 @@ export default function FinanceBalanceAlert() {
   const [pendingRequests, setPendingRequests] = useState([]);
   const [acking, setAcking] = useState(false);
   const [audioReady, setAudioReady] = useState(false);
-  const [showEnableAudioHint, setShowEnableAudioHint] = useState(false);
 
   const inFlightRef = useRef(false);
   const audioContextRef = useRef(null);
@@ -76,27 +77,6 @@ export default function FinanceBalanceAlert() {
     };
   }, [isFA, poll]);
 
-  /* ── Autoplay browser: cek preferensi tersimpan, coba resume AudioContext ── */
-  useEffect(() => {
-    if (!isFA) return;
-    if (localStorage.getItem(AUDIO_PREF_KEY) === 'true') {
-      try {
-        const Ctx = window.AudioContext || window.webkitAudioContext;
-        if (Ctx) {
-          audioContextRef.current = new Ctx();
-          audioContextRef.current.resume().then(() => {
-            if (audioContextRef.current.state === 'running') setAudioReady(true);
-            else setShowEnableAudioHint(true);
-          }).catch(() => setShowEnableAudioHint(true));
-        }
-      } catch {
-        setShowEnableAudioHint(true);
-      }
-    } else {
-      setShowEnableAudioHint(true);
-    }
-  }, [isFA]);
-
   function enableAudio() {
     try {
       if (!audioContextRef.current) {
@@ -104,14 +84,46 @@ export default function FinanceBalanceAlert() {
         audioContextRef.current = new Ctx();
       }
       audioContextRef.current.resume().then(() => {
-        setAudioReady(true);
-        setShowEnableAudioHint(false);
-        localStorage.setItem(AUDIO_PREF_KEY, 'true');
-      });
+        if (audioContextRef.current.state === 'running') {
+          setAudioReady(true);
+          localStorage.setItem(AUDIO_PREF_KEY, 'true');
+        }
+      }).catch(() => {});
     } catch {
-      /* biarkan tombol tetap tampil supaya user bisa coba lagi */
+      /* biarkan tombol fallback di dalam alert tetap tampil supaya user bisa coba lagi */
     }
   }
+
+  /* ── Auto-aktifkan suara — TIDAK perlu klik tombol khusus. Browser TETAP
+     mewajibkan minimal satu gesture (klik/keydown/tap) di manapun pada
+     halaman sebelum AudioContext boleh berbunyi (kebijakan autoplay, tidak
+     bisa dilewati dari JS) -- jadi begitu FA klik APAPUN di dashboard (menu,
+     scroll, dsb, bukan harus tombol suara), audio langsung diam-diam
+     diaktifkan di background. Preferensi disimpan supaya sesi berikutnya
+     langsung coba auto-resume tanpa gesture baru (bisa berhasil kalau
+     browser masih mengingat origin ini "sudah pernah berinteraksi"). ── */
+  useEffect(() => {
+    if (!isFA || audioReady) return undefined;
+
+    // Coba SEGERA saat halaman ini pertama render — klik tombol "Masuk" di
+    // form login BARU SAJA terjadi (gesture asli), dan browser modern
+    // biasanya masih menganggap tab ini "baru saja berinteraksi" beberapa
+    // saat setelah itu (sticky activation) walau sudah pindah halaman via
+    // client-side routing (bukan reload penuh) — kalau berhasil, suara
+    // benar-benar aktif otomatis tanpa gesture tambahan apa pun.
+    enableAudio();
+
+    function unlockOnFirstGesture() {
+      enableAudio();
+    }
+    const opts = { capture: true, passive: true };
+    document.addEventListener('pointerdown', unlockOnFirstGesture, opts);
+    document.addEventListener('keydown', unlockOnFirstGesture, opts);
+    return () => {
+      document.removeEventListener('pointerdown', unlockOnFirstGesture, opts);
+      document.removeEventListener('keydown', unlockOnFirstGesture, opts);
+    };
+  }, [isFA, audioReady]);
 
   /* ── Pola beep: 250ms bunyi, 200ms jeda, 250ms bunyi, ~1 detik jeda, ulangi ── */
   const stopBeeping = useCallback(() => {
@@ -176,12 +188,6 @@ export default function FinanceBalanceAlert() {
 
   return (
     <>
-      {showEnableAudioHint && !current && (
-        <button className="fba-enable-audio-hint" onClick={enableAudio}>
-          <i className="ti ti-volume" /> Aktifkan Suara Notifikasi Finance
-        </button>
-      )}
-
       {current && (
         <div className="fba-overlay">
           <div className="fba-alert">
