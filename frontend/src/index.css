@@ -5519,7 +5519,7 @@ body {
   html, body { background: #fff !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .sidebar, .sidebar-overlay, .topbar, .gsheet-bar, .presence-footer, .aic-fab, .aic-panel,
   .wrr-header, .wrr-tabs, .wrr-btn, .wrr-print-hide,
-  .fbr-trigger-btn, .fba-overlay, .fba-enable-audio-hint { display: none !important; }
+  .fbr-trigger-btn, .fbr-history-btn, .fbr-toast-stack, .fba-overlay, .fba-enable-audio-hint { display: none !important; }
   .layout-main { margin-left: 0 !important; }
   .main-content { padding: 0 !important; }
   .wrr-page { padding: 0 !important; }
@@ -5574,6 +5574,48 @@ body {
 .fbr-btn-secondary { }
 .fbr-btn-primary { background: #F59E0B; border-color: #F59E0B; color: #fff; }
 .fbr-btn-primary:hover:not(:disabled) { background: #D97706; border-color: #D97706; }
+
+.fbr-history-btn {
+  display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px;
+  border-radius: 8px; border: 1px solid var(--border); background: var(--bg-card); color: var(--text-2);
+  cursor: pointer; font-size: 15px;
+}
+.fbr-history-btn:hover { background: var(--bg-hover); }
+
+.fbr-modal--wide { max-width: 820px; }
+.fbr-history-empty { color: var(--text-3); font-size: 13px; padding: 20px 0; text-align: center; }
+.fbr-history-table-wrap { overflow-x: auto; max-height: 420px; overflow-y: auto; }
+.fbr-history-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.fbr-history-table th {
+  position: sticky; top: 0; background: var(--bg-page); text-align: left; padding: 8px 10px;
+  color: var(--text-3); font-weight: 700; white-space: nowrap; border-bottom: 1px solid var(--border);
+}
+.fbr-history-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); color: var(--text-2); white-space: nowrap; }
+.fbr-status-badge { padding: 3px 10px; border-radius: 8px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+.fbr-status-badge--pending { background: #FEF3C7; color: #B45309; }
+.fbr-status-badge--acknowledged { background: #DCFCE7; color: #059669; }
+
+/* Toast "sedang diproses" utk Tim Operation (OperationBalanceRequestToast.jsx) */
+.fbr-toast-stack {
+  position: fixed; right: 16px; bottom: 16px; z-index: 3000;
+  display: flex; flex-direction: column; gap: 10px; max-width: 360px;
+}
+.fbr-toast {
+  display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; border-radius: 10px;
+  background: #059669; color: #fff; font-size: 13px; font-weight: 600; line-height: 1.4;
+  box-shadow: 0 10px 30px rgba(0,0,0,.25); animation: fbr-toast-in .25s ease-out;
+}
+.fbr-toast i:first-child { font-size: 18px; margin-top: 1px; flex-shrink: 0; }
+.fbr-toast span { flex: 1; }
+.fbr-toast-close {
+  background: none; border: none; color: rgba(255,255,255,.8); cursor: pointer; padding: 0;
+  display: flex; align-items: center; font-size: 14px; flex-shrink: 0;
+}
+.fbr-toast-close:hover { color: #fff; }
+@keyframes fbr-toast-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 
 /* ══════════════════════════════════════════════════════════════════════
    Hard Notification "Permintaan Tambahan Saldo" utk Finance (fba-*,

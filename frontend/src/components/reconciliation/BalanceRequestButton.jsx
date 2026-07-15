@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { createFinanceBalanceRequest } from '../../services/api';
+import { createFinanceBalanceRequest, getFinanceBalanceRequestHistory } from '../../services/api';
+import { addTrackedBalanceRequest } from '../../utils/myBalanceRequests';
 
 // Tombol "Minta Tambahan Saldo" — shared component dipakai di semua halaman
 // Rekonsiliasi (OCBC/Mandiri/BRI, dan bank lain di masa depan) lewat prop
@@ -8,6 +9,24 @@ import { createFinanceBalanceRequest } from '../../services/api';
 // requested_by_user_id/username tetap disimpan di backend utk audit, tapi
 // bukan sbg "Nama Requester") + Sisa Saldo (nominal saldo saat ini, wajib
 // diisi manual).
+//
+// Setelah berhasil submit, id permintaan dicatat via addTrackedBalanceRequest
+// (localStorage) — dibaca oleh OperationBalanceRequestToast.jsx (global,
+// Layout.jsx) utk menampilkan notifikasi "sedang diproses" begitu Finance
+// menekan SAYA TERIMA. Tombol "Riwayat" membuka daftar audit lengkap
+// (waktu, requester, siapa yang meminta, status, siapa & kapan diterima).
+
+function fmtRp(v) {
+  const n = Number(v);
+  if (v === null || v === undefined || !Number.isFinite(n)) return '-';
+  return `Rp ${Math.round(n).toLocaleString('id-ID')}`;
+}
+function fmtDateTime(v) {
+  if (!v) return '-';
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return '-';
+  return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
 
 export default function BalanceRequestButton({ bankCode }) {
   const [open, setOpen] = useState(false);
@@ -16,6 +35,11 @@ export default function BalanceRequestButton({ bankCode }) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
   const [successMsg, setSuccessMsg] = useState(null);
+
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyRows, setHistoryRows] = useState([]);
+  const [historyError, setHistoryError] = useState(null);
 
   const trimmed = requesterName.trim();
   const isNameValid = trimmed.length >= 2 && trimmed.length <= 100;
@@ -48,7 +72,10 @@ export default function BalanceRequestButton({ bankCode }) {
     setSubmitting(true);
     setError(null);
     createFinanceBalanceRequest({ bank_code: bankCode, requester_name: trimmed, remaining_balance: Number(remainingBalance) })
-      .then(() => {
+      .then(res => {
+        if (res?.request?.id) {
+          addTrackedBalanceRequest({ id: res.request.id, bank_code: bankCode, requester_name: trimmed });
+        }
         setSuccessMsg(`Permintaan tambahan saldo untuk Bank ${bankCode} telah dikirim kepada Finance.`);
         setRequesterName('');
         setRemainingBalance('');
@@ -60,10 +87,28 @@ export default function BalanceRequestButton({ bankCode }) {
       .finally(() => setSubmitting(false));
   }
 
+  function openHistory() {
+    setHistoryOpen(true);
+    setHistoryLoading(true);
+    setHistoryError(null);
+    getFinanceBalanceRequestHistory({ bank_code: bankCode, limit: 20 })
+      .then(res => setHistoryRows(res.requests || []))
+      .catch(e => setHistoryError(e.response?.data?.error || 'Gagal memuat riwayat.'))
+      .finally(() => setHistoryLoading(false));
+  }
+  function closeHistory() {
+    setHistoryOpen(false);
+    setHistoryRows([]);
+    setHistoryError(null);
+  }
+
   return (
     <>
       <button className="fbr-trigger-btn" onClick={openModal} title="Kirim permintaan tambahan saldo ke Finance">
         <i className="ti ti-cash-banknote" /> Minta Tambahan Saldo
+      </button>
+      <button className="fbr-history-btn" onClick={openHistory} title="Lihat riwayat permintaan tambahan saldo">
+        <i className="ti ti-history" />
       </button>
 
       {open && (
@@ -126,6 +171,58 @@ export default function BalanceRequestButton({ bankCode }) {
                 <i className="ti ti-circle-check" /> {successMsg}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {historyOpen && (
+        <div className="fbr-modal-overlay" onClick={closeHistory}>
+          <div className="fbr-modal fbr-modal--wide" onClick={e => e.stopPropagation()}>
+            <div className="fbr-modal-title">RIWAYAT PERMINTAAN TAMBAHAN SALDO — {bankCode}</div>
+
+            {historyLoading && <div className="fbr-history-empty">Memuat riwayat...</div>}
+            {!historyLoading && historyError && <div className="fbr-error">{historyError}</div>}
+            {!historyLoading && !historyError && historyRows.length === 0 && (
+              <div className="fbr-history-empty">Belum ada permintaan tambahan saldo untuk Bank {bankCode}.</div>
+            )}
+            {!historyLoading && !historyError && historyRows.length > 0 && (
+              <div className="fbr-history-table-wrap">
+                <table className="fbr-history-table">
+                  <thead>
+                    <tr>
+                      <th>Waktu Request</th>
+                      <th>Requester</th>
+                      <th>Diminta Oleh</th>
+                      <th>Sisa Saldo</th>
+                      <th>Status</th>
+                      <th>Diterima Oleh</th>
+                      <th>Waktu Diterima</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {historyRows.map(r => (
+                      <tr key={r.id}>
+                        <td>{fmtDateTime(r.requested_at)}</td>
+                        <td>{r.requester_name}</td>
+                        <td>{r.requested_by_username || '-'}</td>
+                        <td>{fmtRp(r.remaining_balance)}</td>
+                        <td>
+                          <span className={'fbr-status-badge fbr-status-badge--' + r.status.toLowerCase()}>
+                            {r.status === 'ACKNOWLEDGED' ? 'Diterima' : 'Menunggu'}
+                          </span>
+                        </td>
+                        <td>{r.acknowledged_by_username || '-'}</td>
+                        <td>{fmtDateTime(r.acknowledged_at)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <div className="fbr-modal-actions">
+              <button className="fbr-btn fbr-btn-secondary" onClick={closeHistory}>Tutup</button>
+            </div>
           </div>
         </div>
       )}

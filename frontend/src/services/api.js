@@ -398,6 +398,10 @@ export const getPendingFinanceBalanceRequests = () =>
   axios.get(`${API_URL}/api/finance/balance-requests/pending`, { params: { t: Date.now() }, headers: authHeaders() }).then(r => r.data);
 export const acknowledgeFinanceBalanceRequest = (id) =>
   axios.post(`${API_URL}/api/finance/balance-requests/${id}/acknowledge`, {}, { headers: authHeaders() }).then(r => r.data);
+export const getFinanceBalanceRequestStatus = (id) =>
+  axios.get(`${API_URL}/api/finance/balance-requests/${id}`, { params: { t: Date.now() }, headers: authHeaders() }).then(r => r.data);
+export const getFinanceBalanceRequestHistory = (params = {}) =>
+  axios.get(`${API_URL}/api/finance/balance-requests/history`, { params: { ...params, t: Date.now() }, headers: authHeaders() }).then(r => r.data);
 
 /* WAR-ROOM — Rekonsiliasi FP vs Bank Mandiri (TIDAK di-cache — data operasional, harus selalu fresh) */
 export const getReconciliationMandiriAnalytics = (params = {}) =>

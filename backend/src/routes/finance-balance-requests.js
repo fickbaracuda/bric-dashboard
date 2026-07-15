@@ -77,6 +77,14 @@ function mapRequest(r) {
   };
 }
 
+/** Versi lengkap utk riwayat/audit — ikut menyertakan requested_by_username (spec: "tercatat detail mulai dari waktu dan requesternya"). */
+function mapHistoryRow(r) {
+  return {
+    ...mapRequest(r),
+    requested_by_username: r.requested_by_username || null,
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // POST /api/finance/balance-requests — buat permintaan baru
 // Semua user BRIC yang sudah login (JWT) boleh membuat permintaan.
@@ -159,6 +167,45 @@ router.get('/pending', requireFA, async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────
+// GET /api/finance/balance-requests/history?bank_code=&limit=
+// Riwayat audit — SEMUA user login boleh lihat (read-only, tidak sensitif;
+// tujuannya justru transparansi: "setiap permintaan tercatat detail mulai
+// dari waktu dan requesternya"). Menyertakan PENDING & ACKNOWLEDGED, urut
+// requested_at terbaru dulu. Didaftarkan SEBELUM GET /:id supaya "history"
+// tidak ke-capture sbg parameter :id.
+// ─────────────────────────────────────────────────────────────────────────
+router.get('/history', async (req, res) => {
+  try {
+    const bankCode = req.query.bank_code ? String(req.query.bank_code).trim().toUpperCase() : null;
+    if (bankCode && !VALID_BANK_CODES.includes(bankCode)) {
+      return res.status(400).json({ error: `bank_code wajib salah satu dari: ${VALID_BANK_CODES.join(', ')}` });
+    }
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 50));
+
+    const params = [];
+    let whereClause = '';
+    if (bankCode) {
+      params.push(bankCode);
+      whereClause = `WHERE bank_code = $${params.length}`;
+    }
+    params.push(limit);
+
+    const r = await pool.query(
+      `SELECT id, bank_code, requester_name, remaining_balance, status,
+              requested_by_username, requested_at, acknowledged_by_username, acknowledged_at
+       FROM finance_balance_requests ${whereClause}
+       ORDER BY requested_at DESC LIMIT $${params.length}`,
+      params
+    );
+    res.set('Cache-Control', 'no-store');
+    res.json({ success: true, count: r.rows.length, requests: r.rows.map(mapHistoryRow) });
+  } catch (e) {
+    console.error('finance-balance-requests history error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────
 // POST /api/finance/balance-requests/:id/acknowledge — HANYA unit FA
 // UPDATE atomic ber-syarat status='PENDING' — hanya SATU user FA yang bisa
 // berhasil kalau ada race condition (2 orang menekan "SAYA TERIMA" bersamaan).
@@ -202,6 +249,37 @@ router.post('/:id/acknowledge', requireFA, async (req, res) => {
     });
   } catch (e) {
     console.error('finance-balance-requests acknowledge error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// GET /api/finance/balance-requests/:id — cek status 1 permintaan.
+// Dipakai Tim Operation (pemohon) utk polling status permintaan MEREKA
+// SENDIRI (mis. notifikasi "sedang diproses" begitu FA menekan SAYA
+// TERIMA) — HANYA boleh dilihat oleh pemohon aslinya (requested_by_user_id
+// cocok dgn req.user.id) ATAU unit FA. WAJIB didaftarkan PALING AKHIR di
+// antara route GET supaya tidak menangkap /pending atau /history.
+// ─────────────────────────────────────────────────────────────────────────
+router.get('/:id', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'id tidak valid' });
+
+    const r = await pool.query('SELECT * FROM finance_balance_requests WHERE id = $1', [id]);
+    if (!r.rows.length) return res.status(404).json({ error: 'Permintaan tidak ditemukan.' });
+
+    const row = r.rows[0];
+    const isOwner = req.user?.id != null && String(row.requested_by_user_id) === String(req.user.id);
+    const isFA = req.user?.unit === 'FA';
+    if (!isOwner && !isFA) {
+      return res.status(403).json({ error: 'Anda tidak berhak melihat status permintaan ini.' });
+    }
+
+    res.set('Cache-Control', 'no-store');
+    res.json({ success: true, request: mapRequest(row) });
+  } catch (e) {
+    console.error('finance-balance-requests status error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });

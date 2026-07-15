@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import Sidebar from './Sidebar';
 import AiChat from './AiChat';
 import FinanceBalanceAlert from './FinanceBalanceAlert';
+import OperationBalanceRequestToast from './OperationBalanceRequestToast';
 import { pingPresence } from '../services/api';
 import { resolveInitialTheme, setTheme } from '../utils/theme';
 import { applyChartTheme } from '../utils/chartTheme';
@@ -124,6 +125,9 @@ export default function Layout({ children, syncedAt, bulan, gsheetUrl, gsheetLab
 
         {/* Hard notification "Permintaan Tambahan Saldo" — HANYA render utk user unit FA (return null selain itu) */}
         <FinanceBalanceAlert />
+
+        {/* Notifikasi "sedang diproses" utk Tim Operation begitu Finance menekan SAYA TERIMA */}
+        <OperationBalanceRequestToast />
 
         {/* GSheet link bar */}
         {gsheetUrl && (
