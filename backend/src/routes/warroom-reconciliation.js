@@ -1211,16 +1211,38 @@ async function syncHandler(req, res) {
 
     let fpInserted = 0;
     let fpSkippedInvalid = 0;
+    let fpSkippedOutsideDate = 0;
     for (const row of fpRowsRaw) {
       const idTransaksi = nullIfEmpty(row.id_transaksi);
       if (!idTransaksi) continue;
       if (!isValidIdTransaksi(idTransaksi)) { fpSkippedInvalid++; continue; }
+      const timeResponse = parseTimeResponse(row.time_response);
+      // Defense-in-depth server-side (SAMA filosofi dgn reconValidateDates_ di
+      // apps-script-reconciliation-ocbc.js, supaya tetap terlindungi walau
+      // Apps Script yang live belum di-update ke versi yang punya filter itu).
+      // INSIDEN NYATA: business_date payload dihitung Apps Script dari
+      // "hari ini" (new Date()), TAPI sheet "DATA FP"/"DATA BANK OCBC" belum
+      // sempat direfresh operator utk hari baru -- akibatnya baris FP hari
+      // KEMARIN ikut terkirim & tersimpan di bawah label business_date HARI
+      // INI. Karena recon_bank_archive utk business_date baru itu genuinely
+      // masih kosong (bank row hari kemarin tersimpan di archive dgn
+      // business_date-nya sendiri, bukan business_date batch), SELURUH FP
+      // yang salah tanggal ini jadi FP_ONLY massal walau data aslinya sudah
+      // match sempurna kemarin. Baris bank TIDAK difilter sepert ini (tetap
+      // dikirim apa adanya) -- archive sudah mengatribusikan business_date
+      // bank per baris dari transaction_date_time-nya sendiri, jadi baris
+      // bank "kemarin" yang ikut terkirim aman, tidak pernah dipakai utk
+      // matching batch hari ini.
+      if (timeResponse) {
+        const rowDate = formatDateJakartaOcbc(timeResponse);
+        if (rowDate && rowDate !== businessDate) { fpSkippedOutsideDate++; continue; }
+      }
       await client.query(
         `INSERT INTO recon_fp_transactions (batch_id, id_transaksi, nominal, id_produk, time_response, id_outlet, id_biller, source_row_number, raw_data)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
         [
           batchId, idTransaksi, cleanNum(row.nominal), nullIfEmpty(row.id_produk),
-          parseTimeResponse(row.time_response), nullIfEmpty(row.id_outlet), nullIfEmpty(row.id_biller),
+          timeResponse, nullIfEmpty(row.id_outlet), nullIfEmpty(row.id_biller),
           Number.isFinite(Number(row.source_row)) ? Number(row.source_row) : null,
           JSON.stringify(row.raw_data || {}),
         ]
@@ -1229,6 +1251,9 @@ async function syncHandler(req, res) {
     }
     if (fpSkippedInvalid > 0) {
       console.warn(`reconciliation sync: ${fpSkippedInvalid} baris FP dilewati (id_transaksi bukan angka murni) untuk business_date ${businessDate}`);
+    }
+    if (fpSkippedOutsideDate > 0) {
+      console.warn(`reconciliation sync: ${fpSkippedOutsideDate} baris FP dilewati (time_response di luar business_date ${businessDate} -- kemungkinan sheet DATA FP belum direfresh utk hari ini).`);
     }
 
     let bankInserted = 0;
@@ -1250,7 +1275,7 @@ async function syncHandler(req, res) {
 
     if (!isLastChunk) {
       await client.query('COMMIT');
-      return res.json({ success: true, batch_id: batchId, chunk_index: chunkIndex, chunk_total: chunkTotal, fp_rows_inserted: fpInserted, bank_rows_inserted: bankInserted, engine_run: false });
+      return res.json({ success: true, batch_id: batchId, chunk_index: chunkIndex, chunk_total: chunkTotal, fp_rows_inserted: fpInserted, fp_rows_skipped_outside_date: fpSkippedOutsideDate, bank_rows_inserted: bankInserted, engine_run: false });
     }
 
     // Chunk terakhir -> ambil SELURUH snapshot batch ini (transaction_date_time
@@ -1308,7 +1333,7 @@ async function syncHandler(req, res) {
     await client.query('COMMIT');
     res.json({
       success: true, batch_id: batchId, business_date: businessDate, bank_code: bankCode, sync_mode: syncMode,
-      fp_row_count: fpRowCount, bank_row_count: bankSnapshotRows.length,
+      fp_row_count: fpRowCount, fp_rows_skipped_outside_date: fpSkippedOutsideDate, bank_row_count: bankSnapshotRows.length,
       result_count: resultCount, engine_run: true, synced_at: new Date().toISOString(),
       coverage: {
         source_limit: coverage.sourceLimit, is_source_truncated: coverage.isSourceTruncated,
