@@ -33,6 +33,12 @@ function fmtDateTime(v) {
   return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 const STATUS_LABEL = { PENDING: 'Menunggu', ACKNOWLEDGED: 'Diterima', TRANSFERRED: 'Ditransfer' };
+const QUICK_AMOUNTS = [
+  { label: '50 Juta', value: 50000000 },
+  { label: '100 Juta', value: 100000000 },
+  { label: '150 Juta', value: 150000000 },
+];
+const MAX_NAME_SUGGESTIONS = 8;
 
 export default function BalanceRequestButton({ bankCode }) {
   const isFA = getUser()?.unit === 'FA';
@@ -47,6 +53,8 @@ export default function BalanceRequestButton({ bankCode }) {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyRows, setHistoryRows] = useState([]);
   const [historyError, setHistoryError] = useState(null);
+
+  const [recentNames, setRecentNames] = useState([]);
 
   const trimmed = requesterName.trim();
   const isNameValid = trimmed.length >= 2 && trimmed.length <= 100;
@@ -65,6 +73,22 @@ export default function BalanceRequestButton({ bankCode }) {
     setRemainingBalance('');
     setError(null);
     setSuccessMsg(null);
+    // Riwayat nama requester (dari endpoint yg sama dgn tab Riwayat) supaya
+    // OP tinggal klik nama yg sudah pernah dipakai, bukan ketik ulang tiap kali.
+    getFinanceBalanceRequestHistory({ bank_code: bankCode, limit: 30 })
+      .then(res => {
+        const seen = new Set();
+        const names = [];
+        for (const r of (res.requests || [])) {
+          const name = (r.requester_name || '').trim();
+          if (!name || seen.has(name)) continue;
+          seen.add(name);
+          names.push(name);
+          if (names.length >= MAX_NAME_SUGGESTIONS) break;
+        }
+        setRecentNames(names);
+      })
+      .catch(() => setRecentNames([]));
   }
   function closeModal() {
     setOpen(false);
@@ -136,13 +160,28 @@ export default function BalanceRequestButton({ bankCode }) {
 
                 <div className="fbr-field">
                   <label className="fbr-field-label" htmlFor="fbr-requester-name">Nama Requester</label>
+                  {recentNames.length > 0 && (
+                    <div className="fbr-chip-row">
+                      {recentNames.map(name => (
+                        <button
+                          key={name}
+                          type="button"
+                          className={'fbr-chip' + (trimmed === name ? ' fbr-chip--active' : '')}
+                          onClick={() => setRequesterName(name)}
+                          disabled={submitting}
+                        >
+                          {name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                   <input
                     id="fbr-requester-name"
                     className="fbr-input"
                     type="text"
                     value={requesterName}
                     onChange={e => setRequesterName(e.target.value)}
-                    placeholder="Isi nama Anda secara manual"
+                    placeholder="Isi nama Anda secara manual, atau klik nama di atas"
                     maxLength={100}
                     autoFocus
                     disabled={submitting}
@@ -151,6 +190,19 @@ export default function BalanceRequestButton({ bankCode }) {
 
                 <div className="fbr-field">
                   <label className="fbr-field-label" htmlFor="fbr-remaining-balance">Sisa Saldo</label>
+                  <div className="fbr-chip-row">
+                    {QUICK_AMOUNTS.map(a => (
+                      <button
+                        key={a.value}
+                        type="button"
+                        className={'fbr-chip' + (remainingBalance === String(a.value) ? ' fbr-chip--active' : '')}
+                        onClick={() => setRemainingBalance(String(a.value))}
+                        disabled={submitting}
+                      >
+                        {a.label}
+                      </button>
+                    ))}
+                  </div>
                   <div className="fbr-input-prefix-wrap">
                     <span className="fbr-input-prefix">Rp</span>
                     <input

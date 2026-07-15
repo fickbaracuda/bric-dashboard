@@ -5563,6 +5563,16 @@ body {
   border-radius: 8px 0 0 8px; background: var(--bg-hover); color: var(--text-2); font-size: 13.5px; font-weight: 700;
 }
 .fbr-input-with-prefix { border-radius: 0 8px 8px 0; flex: 1; min-width: 0; }
+
+.fbr-chip-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.fbr-chip {
+  padding: 6px 12px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg-page);
+  color: var(--text-2); font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; white-space: nowrap;
+}
+.fbr-chip:hover:not(:disabled) { background: var(--bg-hover); }
+.fbr-chip:disabled { opacity: .5; cursor: not-allowed; }
+.fbr-chip--active { background: #F59E0B; border-color: #F59E0B; color: #fff; }
+
 .fbr-error { color: #DC2626; font-size: 12.5px; margin-bottom: 12px; }
 .fbr-success { display: flex; align-items: center; gap: 8px; color: #059669; font-size: 13.5px; font-weight: 600; padding: 8px 0; }
 .fbr-modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px; }
