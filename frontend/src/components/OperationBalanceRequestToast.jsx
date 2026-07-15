@@ -1,11 +1,15 @@
 import { useState, useEffect, useRef } from 'react';
 import { getFinanceBalanceRequestStatus } from '../services/api';
-import { getTrackedBalanceRequests, removeTrackedBalanceRequest } from '../utils/myBalanceRequests';
+import { getTrackedBalanceRequests, removeTrackedBalanceRequest, updateTrackedBalanceRequest } from '../utils/myBalanceRequests';
 
-// Notifikasi non-blocking utk Tim Operation — begitu Finance menekan
-// "SAYA TERIMA" pada permintaan yang MEREKA buat sendiri (dilacak via
-// localStorage, lihat utils/myBalanceRequests.js), tampilkan toast kecil
-// "sedang diproses". Dipasang SATU KALI secara global di Layout.jsx.
+// Notifikasi non-blocking utk Tim Operation — 2 TAHAP mengikuti status
+// permintaan yang MEREKA buat sendiri (dilacak via localStorage, lihat
+// utils/myBalanceRequests.js):
+//   1. ACKNOWLEDGED — Finance menekan "SAYA TERIMA" -> toast "sedang diproses"
+//   2. TRANSFERRED  — Finance menandai dana sudah ditransfer -> toast kedua
+// Entry TETAP dilacak setelah tahap 1 (hanya ditandai `ackNotified` supaya
+// toast tahap-1 tidak muncul berulang) — baru dihapus dari tracking setelah
+// TRANSFERRED (status akhir). Dipasang SATU KALI secara global di Layout.jsx.
 //
 // BEDA dari FinanceBalanceAlert (hard, full-screen, khusus unit FA): ini
 // dismissible, tidak ada suara, tidak memblokir apa pun — murni informasi.
@@ -43,11 +47,21 @@ export default function OperationBalanceRequestToast() {
               removeTrackedBalanceRequest(r.t.id);
               continue;
             }
-            if (r.request?.status === 'ACKNOWLEDGED') {
+            const status = r.request?.status;
+            if (status === 'TRANSFERRED') {
+              // Status akhir -- berhenti dilacak sepenuhnya.
               removeTrackedBalanceRequest(r.t.id);
+              const who = r.request.transferred_by_username ? ` (${r.request.transferred_by_username})` : '';
+              newToasts.push({
+                key: `${r.t.id}-transferred-${Date.now()}`,
+                message: `Dana untuk Bank ${r.t.bank_code} telah ditransfer oleh Finance${who}.`,
+              });
+            } else if (status === 'ACKNOWLEDGED' && !r.t.ackNotified) {
+              // Tahap 1 saja -- TETAP dilacak sampai TRANSFERRED terdeteksi.
+              updateTrackedBalanceRequest(r.t.id, { ackNotified: true });
               const who = r.request.acknowledged_by_username ? ` (${r.request.acknowledged_by_username})` : '';
               newToasts.push({
-                key: `${r.t.id}-${Date.now()}`,
+                key: `${r.t.id}-acknowledged-${Date.now()}`,
                 message: `Permintaan tambahan saldo Bank ${r.t.bank_code} telah diterima oleh Finance${who} — sedang diproses.`,
               });
             }

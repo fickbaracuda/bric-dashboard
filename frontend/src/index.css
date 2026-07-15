@@ -5519,7 +5519,7 @@ body {
   html, body { background: #fff !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .sidebar, .sidebar-overlay, .topbar, .gsheet-bar, .presence-footer, .aic-fab, .aic-panel,
   .wrr-header, .wrr-tabs, .wrr-btn, .wrr-print-hide,
-  .fbr-trigger-btn, .fbr-history-btn, .fbr-toast-stack, .fba-overlay, .fba-enable-audio-hint { display: none !important; }
+  .fbr-trigger-btn, .fbr-history-btn, .fbr-fa-panel-btn, .fbr-toast-stack, .fba-overlay, .fba-enable-audio-hint { display: none !important; }
   .layout-main { margin-left: 0 !important; }
   .main-content { padding: 0 !important; }
   .wrr-page { padding: 0 !important; }
@@ -5593,7 +5593,23 @@ body {
 .fbr-history-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); color: var(--text-2); white-space: nowrap; }
 .fbr-status-badge { padding: 3px 10px; border-radius: 8px; font-size: 11px; font-weight: 700; white-space: nowrap; }
 .fbr-status-badge--pending { background: #FEF3C7; color: #B45309; }
-.fbr-status-badge--acknowledged { background: #DCFCE7; color: #059669; }
+.fbr-status-badge--acknowledged { background: #DBEAFE; color: #1D4ED8; }
+.fbr-status-badge--transferred { background: #DCFCE7; color: #059669; }
+
+/* Panel khusus FA di halaman Rekonsiliasi (FaTransferPanel.jsx) */
+.fbr-fa-panel-btn {
+  display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px; border-radius: 8px;
+  border: 1px solid #1D4ED8; background: #2563EB; color: #fff;
+  font-size: 12.5px; font-weight: 700; cursor: pointer; font-family: inherit; white-space: nowrap;
+}
+.fbr-fa-panel-btn:hover { background: #1D4ED8; }
+.fbr-fa-transfer-list { display: flex; flex-direction: column; gap: 10px; max-height: 420px; overflow-y: auto; }
+.fbr-fa-transfer-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 14px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--bg-page);
+}
+.fbr-fa-transfer-name { font-size: 14px; font-weight: 700; color: var(--text-1); }
+.fbr-fa-transfer-meta { font-size: 12px; color: var(--text-3); margin-top: 2px; }
 
 /* Toast "sedang diproses" utk Tim Operation (OperationBalanceRequestToast.jsx) */
 .fbr-toast-stack {

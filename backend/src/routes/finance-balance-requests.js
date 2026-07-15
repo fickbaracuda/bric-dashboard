@@ -74,6 +74,8 @@ function mapRequest(r) {
     requested_at: r.requested_at,
     acknowledged_by_username: r.acknowledged_by_username || null,
     acknowledged_at: r.acknowledged_at || null,
+    transferred_by_username: r.transferred_by_username || null,
+    transferred_at: r.transferred_at || null,
   };
 }
 
@@ -167,6 +169,35 @@ router.get('/pending', requireFA, async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────
+// GET /api/finance/balance-requests/acknowledged?bank_code= — HANYA unit FA
+// Permintaan yang sudah diterima (ACKNOWLEDGED) tapi BELUM ditransfer —
+// dipakai FaTransferPanel.jsx di halaman Rekonsiliasi utk menampilkan
+// tombol "Dana Sudah Ditransfer" per permintaan. Difilter per bank_code
+// karena panel ini muncul di halaman Rekonsiliasi per-bank (bukan global).
+// ─────────────────────────────────────────────────────────────────────────
+router.get('/acknowledged', requireFA, async (req, res) => {
+  try {
+    const bankCode = req.query.bank_code ? String(req.query.bank_code).trim().toUpperCase() : null;
+    if (!bankCode || !VALID_BANK_CODES.includes(bankCode)) {
+      return res.status(400).json({ error: `bank_code wajib salah satu dari: ${VALID_BANK_CODES.join(', ')}` });
+    }
+    const r = await pool.query(
+      `SELECT id, bank_code, requester_name, remaining_balance, status, requested_at,
+              acknowledged_by_username, acknowledged_at
+       FROM finance_balance_requests
+       WHERE status = 'ACKNOWLEDGED' AND bank_code = $1
+       ORDER BY acknowledged_at ASC LIMIT $2`,
+      [bankCode, PENDING_LIMIT]
+    );
+    res.set('Cache-Control', 'no-store');
+    res.json({ success: true, count: r.rows.length, requests: r.rows.map(mapRequest) });
+  } catch (e) {
+    console.error('finance-balance-requests acknowledged error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────
 // GET /api/finance/balance-requests/history?bank_code=&limit=
 // Riwayat audit — SEMUA user login boleh lihat (read-only, tidak sensitif;
 // tujuannya justru transparansi: "setiap permintaan tercatat detail mulai
@@ -192,7 +223,8 @@ router.get('/history', async (req, res) => {
 
     const r = await pool.query(
       `SELECT id, bank_code, requester_name, remaining_balance, status,
-              requested_by_username, requested_at, acknowledged_by_username, acknowledged_at
+              requested_by_username, requested_at, acknowledged_by_username, acknowledged_at,
+              transferred_by_username, transferred_at
        FROM finance_balance_requests ${whereClause}
        ORDER BY requested_at DESC LIMIT $${params.length}`,
       params
@@ -249,6 +281,56 @@ router.post('/:id/acknowledge', requireFA, async (req, res) => {
     });
   } catch (e) {
     console.error('finance-balance-requests acknowledge error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// POST /api/finance/balance-requests/:id/mark-transferred — HANYA unit FA
+// UPDATE atomic ber-syarat status='ACKNOWLEDGED' — mencegah menandai
+// transfer pada permintaan yang belum diterima ATAU yang sudah ditandai
+// transfer sebelumnya (double-klik). FA MANAPUN boleh menandai transfer,
+// tidak harus FA yang sama yang meng-acknowledge (konsisten dgn sifat
+// "SAYA TERIMA" — kerja tim, bukan personal).
+// ─────────────────────────────────────────────────────────────────────────
+router.post('/:id/mark-transferred', requireFA, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'id tidak valid' });
+
+    const userId = req.user?.id || null;
+    const username = req.user?.username || null;
+
+    const updateRes = await pool.query(
+      `UPDATE finance_balance_requests
+       SET status = 'TRANSFERRED', transferred_by_user_id = $2, transferred_by_username = $3,
+           transferred_at = NOW(), updated_at = NOW()
+       WHERE id = $1 AND status = 'ACKNOWLEDGED'
+       RETURNING *`,
+      [id, userId, username]
+    );
+
+    if (updateRes.rows.length) {
+      return res.json({
+        success: true,
+        message: 'Dana ditandai sudah ditransfer.',
+        request: mapRequest(updateRes.rows[0]),
+      });
+    }
+
+    const existing = await pool.query('SELECT * FROM finance_balance_requests WHERE id = $1', [id]);
+    if (!existing.rows.length) {
+      return res.status(404).json({ error: 'Permintaan tidak ditemukan.' });
+    }
+    return res.status(409).json({
+      success: false,
+      message: existing.rows[0].status === 'TRANSFERRED'
+        ? `Permintaan ini sudah ditandai transfer oleh ${existing.rows[0].transferred_by_username || 'user FA lain'}.`
+        : 'Permintaan ini belum berstatus ACKNOWLEDGED — tidak bisa ditandai transfer.',
+      request: mapRequest(existing.rows[0]),
+    });
+  } catch (e) {
+    console.error('finance-balance-requests mark-transferred error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });

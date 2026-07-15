@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { createFinanceBalanceRequest, getFinanceBalanceRequestHistory } from '../../services/api';
 import { addTrackedBalanceRequest } from '../../utils/myBalanceRequests';
+import { getUser } from '../../utils/auth';
+import FaTransferPanel from './FaTransferPanel';
 
 // Tombol "Minta Tambahan Saldo" — shared component dipakai di semua halaman
 // Rekonsiliasi (OCBC/Mandiri/BRI, dan bank lain di masa depan) lewat prop
@@ -10,11 +12,14 @@ import { addTrackedBalanceRequest } from '../../utils/myBalanceRequests';
 // bukan sbg "Nama Requester") + Sisa Saldo (nominal saldo saat ini, wajib
 // diisi manual).
 //
+// User unit FA TIDAK melihat tombol ini sama sekali (FA adalah penerima
+// permintaan, bukan pemohon) — sebagai gantinya melihat FaTransferPanel
+// (daftar permintaan yang sudah diterima, menunggu ditandai transfer).
+// Tombol "Riwayat" tetap tampil utk SEMUA role (audit, read-only).
+//
 // Setelah berhasil submit, id permintaan dicatat via addTrackedBalanceRequest
 // (localStorage) — dibaca oleh OperationBalanceRequestToast.jsx (global,
-// Layout.jsx) utk menampilkan notifikasi "sedang diproses" begitu Finance
-// menekan SAYA TERIMA. Tombol "Riwayat" membuka daftar audit lengkap
-// (waktu, requester, siapa yang meminta, status, siapa & kapan diterima).
+// Layout.jsx) utk menampilkan notifikasi "sedang diproses"/"sudah ditransfer".
 
 function fmtRp(v) {
   const n = Number(v);
@@ -27,8 +32,10 @@ function fmtDateTime(v) {
   if (Number.isNaN(d.getTime())) return '-';
   return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
+const STATUS_LABEL = { PENDING: 'Menunggu', ACKNOWLEDGED: 'Diterima', TRANSFERRED: 'Ditransfer' };
 
 export default function BalanceRequestButton({ bankCode }) {
+  const isFA = getUser()?.unit === 'FA';
   const [open, setOpen] = useState(false);
   const [requesterName, setRequesterName] = useState('');
   const [remainingBalance, setRemainingBalance] = useState(''); // digit string mentah, mis. "1500000"
@@ -104,14 +111,18 @@ export default function BalanceRequestButton({ bankCode }) {
 
   return (
     <>
-      <button className="fbr-trigger-btn" onClick={openModal} title="Kirim permintaan tambahan saldo ke Finance">
-        <i className="ti ti-cash-banknote" /> Minta Tambahan Saldo
-      </button>
+      {isFA ? (
+        <FaTransferPanel bankCode={bankCode} />
+      ) : (
+        <button className="fbr-trigger-btn" onClick={openModal} title="Kirim permintaan tambahan saldo ke Finance">
+          <i className="ti ti-cash-banknote" /> Minta Tambahan Saldo
+        </button>
+      )}
       <button className="fbr-history-btn" onClick={openHistory} title="Lihat riwayat permintaan tambahan saldo">
         <i className="ti ti-history" />
       </button>
 
-      {open && (
+      {!isFA && open && (
         <div className="fbr-modal-overlay" onClick={closeModal}>
           <div className="fbr-modal" onClick={e => e.stopPropagation()}>
             <div className="fbr-modal-title">PERMINTAAN TAMBAHAN SALDO</div>
@@ -197,6 +208,8 @@ export default function BalanceRequestButton({ bankCode }) {
                       <th>Status</th>
                       <th>Diterima Oleh</th>
                       <th>Waktu Diterima</th>
+                      <th>Ditransfer Oleh</th>
+                      <th>Waktu Transfer</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -208,11 +221,13 @@ export default function BalanceRequestButton({ bankCode }) {
                         <td>{fmtRp(r.remaining_balance)}</td>
                         <td>
                           <span className={'fbr-status-badge fbr-status-badge--' + r.status.toLowerCase()}>
-                            {r.status === 'ACKNOWLEDGED' ? 'Diterima' : 'Menunggu'}
+                            {STATUS_LABEL[r.status] || r.status}
                           </span>
                         </td>
                         <td>{r.acknowledged_by_username || '-'}</td>
                         <td>{fmtDateTime(r.acknowledged_at)}</td>
+                        <td>{r.transferred_by_username || '-'}</td>
+                        <td>{fmtDateTime(r.transferred_at)}</td>
                       </tr>
                     ))}
                   </tbody>
