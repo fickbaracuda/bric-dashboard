@@ -2204,6 +2204,7 @@ module.exports = {
   syncHandler,
   analyticsHandler,
   dailyReportHandler,
+  todayJakarta,
   transactionsHandler,
   exportHandler,
   resolveHandler,

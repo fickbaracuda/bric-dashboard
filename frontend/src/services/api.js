@@ -392,6 +392,8 @@ export const requestReconciliationSync = (bankCode) =>
 /* WAR-ROOM — Rekonsiliasi FP vs Bank Mandiri (TIDAK di-cache — data operasional, harus selalu fresh) */
 export const getReconciliationMandiriAnalytics = (params = {}) =>
   axios.get(`${API_URL}/api/warroom/reconciliation/mandiri/analytics`, { params, headers: authHeaders() }).then(r => r.data);
+export const getReconciliationMandiriDailyReport = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/mandiri/daily-report`, { params, headers: authHeaders() }).then(r => r.data);
 export const getReconciliationMandiriTransactions = (params = {}) =>
   axios.get(`${API_URL}/api/warroom/reconciliation/mandiri/transactions`, { params, headers: authHeaders() }).then(r => r.data);
 export const getReconciliationMandiriRawBank = (params = {}) =>

@@ -5,6 +5,7 @@ import {
   resolveReconciliationMandiri, getReconciliationMandiriLogs, getReconciliationMandiriRawBank,
   getReconciliationMandiriRawFp, getReconciliationMandiriResolutionHistory, requestReconciliationSync,
 } from '../services/api';
+import DailyReportMandiriTab from '../components/reconciliation/DailyReportMandiriTab';
 
 // Halaman ini REUSE layout/komponen generik "wrr-*" yang sudah dibangun untuk
 // Rekonsiliasi OCBC (frontend/src/pages/WarRoomReconciliationOcbc.jsx) —
@@ -21,6 +22,7 @@ const TABS = [
   { key: 'fee', label: 'Fee Analysis', icon: 'ti-receipt-2' },
   { key: 'time', label: 'Time & Posting Analysis', icon: 'ti-clock' },
   { key: 'raw', label: 'Raw Data & Audit', icon: 'ti-database' },
+  { key: 'daily-report', label: 'Laporan Harian', icon: 'ti-file-report' },
 ];
 const EXCEPTION_STATUSES = [
   'PENDING_BANK', 'FP_ONLY', 'BANK_ONLY', 'NOMINAL_MISMATCH', 'FEE_MISMATCH',
@@ -900,6 +902,7 @@ export default function WarRoomReconciliationMandiri() {
           {activeTab === 'fee' && <FeeAnalysisTab analytics={analytics} />}
           {activeTab === 'time' && <TimeAnalysisTab analytics={analytics} />}
           {activeTab === 'raw' && <RawDataTab analytics={analytics} date={date} onExport={handleExport} exporting={exporting} />}
+          {activeTab === 'daily-report' && <DailyReportMandiriTab date={date} />}
         </>)}
 
         {auditId && <AuditLogModal id={auditId} onClose={() => setAuditId(null)} />}

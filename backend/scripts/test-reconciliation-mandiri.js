@@ -14,7 +14,11 @@ const assert = require('assert');
 const {
   extractMandiriRow, reconcileMandiriTransactions, validateMandiriBalance,
 } = require('../src/reconciliation/mandiriAdapter');
-const { parseFlexibleDateTime, timeDelayBucket, formatDateJakarta } = require('../src/routes/warroom-reconciliation-mandiri');
+const {
+  parseFlexibleDateTime, timeDelayBucket, formatDateJakarta,
+  dedupeMandiriResultsByCanonicalKey, computeMandiriDataQualityWarning,
+  computeMandiriActionableException, computeMandiriHealthStatus, MANDIRI_HEALTH_THRESHOLDS,
+} = require('../src/routes/warroom-reconciliation-mandiri');
 
 const tests = [];
 function test(name, fn) { tests.push({ name, fn }); }
@@ -295,6 +299,157 @@ test('timeDelayBucket: kategori selisih waktu', () => {
   assert.strictEqual(timeDelayBucket(45), 'exception');
   assert.strictEqual(timeDelayBucket(-45), 'exception');
   assert.strictEqual(timeDelayBucket(null), null);
+});
+
+// ── Laporan Harian Mandiri — dedupe canonical key, data quality, actionable
+// exception, health status (pure functions, lihat warroom-reconciliation-mandiri.js) ──
+function resultRow(overrides = {}) {
+  return {
+    id: overrides.id ?? Math.floor(Math.random() * 1e9),
+    canonical_transaction_key: overrides.canonical_transaction_key ?? null,
+    recon_status: overrides.recon_status ?? 'MATCHED',
+    bank_transaction_date: overrides.bank_transaction_date ?? null,
+    fp_nominal: overrides.fp_nominal ?? null,
+    bank_total_debit: overrides.bank_total_debit ?? null,
+    ...overrides,
+  };
+}
+
+test('LAPORAN HARIAN TEST 4/5: dedupe by canonical key -- 1 transaksi logis (2 baris berbagi key sama) hanya dihitung 1 kali', () => {
+  const rows = [
+    resultRow({ id: 1, canonical_transaction_key: 'A', recon_status: 'BANK_ONLY' }),
+    resultRow({ id: 2, canonical_transaction_key: 'A', recon_status: 'REVERSAL' }),
+    resultRow({ id: 3, canonical_transaction_key: 'B', recon_status: 'MATCHED' }),
+  ];
+  const deduped = dedupeMandiriResultsByCanonicalKey(rows);
+  assert.strictEqual(deduped.length, 2);
+  assert.strictEqual(deduped[0].id, 1); // baris PERTAMA per key yang dipertahankan
+});
+
+test('LAPORAN HARIAN TEST 5: cross-date result tidak masuk KPI -- diidentifikasi lewat cross_date_result_count', () => {
+  const rows = [
+    resultRow({ id: 1, canonical_transaction_key: 'A', bank_transaction_date: '2026-07-15' }),
+    resultRow({ id: 2, canonical_transaction_key: 'B', bank_transaction_date: '2026-07-14' }), // beda tanggal
+    resultRow({ id: 3, canonical_transaction_key: 'C', bank_transaction_date: null }), // null selalu dianggap valid (belum ada bank match)
+  ];
+  const dq = computeMandiriDataQualityWarning(rows, '2026-07-15');
+  assert.strictEqual(dq.cross_date_result_count, 1);
+});
+
+test('LAPORAN HARIAN TEST 6: duplicate_canonical_result_count terdeteksi utk key yang muncul >1 kali', () => {
+  const rows = [
+    resultRow({ id: 1, canonical_transaction_key: 'DUP', recon_status: 'MATCHED' }),
+    resultRow({ id: 2, canonical_transaction_key: 'DUP', recon_status: 'BANK_ONLY' }),
+    resultRow({ id: 3, canonical_transaction_key: 'UNIK', recon_status: 'MATCHED' }),
+  ];
+  const dq = computeMandiriDataQualityWarning(rows, '2026-07-15');
+  assert.strictEqual(dq.duplicate_canonical_result_count, 2);
+  assert.strictEqual(dq.has_issue, true);
+});
+
+test('LAPORAN HARIAN TEST 7: reversal_also_bank_only_count -- canonical key yang PUNYA baris REVERSAL & BANK_ONLY sekaligus', () => {
+  const rows = [
+    resultRow({ id: 1, canonical_transaction_key: 'X', recon_status: 'REVERSAL' }),
+    resultRow({ id: 2, canonical_transaction_key: 'X', recon_status: 'BANK_ONLY' }),
+  ];
+  const dq = computeMandiriDataQualityWarning(rows, '2026-07-15');
+  assert.strictEqual(dq.reversal_also_bank_only_count, 1);
+  assert.strictEqual(dq.has_issue, true);
+});
+test('LAPORAN HARIAN: tidak ada masalah -- has_issue false, message null', () => {
+  const rows = [
+    resultRow({ id: 1, canonical_transaction_key: 'A', bank_transaction_date: '2026-07-15', recon_status: 'MATCHED' }),
+    resultRow({ id: 2, canonical_transaction_key: 'B', bank_transaction_date: '2026-07-15', recon_status: 'FP_ONLY' }),
+  ];
+  const dq = computeMandiriDataQualityWarning(rows, '2026-07-15');
+  assert.strictEqual(dq.has_issue, false);
+  assert.strictEqual(dq.message, null);
+});
+
+test('LAPORAN HARIAN TEST 8/11: actionable exception -- HANYA 9 EXCEPTION_STATUSES, MATCHED/MATCHED_NO_FEE tidak ikut', () => {
+  const rows = [
+    resultRow({ recon_status: 'MATCHED', fp_nominal: 1000 }),
+    resultRow({ recon_status: 'MATCHED_NO_FEE', fp_nominal: 2000 }),
+    resultRow({ recon_status: 'FP_ONLY', fp_nominal: 500 }),
+    resultRow({ recon_status: 'BANK_ONLY', fp_nominal: null, bank_total_debit: 700 }),
+  ];
+  const ex = computeMandiriActionableException(rows);
+  assert.strictEqual(ex.count, 2);
+  assert.strictEqual(ex.nominal, 500 + 700); // BANK_ONLY fallback ke bank_total_debit krn fp_nominal null
+});
+test('LAPORAN HARIAN: actionable exception nominal 0 kalau tidak ada exception sama sekali', () => {
+  const rows = [resultRow({ recon_status: 'MATCHED', fp_nominal: 1000 })];
+  const ex = computeMandiriActionableException(rows);
+  assert.strictEqual(ex.count, 0);
+  assert.strictEqual(ex.nominal, 0);
+});
+
+test('LAPORAN HARIAN TEST 12: Health GREEN -- match rate tinggi, tidak ada exception/data quality issue, balance BALANCED', () => {
+  const h = computeMandiriHealthStatus({
+    validMatchRateTransaction: 0.995, actionableExceptionCount: 0,
+    dataQualityHasIssue: false, balanceValidationStatus: 'BALANCED', syncStatus: 'success',
+  });
+  assert.strictEqual(h, 'GREEN');
+});
+test('LAPORAN HARIAN TEST 13: Health YELLOW -- match rate 95-99% (tidak ada kondisi RED)', () => {
+  const h = computeMandiriHealthStatus({
+    validMatchRateTransaction: 0.97, actionableExceptionCount: 0,
+    dataQualityHasIssue: false, balanceValidationStatus: 'BALANCED', syncStatus: 'success',
+  });
+  assert.strictEqual(h, 'YELLOW');
+});
+test('LAPORAN HARIAN: Health YELLOW -- match rate tinggi TAPI masih ada actionable exception', () => {
+  const h = computeMandiriHealthStatus({
+    validMatchRateTransaction: 0.995, actionableExceptionCount: 3,
+    dataQualityHasIssue: false, balanceValidationStatus: 'BALANCED', syncStatus: 'success',
+  });
+  assert.strictEqual(h, 'YELLOW');
+});
+test('LAPORAN HARIAN TEST 14: Health RED -- match rate < 95%', () => {
+  const h = computeMandiriHealthStatus({
+    validMatchRateTransaction: 0.80, actionableExceptionCount: 0,
+    dataQualityHasIssue: false, balanceValidationStatus: 'BALANCED', syncStatus: 'success',
+  });
+  assert.strictEqual(h, 'RED');
+});
+test('LAPORAN HARIAN TEST 15: Health RED -- balance_validation UNBALANCED (walau match rate 100%)', () => {
+  const h = computeMandiriHealthStatus({
+    validMatchRateTransaction: 1.0, actionableExceptionCount: 0,
+    dataQualityHasIssue: false, balanceValidationStatus: 'UNBALANCED', syncStatus: 'success',
+  });
+  assert.strictEqual(h, 'RED');
+});
+test('LAPORAN HARIAN TEST 16: Health RED -- data quality issue (cross-date/duplicate canonical)', () => {
+  const h = computeMandiriHealthStatus({
+    validMatchRateTransaction: 1.0, actionableExceptionCount: 0,
+    dataQualityHasIssue: true, balanceValidationStatus: 'BALANCED', syncStatus: 'success',
+  });
+  assert.strictEqual(h, 'RED');
+});
+test('LAPORAN HARIAN: Health RED -- sync belum sukses', () => {
+  const h = computeMandiriHealthStatus({
+    validMatchRateTransaction: 1.0, actionableExceptionCount: 0,
+    dataQualityHasIssue: false, balanceValidationStatus: 'BALANCED', syncStatus: 'pending',
+  });
+  assert.strictEqual(h, 'RED');
+});
+test('LAPORAN HARIAN: Health RED menang atas YELLOW kalau keduanya terpenuhi (urutan evaluasi)', () => {
+  const h = computeMandiriHealthStatus({
+    validMatchRateTransaction: 0.97, actionableExceptionCount: 5, // kondisi YELLOW
+    dataQualityHasIssue: true, balanceValidationStatus: 'BALANCED', syncStatus: 'success', // kondisi RED
+  });
+  assert.strictEqual(h, 'RED');
+});
+test('LAPORAN HARIAN: Health GREEN kalau validMatchRateTransaction null (tidak ada FP) & tidak ada masalah lain', () => {
+  const h = computeMandiriHealthStatus({
+    validMatchRateTransaction: null, actionableExceptionCount: 0,
+    dataQualityHasIssue: false, balanceValidationStatus: null, syncStatus: 'success',
+  });
+  assert.strictEqual(h, 'GREEN');
+});
+test('MANDIRI_HEALTH_THRESHOLDS: konfigurasi terpusat 99%/95%', () => {
+  assert.strictEqual(MANDIRI_HEALTH_THRESHOLDS.GREEN_MIN_MATCH_RATE, 0.99);
+  assert.strictEqual(MANDIRI_HEALTH_THRESHOLDS.YELLOW_MIN_MATCH_RATE, 0.95);
 });
 
 // ── Runner ──────────────────────────────────────────────────────────────────

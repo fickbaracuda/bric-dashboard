@@ -17,6 +17,7 @@ const pool = require('../db');
 const {
   extractToken, nullIfEmpty, cleanNum, isValidIdTransaksi,
   csvEscape, safeDiv, RECON_STATUSES, EXCEPTION_STATUSES, normalizeCanonicalKey,
+  todayJakarta,
 } = require('./warroom-reconciliation');
 const {
   extractMandiriRow, reconcileMandiriTransactions, validateMandiriBalance,
@@ -25,6 +26,14 @@ const {
 
 const SYNC_TOKEN = process.env.APPS_SCRIPT_TOKEN; // token SHARED — sama dengan war-room lain, bukan token baru
 const BANK_CODE = 'MANDIRI';
+
+// ── Threshold health status Laporan Harian Mandiri — SATU konfigurasi
+// terpusat (spec eksplisit: "Threshold harus berada dalam satu konfigurasi
+// terpusat"), dipakai HANYA oleh computeMandiriHealthStatus() di bawah.
+const MANDIRI_HEALTH_THRESHOLDS = {
+  GREEN_MIN_MATCH_RATE: 0.99,
+  YELLOW_MIN_MATCH_RATE: 0.95,
+};
 
 /**
  * Parser tanggal-jam fleksibel, di-ANCHOR eksplisit ke Asia/Jakarta (+07:00)
@@ -78,6 +87,141 @@ function timeDelayBucket(minutes) {
   if (abs <= 15) return 'warning';
   if (abs <= 30) return 'delayed';
   return 'exception';
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Pure functions — data quality, actionable exception, health status.
+// TIDAK menyentuh DB, jadi bisa di-unit-test langsung (lihat
+// backend/scripts/test-reconciliation-mandiri.js). Pola SAMA dgn
+// dailyReportHandler OCBC di warroom-reconciliation.js, TAPI Mandiri TIDAK
+// punya coverage_status/is_actionable OCBC — exception di sini murni dari
+// keanggotaan EXCEPTION_STATUSES (fee-only/credit-only tanpa principal
+// SUDAH dijamin tidak pernah jadi BANK_ONLY oleh reconcileMandiriTransactions()
+// sendiri, lihat mandiriAdapter.js — tidak perlu filter tambahan di sini).
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * "Satu canonical_transaction_key hanya boleh dihitung satu kali" (spec) —
+ * dedupe eksplisit SEBELUM agregasi apa pun, sbg jaminan berlapis TAMBAHAN
+ * di luar unique index DB (batch_id, canonical_transaction_key). Ambil
+ * baris PERTAMA per key (urutan asal dari query DB, biasanya berdasarkan
+ * id insert).
+ */
+function dedupeMandiriResultsByCanonicalKey(results) {
+  const map = new Map();
+  for (const r of results) {
+    const key = r.canonical_transaction_key || `__row_${r.id}`;
+    if (!map.has(key)) map.set(key, r);
+  }
+  return [...map.values()];
+}
+
+/**
+ * Diagnostic data quality — SAMA konsep dgn OCBC (cross-date guard +
+ * duplicate canonical key), dihitung dari data SEBELUM dedupe supaya
+ * kombinasi REVERSAL+BANK_ONLY utk key yang sama masih bisa terdeteksi.
+ * `results` di sini HARUS baris mentah dari recon_results (belum dedupe).
+ */
+function computeMandiriDataQualityWarning(results, businessDate) {
+  const crossDateRows = results.filter(r => r.bank_transaction_date !== null && r.bank_transaction_date !== undefined && r.bank_transaction_date !== businessDate);
+
+  const canonicalGroups = new Map();
+  for (const r of results) {
+    const key = r.canonical_transaction_key;
+    if (!key) continue;
+    if (!canonicalGroups.has(key)) canonicalGroups.set(key, []);
+    canonicalGroups.get(key).push(r);
+  }
+  let duplicateCanonicalResultCount = 0;
+  let reversalAlsoBankOnlyCount = 0;
+  for (const rows of canonicalGroups.values()) {
+    if (rows.length <= 1) continue;
+    duplicateCanonicalResultCount += rows.length;
+    const statuses = rows.map(r => r.recon_status);
+    if (statuses.includes('REVERSAL') && statuses.includes('BANK_ONLY')) reversalAlsoBankOnlyCount++;
+  }
+
+  const hasIssue = crossDateRows.length > 0 || duplicateCanonicalResultCount > 0 || reversalAlsoBankOnlyCount > 0;
+  const message = [
+    crossDateRows.length > 0
+      ? `Ditemukan ${crossDateRows.length} baris hasil rekonsiliasi dengan bank_transaction_date di luar tanggal ${businessDate} (data stale, dikecualikan otomatis dari KPI).`
+      : null,
+    duplicateCanonicalResultCount > 0
+      ? `Ditemukan ${duplicateCanonicalResultCount} baris hasil rekonsiliasi berbagi canonical_transaction_key yang sama (${reversalAlsoBankOnlyCount} di antaranya pasangan REVERSAL+BANK_ONLY).`
+      : null,
+  ].filter(Boolean).join(' ') || null;
+
+  return {
+    cross_date_result_count: crossDateRows.length,
+    duplicate_canonical_result_count: duplicateCanonicalResultCount,
+    reversal_also_bank_only_count: reversalAlsoBankOnlyCount,
+    has_issue: hasIssue,
+    message,
+  };
+}
+
+/**
+ * Actionable exception — HANYA keanggotaan EXCEPTION_STATUSES (9 status
+ * selain MATCHED/MATCHED_NO_FEE). `results` WAJIB sudah di-dedupe by
+ * canonical key (satu kali hitung per transaksi logis) dan sudah
+ * dikecualikan baris cross-date (lihat pemanggil).
+ */
+function computeMandiriActionableException(results) {
+  const rows = results.filter(r => EXCEPTION_STATUSES.includes(r.recon_status));
+  const nominal = rows.reduce((s, r) => {
+    const fpNominal = r.fp_nominal !== null && r.fp_nominal !== undefined ? Number(r.fp_nominal) : null;
+    const fallback = r.bank_total_debit !== null && r.bank_total_debit !== undefined ? Number(r.bank_total_debit) : 0;
+    return s + (fpNominal !== null ? fpNominal : fallback);
+  }, 0);
+  return { count: rows.length, nominal };
+}
+
+/**
+ * Health status GREEN/YELLOW/RED — threshold terpusat di
+ * MANDIRI_HEALTH_THRESHOLDS. RED dicek lebih dulu (menang atas YELLOW),
+ * lalu YELLOW, default GREEN. `validMatchRateTransaction` boleh `null`
+ * (tidak ada FP sama sekali) — diperlakukan sbg TIDAK menurunkan status
+ * (bukan otomatis RED/YELLOW), sesuai konvensi yang sama dgn OCBC.
+ */
+function computeMandiriHealthStatus({ validMatchRateTransaction, actionableExceptionCount, dataQualityHasIssue, balanceValidationStatus, syncStatus }) {
+  const syncFailed = syncStatus !== 'success';
+  const isUnbalanced = balanceValidationStatus === 'UNBALANCED';
+  if (
+    syncFailed ||
+    (validMatchRateTransaction !== null && validMatchRateTransaction < MANDIRI_HEALTH_THRESHOLDS.YELLOW_MIN_MATCH_RATE) ||
+    dataQualityHasIssue ||
+    isUnbalanced
+  ) {
+    return 'RED';
+  }
+  if (
+    (validMatchRateTransaction !== null && validMatchRateTransaction < MANDIRI_HEALTH_THRESHOLDS.GREEN_MIN_MATCH_RATE) ||
+    actionableExceptionCount > 0
+  ) {
+    return 'YELLOW';
+  }
+  return 'GREEN';
+}
+
+function fmtNumId(n) {
+  return Number(n || 0).toLocaleString('id-ID');
+}
+function fmtRpId(n) {
+  return `Rp ${Math.round(Number(n || 0)).toLocaleString('id-ID')}`;
+}
+const INDO_MONTHS = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+function formatWibLong(date) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return '-';
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(date);
+  const map = {};
+  for (const p of parts) map[p.type] = p.value;
+  const monthName = INDO_MONTHS[Number(map.month) - 1] || '';
+  return `${Number(map.day)} ${monthName} ${map.year} pukul ${map.hour}:${map.minute} WIB`;
+}
+function joinWithDan(items) {
+  if (!items || items.length === 0) return '';
+  if (items.length === 1) return items[0];
+  return items.slice(0, -1).join(', ') + ', dan ' + items[items.length - 1];
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -320,11 +464,31 @@ async function analyticsHandler(req, res) {
       pool.query('SELECT COUNT(*) AS c, COALESCE(SUM(nominal),0) AS s FROM recon_fp_transactions WHERE batch_id = $1', [batch.id]),
       pool.query('SELECT COUNT(DISTINCT extracted_transaction_id) AS c FROM recon_bank_transactions WHERE batch_id = $1 AND extracted_transaction_id IS NOT NULL', [batch.id]),
     ]);
-    const results = resultsRes.rows;
+    // rawResults: SEMUA baris apa adanya (belum di-filter/dedupe) — HANYA
+    // dipakai utk menghitung data_quality_warning (perlu melihat duplikat &
+    // cross-date SEBELUM dibersihkan supaya bisa terdeteksi).
+    const rawResults = resultsRes.rows;
+    const dataQualityWarning = computeMandiriDataQualityWarning(rawResults, date);
+
+    // Guard integritas: active_batch.business_date HARUS persis sama dgn
+    // `date` yang diminta (dijamin oleh WHERE business_date=$1 di atas —
+    // cek eksplisit ini murni pertahanan berlapis).
+    if (String(batch.business_date) !== date) {
+      throw new Error(`Integrity guard gagal: active_batch.business_date (${batch.business_date}) != date diminta (${date})`);
+    }
+
+    // "Data lintas tanggal tidak boleh masuk KPI" + "satu canonical_transaction_key
+    // hanya dihitung satu kali" (spec) -- SEMUA agregasi di bawah (summary,
+    // fee_analysis, time_analysis) WAJIB memakai `results` versi bersih ini,
+    // BUKAN rawResults.
+    const resultsInDate = rawResults.filter(r => r.bank_transaction_date === null || r.bank_transaction_date === date);
+    const results = dedupeMandiriResultsByCanonicalKey(resultsInDate);
 
     const totalTransaksiFp = Number(fpCountRes.rows[0]?.c || 0);
     const totalNominalFp = Number(fpCountRes.rows[0]?.s || 0);
     const uniqueBankTransactionId = Number(bankIdCountRes.rows[0]?.c || 0);
+
+    const actionableException = computeMandiriActionableException(results);
 
     const byStatus = {};
     for (const s of RECON_STATUSES) byStatus[s] = { count: 0, nominal: 0 };
@@ -361,6 +525,13 @@ async function analyticsHandler(req, res) {
       fee_variance: totalActualFee - expectedTotalFee,
       match_rate_transaksi: safeDiv(matchedCount, totalTransaksiFp),
       match_rate_nominal: safeDiv(matchedNominal, totalNominalFp),
+      // "Actionable Exception" sekarang dihitung BACKEND (spec) -- BUKAN lagi
+      // di frontend dari status_distribution. Definisi: keanggotaan
+      // EXCEPTION_STATUSES (9 status selain MATCHED/MATCHED_NO_FEE), dari
+      // `results` yang SUDAH bersih (cross-date dikecualikan, dedupe by
+      // canonical key) -- lihat computeMandiriActionableException().
+      actionable_exception_count: actionableException.count,
+      actionable_exception_nominal: actionableException.nominal,
     };
 
     const status_distribution = RECON_STATUSES.map(s => ({ status: s, count: byStatus[s].count, nominal: byStatus[s].nominal }));
@@ -436,11 +607,231 @@ async function analyticsHandler(req, res) {
         account_no: batch.account_no, scope_mode: batch.scope_mode,
         expected_fee: expectedFee, grace_period_minutes: batch.grace_period_minutes,
       },
+      // Sumber kebenaran batch aktif -- frontend WAJIB cek business_date di
+      // sini sama dgn tanggal yang diminta sebelum merender (pola SAMA dgn
+      // OCBC, lihat WarRoomReconciliationOcbc.jsx guard integritas).
+      active_batch: {
+        batch_id: batch.id, bank_code: batch.bank_code, business_date: date,
+        account_no: batch.account_no, synced_at: batch.synced_at, sync_status: batch.status,
+      },
+      // Seharusnya SELALU has_issue:false setelah unique index
+      // canonical_transaction_key aktif -- kalau masih muncul, ada recon_results
+      // stale yang perlu dibersihkan (pola sama dgn OCBC).
+      data_quality_warning: dataQualityWarning,
       summary, status_distribution, fee_analysis, time_analysis, balance_validation,
       recent_batches: recentBatches,
     });
   } catch (e) {
     console.error('reconciliation-mandiri analytics error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// GET /api/warroom/reconciliation/mandiri/daily-report?date=YYYY-MM-DD
+// Laporan Harian Mandiri — pola SAMA dgn Laporan Harian OCBC
+// (dailyReportHandler di warroom-reconciliation.js): TIDAK PERNAH fallback
+// ke batch tanggal sebelumnya (default HARI INI Asia/Jakarta, BUKAN "batch
+// terakhir" seperti analyticsHandler). BEDA dari OCBC: Mandiri tidak punya
+// coverage_status/is_actionable — exception murni dari keanggotaan
+// EXCEPTION_STATUSES, dan balance_validation.status === 'UNBALANCED' ikut
+// menjadi salah satu kondisi RED (OCBC tidak punya dimensi ini).
+// ─────────────────────────────────────────────────────────────────────────
+async function dailyReportHandler(req, res) {
+  try {
+    const todayStr = todayJakarta();
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(req.query.date || '') ? req.query.date : todayStr;
+    const generatedAt = new Date().toISOString();
+    const reportStatus = date === todayStr ? 'RUNNING' : 'CLOSED';
+
+    const batchRes = await pool.query(
+      'SELECT *, business_date::text AS business_date FROM recon_sync_batches WHERE business_date = $1 AND bank_code = $2',
+      [date, BANK_CODE]
+    );
+    const batch = batchRes.rows[0] || null;
+
+    if (!batch) {
+      return res.json({
+        success: true, empty: true,
+        message: 'Belum ada data rekonsiliasi Mandiri untuk tanggal ini.',
+        generated_at: generatedAt, report_status: reportStatus,
+        meta: { date, bank_code: BANK_CODE },
+      });
+    }
+
+    // Guard integritas — SAMA pola dgn analyticsHandler & OCBC.
+    if (batch.business_date !== date) {
+      throw new Error(`Integrity guard gagal: active_batch.business_date (${batch.business_date}) != date diminta (${date})`);
+    }
+
+    const [resultsRes, fpCountRes] = await Promise.all([
+      pool.query('SELECT *, bank_transaction_date::text AS bank_transaction_date FROM recon_results WHERE batch_id = $1 AND bank_code = $2', [batch.id, BANK_CODE]),
+      pool.query('SELECT COUNT(*) AS c, COALESCE(SUM(nominal),0) AS s FROM recon_fp_transactions WHERE batch_id = $1', [batch.id]),
+    ]);
+
+    const rawResults = resultsRes.rows;
+    const dataQualityWarning = computeMandiriDataQualityWarning(rawResults, date);
+    const resultsInDate = rawResults.filter(r => r.bank_transaction_date === null || r.bank_transaction_date === date);
+    const results = dedupeMandiriResultsByCanonicalKey(resultsInDate);
+
+    const totalTransaksiFp = Number(fpCountRes.rows[0]?.c || 0);
+    const totalNominalFp = Number(fpCountRes.rows[0]?.s || 0);
+
+    const byStatus = {};
+    for (const s of RECON_STATUSES) byStatus[s] = { count: 0, nominal: 0 };
+    for (const r of results) {
+      const s = byStatus[r.recon_status] ? r.recon_status : 'NEED_REVIEW';
+      byStatus[s].count++;
+      byStatus[s].nominal += Number(r.fp_nominal || 0);
+    }
+    const matchedCount = byStatus.MATCHED.count + byStatus.MATCHED_NO_FEE.count;
+    const matchedNominal = byStatus.MATCHED.nominal + byStatus.MATCHED_NO_FEE.nominal;
+    const totalActualFee = results.reduce((s, r) => s + (r.bank_fee !== null ? Number(r.bank_fee) : 0), 0);
+
+    const validMatchRateTransaction = safeDiv(matchedCount, totalTransaksiFp);
+    const validMatchRateNominal = safeDiv(matchedNominal, totalNominalFp);
+    const actionableException = computeMandiriActionableException(results);
+
+    const status_distribution = RECON_STATUSES.map(s => ({ status: s, count: byStatus[s].count, nominal: byStatus[s].nominal }));
+
+    const financial_summary = {
+      total_nominal_fp: totalNominalFp,
+      matched_nominal: matchedNominal,
+      actionable_exception_nominal: actionableException.nominal,
+      total_actual_fee: totalActualFee,
+      reversal_nominal: byStatus.REVERSAL.nominal,
+    };
+
+    // Time & Posting summary — formula SAMA dgn analyticsHandler
+    // (time_analysis), nama field disesuaikan spec ("time_posting_summary").
+    const timeDiffs = results.map(r => r.time_difference_minutes).filter(v => v !== null && v !== undefined && Number.isFinite(Number(v))).map(Number);
+    const absDiffs = timeDiffs.map(Math.abs).sort((a, b) => a - b);
+    const sumMinutes = absDiffs.reduce((s, v) => s + v, 0);
+    const avgMinutes = absDiffs.length ? sumMinutes / absDiffs.length : null;
+    const medianMinutes = absDiffs.length ? absDiffs[Math.floor((absDiffs.length - 1) / 2)] : null;
+    const p95Minutes = absDiffs.length ? absDiffs[Math.min(absDiffs.length - 1, Math.floor(absDiffs.length * 0.95))] : null;
+    const maxMinutes = absDiffs.length ? absDiffs[absDiffs.length - 1] : null;
+    const buckets = { normal: 0, warning: 0, delayed: 0, exception: 0 };
+    for (const d of timeDiffs) {
+      const b = timeDelayBucket(d);
+      if (b) buckets[b]++;
+    }
+    const time_posting_summary = {
+      avg_minutes: avgMinutes, median_minutes: medianMinutes, p95_minutes: p95Minutes, max_minutes: maxMinutes,
+      bucket_0_5: buckets.normal, bucket_5_15: buckets.warning, bucket_15_30: buckets.delayed, bucket_gt_30: buckets.exception,
+    };
+
+    const balance_validation = (batch.raw_summary && batch.raw_summary.balance_validation) || null;
+
+    const healthStatus = computeMandiriHealthStatus({
+      validMatchRateTransaction,
+      actionableExceptionCount: actionableException.count,
+      dataQualityHasIssue: dataQualityWarning.has_issue,
+      balanceValidationStatus: balance_validation?.status || null,
+      syncStatus: batch.status,
+    });
+
+    const top_10_exception = [...results]
+      .filter(r => EXCEPTION_STATUSES.includes(r.recon_status))
+      .sort((a, b) => {
+        const av = Number(a.fp_nominal !== null ? a.fp_nominal : (a.bank_total_debit || 0));
+        const bv = Number(b.fp_nominal !== null ? b.fp_nominal : (b.bank_total_debit || 0));
+        return bv - av;
+      })
+      .slice(0, 10)
+      .map(r => ({
+        id_transaksi: r.id_transaksi || null,
+        id_outlet: r.id_outlet || null,
+        id_produk: r.id_produk || null,
+        id_biller: r.id_biller || null,
+        account_no: batch.account_no || null,
+        recon_status: r.recon_status,
+        fp_nominal: r.fp_nominal !== null ? Number(r.fp_nominal) : null,
+        bank_principal: r.bank_principal !== null ? Number(r.bank_principal) : null,
+        variance_principal: r.variance_principal !== null ? Number(r.variance_principal) : null,
+        variance_fee: r.variance_fee !== null ? Number(r.variance_fee) : null,
+        time_difference_minutes: r.time_difference_minutes,
+        notes: r.notes || null,
+      }));
+
+    // ── Ringkasan otomatis Direktur — teks DETERMINISTIC, TANPA AI/API
+    // eksternal apa pun. Tidak pernah menyatakan "tidak ditemukan" kalau
+    // count sebenarnya > 0 (spec eksplisit).
+    const pctMatch = validMatchRateTransaction !== null ? (validMatchRateTransaction * 100).toFixed(2) : '-';
+    const avgPostingText = avgMinutes !== null ? `${avgMinutes.toFixed(0)} menit` : 'tidak dapat dihitung (belum ada transaksi matched)';
+    const balanceStatusText = balance_validation?.status === 'BALANCED' ? 'BALANCED'
+      : balance_validation?.status === 'UNBALANCED' ? 'UNBALANCED'
+      : 'TIDAK DAPAT DIPASTIKAN';
+    const topProblemStatuses = RECON_STATUSES
+      .filter(s => s !== 'MATCHED' && s !== 'MATCHED_NO_FEE' && byStatus[s].count > 0)
+      .sort((a, b) => byStatus[b].count - byStatus[a].count)
+      .slice(0, 3);
+
+    const summaryLines = [
+      `Per ${formatWibLong(new Date(generatedAt))}, sebanyak ${fmtNumId(matchedCount)} dari ${fmtNumId(totalTransaksiFp)} transaksi FP telah berhasil direkonsiliasi dengan Bank Mandiri, dengan valid match rate sebesar ${pctMatch}%.`,
+      actionableException.count > 0
+        ? `Saat ini terdapat ${fmtNumId(actionableException.count)} transaksi yang memerlukan tindak lanjut dengan nilai terdampak sebesar ${fmtRpId(actionableException.nominal)}.${topProblemStatuses.length ? ` Permasalahan terbesar berasal dari ${joinWithDan(topProblemStatuses)}.` : ''}`
+        : 'Tidak ada transaksi yang memerlukan tindak lanjut pada tanggal ini.',
+      `Rata-rata waktu posting Bank Mandiri adalah ${avgPostingText}.`,
+      `Validasi saldo batch berstatus ${balanceStatusText}${dataQualityWarning.has_issue ? '' : ' dan tidak ditemukan masalah integritas data'}.`,
+      dataQualityWarning.has_issue ? `PERHATIAN: ditemukan masalah kualitas data — ${dataQualityWarning.message}` : null,
+      `Status kesehatan rekonsiliasi hari ini: ${healthStatus}.`,
+    ].filter(Boolean);
+    const ringkasan_direktur = summaryLines.join(' ');
+
+    // ── Rekomendasi tindak lanjut ──
+    const rekomendasi = [];
+    if (dataQualityWarning.has_issue) {
+      rekomendasi.push('Segera periksa & bersihkan data quality issue (cross-date/duplikat canonical) sebelum laporan difinalisasi.');
+    }
+    if (batch.status !== 'success') {
+      rekomendasi.push('Sinkronisasi batch ini belum berstatus sukses — cek Apps Script/Execution Log dan jalankan sync ulang.');
+    }
+    if (balance_validation?.status === 'UNBALANCED') {
+      rekomendasi.push('Validasi saldo UNBALANCED — periksa urutan/kelengkapan baris statement Mandiri.');
+    }
+    if (actionableException.count > 0) {
+      rekomendasi.push(`Tindak lanjuti ${fmtNumId(actionableException.count)} transaksi exception senilai ${fmtRpId(actionableException.nominal)} melalui tab Exception Queue.`);
+    }
+    if (byStatus.REVERSAL.count > 0) {
+      rekomendasi.push(`Periksa ${fmtNumId(byStatus.REVERSAL.count)} transaksi reversal untuk memastikan tidak ada dampak ke laporan keuangan.`);
+    }
+    if (validMatchRateTransaction !== null && validMatchRateTransaction < MANDIRI_HEALTH_THRESHOLDS.GREEN_MIN_MATCH_RATE) {
+      rekomendasi.push('Match rate di bawah target 99% — eskalasi ke tim terkait untuk investigasi lebih lanjut.');
+    }
+    if (rekomendasi.length === 0) {
+      rekomendasi.push('Tidak ada tindak lanjut mendesak — seluruh transaksi FP telah berhasil direkonsiliasi.');
+    }
+
+    res.json({
+      success: true, empty: false,
+      generated_at: generatedAt, report_status: reportStatus, health_status: healthStatus,
+      meta: { date, bank_code: BANK_CODE, batch_no: batch.batch_no, last_sync: batch.synced_at },
+      active_batch: {
+        batch_id: batch.id, bank_code: batch.bank_code, business_date: batch.business_date,
+        account_no: batch.account_no, synced_at: batch.synced_at, sync_status: batch.status,
+      },
+      total_fp: totalTransaksiFp,
+      total_nominal_fp: totalNominalFp,
+      total_bank_row_count: batch.bank_row_count,
+      matched_transaksi: matchedCount,
+      matched_nominal: matchedNominal,
+      valid_match_rate_transaction: validMatchRateTransaction,
+      valid_match_rate_nominal: validMatchRateNominal,
+      actionable_exception_count: actionableException.count,
+      actionable_exception_nominal: actionableException.nominal,
+      reversal: { count: byStatus.REVERSAL.count, nominal: byStatus.REVERSAL.nominal },
+      status_distribution,
+      financial_summary,
+      time_posting_summary,
+      balance_validation,
+      data_quality_warning: dataQualityWarning,
+      top_10_exception,
+      ringkasan_direktur,
+      rekomendasi_tindak_lanjut: rekomendasi,
+    });
+  } catch (e) {
+    console.error('reconciliation-mandiri daily-report error:', e.message);
     res.status(500).json({ error: e.message });
   }
 }
@@ -719,6 +1110,7 @@ async function actionLogsHandler(req, res) {
 module.exports = {
   syncHandler,
   analyticsHandler,
+  dailyReportHandler,
   transactionsHandler,
   rawBankHandler,
   rawFpHandler,
@@ -730,4 +1122,9 @@ module.exports = {
   parseFlexibleDateTime,
   timeDelayBucket,
   formatDateJakarta,
+  dedupeMandiriResultsByCanonicalKey,
+  computeMandiriDataQualityWarning,
+  computeMandiriActionableException,
+  computeMandiriHealthStatus,
+  MANDIRI_HEALTH_THRESHOLDS,
 };

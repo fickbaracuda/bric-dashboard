@@ -135,7 +135,8 @@ presisi jam-menit tidak hilang) / `account_no` / `currency` /
 | `POST /api/warroom/reconciliation/mandiri/sync` | `APPS_SCRIPT_TOKEN` (token SHARED) | Chunk FP/Mandiri, jalankan adapter+engine di chunk terakhir |
 | `GET /api/warroom/reconciliation/sync-request-status?bank_code=MANDIRI` | `APPS_SCRIPT_TOKEN` | Endpoint GENERIK (bukan di bawah `/mandiri`) — dipanggil Apps Script Mandiri tiap 1 menit, cek tombol "Sync Now" |
 | `POST /api/warroom/reconciliation/request-sync` | JWT | Endpoint GENERIK (bukan di bawah `/mandiri`) — tombol "Sync Now", body `{bank_code: 'MANDIRI'}` |
-| `GET /api/warroom/reconciliation/mandiri/analytics?date=` | JWT | Kalau `date` TIDAK dikirim, fallback ke batch tanggal PALING BARU (`ORDER BY business_date DESC LIMIT 1`) — beda dari `daily-report` OCBC yang default ke hari ini. Response: `meta`, `summary`, `status_distribution`, `fee_analysis`, `time_analysis`, `balance_validation`, `recent_batches` (14 batch terakhir). **TIDAK ADA** `active_batch`/`data_quality_warning` (beda dari OCBC — Mandiri tidak punya cross-date guard maupun diagnostic duplicate canonical yang di-surface lewat API; proteksi utamanya cukup lewat unique index `canonical_transaction_key`) |
+| `GET /api/warroom/reconciliation/mandiri/analytics?date=` | JWT | Kalau `date` TIDAK dikirim, fallback ke batch tanggal PALING BARU (`ORDER BY business_date DESC LIMIT 1`) — beda dari `daily-report` yang default ke hari ini, TIDAK PERNAH fallback. Response: `meta`, `active_batch`, `data_quality_warning`, `summary` (+ `actionable_exception_count`/`actionable_exception_nominal`), `status_distribution`, `fee_analysis`, `time_analysis`, `balance_validation`, `recent_batches` (14 batch terakhir) |
+| `GET /api/warroom/reconciliation/mandiri/daily-report?date=` | JWT | **Laporan Harian** (tab 7) — lihat bagian tersendiri di bawah |
 | `GET /api/warroom/reconciliation/mandiri/transactions?date=&status=&id_outlet=&id_produk=&id_biller=&account_no=&search=&page=&limit=&sort=&order=` | JWT | List berpaginasi, `status` boleh comma-separated. TIDAK ada param `coverage_status` (Mandiri tidak punya konsep itu) |
 | `GET /api/warroom/reconciliation/mandiri/raw-bank?date=` | JWT | Raw baris mutasi Mandiri + hasil ekstraksi (account_no, currency, post_date_time, remarks, additional_desc, debit, credit, close_balance, extracted_transaction_id, bank_row_type, extraction_method) |
 | `GET /api/warroom/reconciliation/mandiri/raw-fp?date=` | JWT | Raw baris DATA FP |
@@ -144,32 +145,62 @@ presisi jam-menit tidak hilang) / `account_no` / `currency` /
 | `GET /api/warroom/reconciliation/mandiri/:id/logs` | JWT | Riwayat audit 1 baris hasil |
 | `GET /api/warroom/reconciliation/mandiri/resolution-history?date=` | JWT | Rekap semua resolve manual pada batch tanggal ini (beda dari `:id/logs` yang per-baris) |
 
+### `active_batch` & `data_quality_warning` (analytics & daily-report)
+Sama konsep dgn OCBC: `active_batch` (`batch_id`, `bank_code`, `business_date`,
+`account_no`, `synced_at`, `sync_status`) adalah sumber kebenaran batch yang
+sedang ditampilkan — kalau `business_date`-nya beda dari tanggal yang
+diminta, handler melempar error keras (integrity guard) alih-alih diam-diam
+mencampur data. `data_quality_warning`
+(`cross_date_result_count`/`duplicate_canonical_result_count`/
+`reversal_also_bank_only_count`/`has_issue`/`message`) dihitung oleh
+`computeMandiriDataQualityWarning()` dari baris `recon_results` SEBELUM
+dedupe — target normal SELURUHNYA 0. Dedupe (`dedupeMandiriResultsByCanonicalKey()`)
+diterapkan SETELAH diagnostic dihitung, sbg jaminan tambahan di luar unique
+index DB, supaya "satu canonical_transaction_key hanya dihitung satu kali"
+di SEMUA KPI (summary/fee_analysis/time_analysis/actionable exception).
+
+### Actionable Exception (backend, bukan lagi frontend)
+`actionable_exception_count`/`actionable_exception_nominal` sekarang
+dihitung di `analyticsHandler`/`dailyReportHandler`
+(`computeMandiriActionableException()`) — BUKAN lagi di frontend seperti
+sebelumnya. Definisi: baris hasil (sudah bersih dari cross-date & dedupe)
+dengan `recon_status` termasuk 9 `EXCEPTION_STATUSES`. `nominal` = SUM
+`fp_nominal` (fallback `bank_total_debit` utk `BANK_ONLY` yang tidak
+punya `fp_nominal`). TIDAK memakai `coverage_status` OCBC — Mandiri tidak
+punya dimensi itu; fee-only/credit-only tanpa principal SUDAH dijamin
+tidak pernah masuk `recon_results` sbg `BANK_ONLY` oleh
+`reconcileMandiriTransactions()` sendiri (lihat bagian "Matching & Status"),
+jadi tidak perlu filter tambahan di sisi backend Laporan Harian.
+
 ## Frontend
 - Route: `/war-room/rekonsiliasi/mandiri`
 - Page: `frontend/src/pages/WarRoomReconciliationMandiri.jsx`
+- Komponen Laporan Harian: `frontend/src/components/reconciliation/DailyReportMandiriTab.jsx`
+  (file TERPISAH dari page utama, beda dari OCBC yang inline — Mandiri
+  punya 2 panel tambahan yang tidak ada di OCBC: Time & Posting Summary
+  dan Validasi Saldo Mandiri)
 - Menu: Rekonsiliasi > **Rekonsiliasi Mandiri** (badge `MDR`, `#003D79`)
 - CSS: reuse `wrr-*` (layout generik dari halaman OCBC — tabs/panel/kpi/table/
-  modal/pagination/mini-panel-row, tidak spesifik OCBC) + `wrrm-*` (elemen
-  BARU: validasi saldo, bucket waktu, sub-tab Raw Data & Audit)
-- **6 tab**: Executive Summary, Hasil Rekonsiliasi, Exception Queue, Fee
-  Analysis, **Time & Posting Analysis**, Raw Data & Audit. Rekonsiliasi
-  Mandiri **TIDAK punya tab Laporan Harian** — fitur itu (siap cetak/PDF
-  utk Direktur) sejauh ini HANYA dibangun utk OCBC (lihat
-  `docs/RECONCILIATION_OCBC.md` bagian "Laporan Harian"), belum direplikasi
-  ke Mandiri/BRI.
+  modal/pagination/mini-panel-row/**daily-report** termasuk `wrr-daily-report-*`
+  yang dibangun utk Laporan Harian OCBC, TIDAK diduplikasi) + `wrrm-*`
+  (elemen BARU khusus Mandiri: validasi saldo, bucket waktu, sub-tab Raw
+  Data & Audit)
+- **7 tab (urutan tetap, Laporan Harian WAJIB paling akhir)**: Executive
+  Summary, Hasil Rekonsiliasi, Exception Queue, Fee Analysis, **Time &
+  Posting Analysis**, Raw Data & Audit, **Laporan Harian**.
 
 ### Tab 1 — Executive Summary
 KPI grid 12-card, susunannya SAMA dgn OCBC (disamakan menyusul permintaan
 user): Total Transaksi FP, Total Nominal FP, Unique ID Transaksi Bank,
 Matched Transaksi, Matched Nominal, Pending Bank, FP Only, Bank Only,
 Nominal Mismatch, Match Rate Transaksi (Valid), Match Rate Nominal (Valid),
-Actionable Exception. **Catatan implementasi**: "Actionable Exception" di
-Mandiri **dihitung di FRONTEND** (`totalException` = jumlah seluruh
-`status_distribution` yang termasuk `EXCEPTION_STATUSES`, lihat
-`SummaryTab` di `WarRoomReconciliationMandiri.jsx`) — BEDA dari OCBC yang
-mengirim `actionable_exception_count` langsung dari backend (Mandiri
-backend tidak punya field itu krn tidak ada konsep `is_actionable`/
-`coverage_status`).
+Actionable Exception. **"Actionable Exception" sekarang dihitung di
+BACKEND** (`summary.actionable_exception_count`, lihat
+`computeMandiriActionableException()` di
+`warroom-reconciliation-mandiri.js`) — SAMA prinsip dgn OCBC, walau tanpa
+konsep `is_actionable`/`coverage_status` OCBC (definisinya cukup
+keanggotaan `EXCEPTION_STATUSES`, lihat bagian "Actionable Exception" di
+atas).
 
 Tiga mini-tabel sejajar (`StatusMiniTable`, pola sama dgn OCBC) — **FP
 Only**, **Bank Only**, **Reversal** — masing-masing tabel ringkas ID Trx +
@@ -228,6 +259,41 @@ Export CSV, tanpa browsing baris mentah), Mandiri punya 4 sub-tab:
 
 Tombol **Export CSV** ada di panel atas (di luar sub-tab), berlaku utk
 filter yang aktif di URL query saat itu.
+
+### Tab 7 — Laporan Harian (`DailyReportMandiriTab`, WAJIB paling akhir)
+Laporan siap-cetak/PDF untuk Direktur — sumber data
+`GET .../mandiri/daily-report`, TIDAK PERNAH fallback tanggal (default hari
+ini Asia/Jakarta, sama persis prinsip dgn Laporan Harian OCBC). Isi:
+header laporan (tanggal, sync terakhir, waktu laporan dibuat), badge status
+`BERJALAN (HARI INI)`/`SELESAI`, badge kesehatan GREEN/YELLOW/RED, panel
+Ringkasan Otomatis Direktur, 8 KPI utama, panel Ringkasan Status, Posisi
+Finansial, **Time & Posting Summary** (rata-rata/median/P95/maks + 4
+bucket keterlambatan — TIDAK ada di Laporan Harian OCBC), **Validasi
+Saldo Mandiri** (badge SELARAS/TIDAK SELARAS/TIDAK DAPAT DIPASTIKAN, arah
+statement, baris dicek/cocok/selisih — TIDAK ada di Laporan Harian OCBC),
+Top 10 Exception (kolom LEBIH lengkap drpd OCBC: ID Transaksi, Outlet,
+Produk, Biller, **Account No.**, Status, Nominal FP, **Principal
+Mandiri**, Selisih Principal, Selisih Fee, **Selisih Waktu**, Catatan),
+Pemeriksaan Kualitas Data, Tindak Lanjut Utama. Tiga tombol: **Perbarui
+Laporan**, **Salin Ringkasan** (format WhatsApp/email SESUAI spec, lihat
+`buildCopyText()`), **Cetak / Simpan PDF** (`window.print()`, REUSE CSS
+print global `@media print` di `index.css` — TIDAK ada CSS baru yang perlu
+ditambahkan krn aturan sembunyikan sidebar/navbar/tab/tombol sudah berlaku
+GLOBAL sejak dibangun utk OCBC).
+
+**Health Status** (`computeMandiriHealthStatus()`, threshold terpusat di
+`MANDIRI_HEALTH_THRESHOLDS`):
+
+| Kondisi | Status |
+|---|---|
+| `valid_match_rate_transaction ≥ 99%` DAN tidak ada actionable exception DAN tidak ada data quality issue DAN balance BUKAN `UNBALANCED` DAN sync sukses | **GREEN** |
+| `95% ≤ match rate < 99%` ATAU masih ada actionable exception (tapi tidak memenuhi kondisi RED) | **YELLOW** |
+| `match rate < 95%` ATAU sync belum sukses ATAU ada data quality issue (cross-date/duplicate canonical/reversal+bank_only) ATAU `balance_validation.status === 'UNBALANCED'` | **RED** |
+
+**Beda dari OCBC**: validasi saldo Mandiri (per-batch, arah ASC/DESC)
+**ikut memengaruhi health status** — `UNBALANCED` = RED — sedangkan OCBC
+tidak punya dimensi ini di aturan health status-nya. RED dicek lebih
+dulu (menang atas YELLOW), lalu YELLOW, default GREEN.
 
 ### Header & Sync Now
 Header menampilkan dropdown tanggal (dari `recent_batches`), tombol **Sync
@@ -291,7 +357,7 @@ KEDUA trigger di atas), lepas dengan `removeReconciliationMandiriTrigger()`.
    (~30-90 detik setelah ada perubahan apa pun di Sheet).
 
 ## Testing
-`node backend/scripts/test-reconciliation-mandiri.js` — **36 test**:
+`node backend/scripts/test-reconciliation-mandiri.js` — **53 test**:
 - Ekstraksi ID: RULE A (Transfer Fee prefix), RULE B (principal via
   slash), RULE C (Credit Amount menimpa jadi CREDIT_REVERSAL), RULE D
   (UNKNOWN), fallback ke AdditionalDesc, TEST 12 (kata "Transfer Fee" di
@@ -316,6 +382,20 @@ KEDUA trigger di atas), lepas dengan `removeReconciliationMandiriTrigger()`.
   (regresi insiden nyata — kolom DATE tersimpan salah tanggal krn geser
   timezone), jam sore/malam konsisten, null/invalid → null.
 - `timeDelayBucket`: kategori selisih waktu (normal/warning/delayed/exception).
+- **LAPORAN HARIAN (17 test baru)**: `dedupeMandiriResultsByCanonicalKey`
+  (1 transaksi logis 2 baris berbagi key → dihitung 1x, baris pertama
+  dipertahankan), `computeMandiriDataQualityWarning` (cross-date
+  terdeteksi, duplicate canonical terdeteksi, kombinasi REVERSAL+BANK_ONLY
+  terdeteksi, tidak ada masalah → `has_issue:false`/`message:null`),
+  `computeMandiriActionableException` (hanya 9 `EXCEPTION_STATUSES`,
+  MATCHED/MATCHED_NO_FEE tidak ikut, fallback `bank_total_debit` utk
+  BANK_ONLY tanpa `fp_nominal`, nominal 0 kalau tidak ada exception),
+  `computeMandiriHealthStatus` (GREEN, YELLOW via match rate 95-99%,
+  YELLOW via masih ada exception, RED via match rate <95%, RED via
+  `UNBALANCED`, RED via data quality issue, RED via sync belum sukses,
+  RED menang atas YELLOW kalau keduanya terpenuhi, GREEN kalau match rate
+  `null`/tidak ada FP), `MANDIRI_HEALTH_THRESHOLDS` (konfigurasi terpusat
+  99%/95%).
 
 Skenario DB/live (resync idempotensi, resolution manual existing, upsert
 canonical key, regresi OCBC) diverifikasi end-to-end lewat server
@@ -344,11 +424,16 @@ karena keduanya memakai infrastruktur yang sama.
   dikoreksi (hari>12...)`, cek manual sheet DATA Mandiri baris tsb — berarti
   hari aslinya >12 sehingga tidak bisa ditukar otomatis, kemungkinan data
   sumbernya sendiri yang salah/perlu diperbaiki manual di sheet.
-- **Ingin fitur Laporan Harian seperti OCBC**: belum dibangun utk Mandiri.
-  Kalau dibutuhkan, adaptasi `dailyReportHandler` di
-  `warroom-reconciliation.js` + tab `DailyReportTab` di
-  `WarRoomReconciliationOcbc.jsx` — pola KPI/health-status/ringkasan
-  otomatis bisa dipakai ulang, tapi perlu disesuaikan krn Mandiri tidak
-  punya `coverage_status`/`is_actionable`/`active_batch`/
-  `data_quality_warning` yang jadi dasar sebagian aturan KPI OCBC (lihat
-  `docs/RECONCILIATION_OCBC.md` bagian "Laporan Harian").
+- **Health status Laporan Harian Mandiri tiba-tiba RED padahal match rate
+  100%**: WAJAR kalau `balance_validation.status === 'UNBALANCED'` — beda
+  dari OCBC, validasi saldo Mandiri SENGAJA ikut memengaruhi health status
+  (lihat bagian "Tab 7 — Laporan Harian" di atas). Cek panel "Validasi
+  Saldo Mandiri" utk detail arah statement & baris yang selisih.
+- **`actionable_exception_count` di analytics/daily-report Mandiri beda
+  angka dari jumlah baris exception yang terlihat di dashboard**: cek
+  apakah ada `data_quality_warning.has_issue = true` — kalau ada baris
+  cross-date/duplicate canonical yang belum dibersihkan, angka
+  `actionable_exception_count` dihitung dari data yang SUDAH bersih
+  (dedupe + cross-date dikecualikan), sedangkan tampilan mentah di tab
+  lain mungkin belum tentu memfilter hal yang sama — segera bersihkan data
+  quality issue-nya (idealnya `has_issue` SELALU `false`).
