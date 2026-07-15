@@ -166,9 +166,13 @@ function downloadBlob(blob, filename) {
    pola SAMA dgn Rekonsiliasi OCBC (lihat WarRoomReconciliationOcbc.jsx),
    tabel ringkas ID Trx + Nominal, tinggi seragam & scroll vertikal sendiri
    kalau data banyak (wrr-mini-panel-row / wrr-mini-table-wrap di index.css). */
+function miniTableId(r) { return r.id_transaksi || r.extracted_transaction_id || ''; }
+function miniTableNominal(r) { return Number(r.fp_nominal !== null ? r.fp_nominal : r.bank_gross_debit) || 0; }
+
 function StatusMiniTable({ title, status, date, info }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [sort, setSort] = useState({ key: 'nominal', dir: 'desc' });
   const requestIdRef = useRef(0);
 
   useEffect(() => {
@@ -183,6 +187,18 @@ function StatusMiniTable({ title, status, date, info }) {
       .finally(() => { if (myRequestId === requestIdRef.current) setLoading(false); });
   }, [date, status]);
 
+  const handleSort = useCallback((key) => {
+    setSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: key === 'nominal' ? 'desc' : 'asc' });
+  }, []);
+
+  const sortedRows = [...rows].sort((a, b) => {
+    const av = sort.key === 'nominal' ? miniTableNominal(a) : miniTableId(a);
+    const bv = sort.key === 'nominal' ? miniTableNominal(b) : miniTableId(b);
+    if (av < bv) return sort.dir === 'asc' ? -1 : 1;
+    if (av > bv) return sort.dir === 'asc' ? 1 : -1;
+    return 0;
+  });
+
   return (
     <div className="wrr-panel wrr-mini-panel">
       <div className="wrr-panel-title">
@@ -194,12 +210,17 @@ function StatusMiniTable({ title, status, date, info }) {
       {!loading && rows.length > 0 && (
         <div className="wrr-table-wrap wrr-mini-table-wrap">
           <table className="wrr-table">
-            <thead><tr><th>ID Trx</th><th>Nominal</th></tr></thead>
+            <thead>
+              <tr>
+                <SortableTh label="ID Trx" sortKey="id" sort={sort} onSort={handleSort} />
+                <SortableTh label="Nominal" sortKey="nominal" sort={sort} onSort={handleSort} />
+              </tr>
+            </thead>
             <tbody>
-              {rows.map((r, i) => (
+              {sortedRows.map((r, i) => (
                 <tr key={i}>
-                  <td>{r.id_transaksi || r.extracted_transaction_id || '-'}</td>
-                  <td>{fmtRp(r.fp_nominal !== null ? r.fp_nominal : r.bank_gross_debit)}</td>
+                  <td>{miniTableId(r) || '-'}</td>
+                  <td>{fmtRp(miniTableNominal(r))}</td>
                 </tr>
               ))}
             </tbody>
