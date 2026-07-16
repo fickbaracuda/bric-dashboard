@@ -20,8 +20,8 @@ const {
   todayJakarta,
 } = require('./warroom-reconciliation');
 const {
-  extractMandiriRow, reconcileMandiriTransactions, validateMandiriBalance,
-  numEq, DEFAULT_FEE_MANDIRI, DEFAULT_GRACE_MINUTES,
+  extractMandiriRow, reconcileMandiriTransactions, validateMandiriBalance, computeMandiriCoverageWindow,
+  numEq, DEFAULT_FEE_MANDIRI, DEFAULT_GRACE_MINUTES, DEFAULT_COVERAGE_TOLERANCE_MINUTES,
 } = require('../reconciliation/mandiriAdapter');
 
 const SYNC_TOKEN = process.env.APPS_SCRIPT_TOKEN; // token SHARED — sama dengan war-room lain, bukan token baru
@@ -357,6 +357,11 @@ async function syncHandler(req, res) {
 
     const results = reconcileMandiriTransactions(fpForEngine, bankForEngine, { expectedFee, graceMinutes, scopeMode }, new Date());
     const balanceValidation = validateMandiriBalance(bankForEngine);
+    // Coverage window disimpan di raw_summary saat sync (bukan dihitung ulang
+    // saat analytics dibaca) -- supaya window yang tampil di UI SELALU sama
+    // persis dgn window yang benar-benar dipakai reconcileMandiriTransactions()
+    // di atas utk memfilter kandidat BANK_ONLY. Pola sama dgn Rekonsiliasi BRI.
+    const coverageWindow = computeMandiriCoverageWindow(fpForEngine, scopeMode, DEFAULT_COVERAGE_TOLERANCE_MINUTES);
 
     for (const r of results) {
       // canonical_transaction_key: SAMA formula & kolom dgn Rekonsiliasi
@@ -400,7 +405,10 @@ async function syncHandler(req, res) {
     await client.query(
       `UPDATE recon_sync_batches SET fp_row_count = $2, bank_row_count = $3, status = 'success', synced_at = NOW(),
          raw_summary = COALESCE(raw_summary, '{}'::jsonb) || $4::jsonb WHERE id = $1`,
-      [batchId, fpAllRes.rows.length, bankAllRes.rows.length, JSON.stringify({ balance_validation: balanceValidation })]
+      [batchId, fpAllRes.rows.length, bankAllRes.rows.length, JSON.stringify({
+        balance_validation: balanceValidation,
+        coverage: { scope_mode: scopeMode, coverage_start: coverageWindow.coverageStart, coverage_end: coverageWindow.coverageEnd },
+      })]
     );
 
     await client.query('COMMIT');
@@ -459,10 +467,32 @@ async function analyticsHandler(req, res) {
       });
     }
 
-    const [resultsRes, fpCountRes, bankIdCountRes] = await Promise.all([
+    // coverageRaw: window yg SUDAH dihitung & disimpan saat sync (lihat
+    // syncHandler) — dibaca lagi di sini, TIDAK dihitung ulang, supaya window
+    // yang tampil di UI selalu sama persis dgn yang dipakai saat matching.
+    const coverageRaw = (batch.raw_summary && batch.raw_summary.coverage) || {};
+    const [resultsRes, fpCountRes, bankIdCountRes, bankCoverageRes] = await Promise.all([
       pool.query('SELECT *, bank_transaction_date::text AS bank_transaction_date FROM recon_results WHERE batch_id = $1 AND bank_code = $2', [batch.id, BANK_CODE]),
       pool.query('SELECT COUNT(*) AS c, COALESCE(SUM(nominal),0) AS s FROM recon_fp_transactions WHERE batch_id = $1', [batch.id]),
       pool.query('SELECT COUNT(DISTINCT extracted_transaction_id) AS c FROM recon_bank_transactions WHERE batch_id = $1 AND extracted_transaction_id IS NOT NULL', [batch.id]),
+      // bank_in/outside_coverage: dihitung dari SEMUA baris mutasi mentah
+      // (bukan dari recon_results, krn kandidat BANK_ONLY di luar window
+      // sengaja TIDAK PERNAH masuk recon_results — lihat mandiriAdapter.js).
+      // out_of_scope: baris yang sama sekali tidak bisa diekstrak ID-nya dari
+      // Remarks/AdditionalDesc (bank_row_type UNKNOWN) — bukan mutasi terkait
+      // FASTPAY sama sekali (transfer lain, biaya admin, dsb).
+      pool.query(
+        `SELECT
+           COUNT(*) FILTER (WHERE extracted_transaction_id IS NULL) AS out_of_scope,
+           COUNT(*) FILTER (WHERE extracted_transaction_id IS NOT NULL AND (
+             $2::timestamptz IS NULL OR $3::timestamptz IS NULL OR (post_date_time >= $2 AND post_date_time <= $3)
+           )) AS in_coverage,
+           COUNT(*) FILTER (WHERE extracted_transaction_id IS NOT NULL AND $2::timestamptz IS NOT NULL AND $3::timestamptz IS NOT NULL AND (
+             post_date_time < $2 OR post_date_time > $3
+           )) AS outside_coverage
+         FROM recon_bank_transactions WHERE batch_id = $1`,
+        [batch.id, coverageRaw.coverage_start || null, coverageRaw.coverage_end || null]
+      ),
     ]);
     // rawResults: SEMUA baris apa adanya (belum di-filter/dedupe) — HANYA
     // dipakai utk menghitung data_quality_warning (perlu melihat duplikat &
@@ -487,6 +517,9 @@ async function analyticsHandler(req, res) {
     const totalTransaksiFp = Number(fpCountRes.rows[0]?.c || 0);
     const totalNominalFp = Number(fpCountRes.rows[0]?.s || 0);
     const uniqueBankTransactionId = Number(bankIdCountRes.rows[0]?.c || 0);
+    const outOfScopeRows = Number(bankCoverageRes.rows[0]?.out_of_scope || 0);
+    const bankInCoverage = Number(bankCoverageRes.rows[0]?.in_coverage || 0);
+    const bankOutsideCoverage = Number(bankCoverageRes.rows[0]?.outside_coverage || 0);
 
     const actionableException = computeMandiriActionableException(results);
 
@@ -519,6 +552,7 @@ async function analyticsHandler(req, res) {
       fee_mismatch_count: byStatus.FEE_MISMATCH.count,
       duplicate_count: byStatus.DUPLICATE_FP.count + byStatus.DUPLICATE_BANK.count,
       reversal_count: byStatus.REVERSAL.count,
+      out_of_scope_rows: outOfScopeRows,
       total_actual_fee: totalActualFee,
       expected_fee: expectedFee,
       expected_total_fee: expectedTotalFee,
@@ -535,6 +569,14 @@ async function analyticsHandler(req, res) {
     };
 
     const status_distribution = RECON_STATUSES.map(s => ({ status: s, count: byStatus[s].count, nominal: byStatus[s].nominal }));
+
+    const coverage = {
+      scope_mode: batch.scope_mode,
+      coverage_start: coverageRaw.coverage_start || null,
+      coverage_end: coverageRaw.coverage_end || null,
+      bank_in_coverage: bankInCoverage,
+      bank_outside_coverage: bankOutsideCoverage,
+    };
 
     // Fee analysis
     const feeRows = results.filter(r => r.bank_fee !== null);
@@ -618,7 +660,7 @@ async function analyticsHandler(req, res) {
       // canonical_transaction_key aktif -- kalau masih muncul, ada recon_results
       // stale yang perlu dibersihkan (pola sama dgn OCBC).
       data_quality_warning: dataQualityWarning,
-      summary, status_distribution, fee_analysis, time_analysis, balance_validation,
+      summary, status_distribution, fee_analysis, time_analysis, balance_validation, coverage,
       recent_batches: recentBatches,
     });
   } catch (e) {

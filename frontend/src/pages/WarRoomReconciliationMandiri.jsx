@@ -228,11 +228,27 @@ function StatusMiniTable({ title, status, date, info }) {
 function SummaryTab({ analytics, onSelectStatus, date }) {
   const s = analytics?.summary;
   const bv = analytics?.balance_validation;
+  const cov = analytics?.coverage;
   const totalException = (analytics?.status_distribution || [])
     .filter(d => EXCEPTION_STATUSES.includes(d.status))
     .reduce((sum, d) => sum + (d.count || 0), 0);
   return (
     <>
+      <div className="wrr-panel">
+        <div className="wrr-panel-title">
+          <i className="ti ti-window" style={{ color: COLOR }} /> Coverage Window
+          <InfoIcon text="Rentang waktu yang dianggap valid utk BANK_ONLY — default FP_COVERAGE_WINDOW (waktu FP paling awal/akhir ± toleransi menit). Mutasi Mandiri di luar rentang ini tidak pernah masuk Exception Queue." />
+        </div>
+        <div className="wrr-dq-note-grid">
+          <div><span className="wrr-dq-note-label">Scope Mode</span><span className="wrr-dq-note-value">{cov?.scope_mode || '-'}</span></div>
+          <div><span className="wrr-dq-note-label">Coverage Start</span><span className="wrr-dq-note-value">{fmtDateTime(cov?.coverage_start)}</span></div>
+          <div><span className="wrr-dq-note-label">Coverage End</span><span className="wrr-dq-note-value">{fmtDateTime(cov?.coverage_end)}</span></div>
+          <div><span className="wrr-dq-note-label">Bank Dalam Coverage</span><span className="wrr-dq-note-value">{fmtN(cov?.bank_in_coverage)}</span></div>
+          <div><span className="wrr-dq-note-label">Bank Di Luar Coverage</span><span className="wrr-dq-note-value">{fmtN(cov?.bank_outside_coverage)}</span></div>
+          <div><span className="wrr-dq-note-label">Mutasi Di Luar Lingkup (OUT_OF_SCOPE)</span><span className="wrr-dq-note-value">{fmtN(s?.out_of_scope_rows)}</span></div>
+        </div>
+      </div>
+
       <div className="wrr-kpi-grid">
         <KPICard label="Total Transaksi FP" value={fmtN(s?.total_transaksi_fp)}
           info="Jumlah total transaksi dari sheet DATA FP untuk tanggal yang dipilih." />

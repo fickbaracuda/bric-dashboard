@@ -24,6 +24,21 @@ function numEq(a, b) {
   return typeof a === 'number' && typeof b === 'number' && Math.abs(a - b) < NUM_EPS;
 }
 
+// PURE — dipakai reconcileMandiriTransactions() SENDIRI (utk filter BANK_ONLY
+// di luar window) DAN route handler (utk disimpan ke raw_summary.coverage,
+// dibaca lagi oleh analyticsHandler tanpa perlu recompute). Satu formula,
+// dua pemakai — supaya window yang ditampilkan di UI selalu identik dengan
+// window yang benar-benar dipakai saat matching.
+function computeMandiriCoverageWindow(fpRows, scopeMode, coverageToleranceMinutes) {
+  if (scopeMode !== 'FP_COVERAGE_WINDOW') return { coverageStart: null, coverageEnd: null };
+  const times = (fpRows || []).map(f => f.timeResponse).filter(t => t instanceof Date && !Number.isNaN(t.getTime()));
+  if (!times.length) return { coverageStart: null, coverageEnd: null };
+  return {
+    coverageStart: new Date(Math.min(...times.map(t => t.getTime())) - coverageToleranceMinutes * 60000),
+    coverageEnd: new Date(Math.max(...times.map(t => t.getTime())) + coverageToleranceMinutes * 60000),
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // RULE A/B/C/D — ekstraksi id_transaksi dari 1 baris teks (Remarks ATAU
 // AdditionalDesc). Baris dianggap FEE HANYA kalau teks (setelah trim) DIMULAI
@@ -214,14 +229,7 @@ function reconcileMandiriTransactions(fpRows, bankRows, config = {}, now = new D
   // (transfer lain, biaya admin, dsb) tidak boleh membanjiri exception queue.
   const fpIdSet = new Set(fpRows.map(f => String(f.idTransaksi || '').trim()).filter(Boolean));
 
-  let coverageStart = null, coverageEnd = null;
-  if (scopeMode === 'FP_COVERAGE_WINDOW') {
-    const times = fpRows.map(f => f.timeResponse).filter(t => t instanceof Date && !Number.isNaN(t.getTime()));
-    if (times.length) {
-      coverageStart = new Date(Math.min(...times.map(t => t.getTime())) - coverageToleranceMinutes * 60000);
-      coverageEnd = new Date(Math.max(...times.map(t => t.getTime())) + coverageToleranceMinutes * 60000);
-    }
-  }
+  const { coverageStart, coverageEnd } = computeMandiriCoverageWindow(fpRows, scopeMode, coverageToleranceMinutes);
 
   for (const [extractedId, group] of bankByExtractedId.entries()) {
     if (fpIdSet.has(extractedId)) continue;
@@ -326,6 +334,7 @@ module.exports = {
   tryExtractFromText,
   reconcileMandiriTransactions,
   validateMandiriBalance,
+  computeMandiriCoverageWindow,
   numEq,
   DEFAULT_FEE_MANDIRI,
   DEFAULT_GRACE_MINUTES,
