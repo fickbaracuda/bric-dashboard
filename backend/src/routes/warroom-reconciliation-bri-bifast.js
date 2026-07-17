@@ -363,6 +363,8 @@ async function syncHandler(req, res) {
       bankCode: BANK_CODE, accountNo: r.account_no, businessDate: r.business_date,
       seq: r.sequence_no, deskTran: r.description, trremk: r.remarks, tlbds2: r.tlbds2,
       mutasiDebet: r.debit !== null ? Number(r.debit) : null, mutasiKredit: r.credit !== null ? Number(r.credit) : null,
+      saldoAwalMutasi: r.opening_balance !== null ? Number(r.opening_balance) : null,
+      saldoAkhirMutasi: r.balance !== null ? Number(r.balance) : null,
       transactionDateTime: r.transaction_date_time ? new Date(r.transaction_date_time) : null,
       beneficiaryAccount: r.beneficiary_account, bankTraceId: r.bank_trace_id, counterpartyBic: r.counterparty_bic,
       accountConflict: r.account_conflict, extractionConfidence: r.extraction_confidence, bankRowType: r.bank_row_type,
