@@ -127,11 +127,32 @@ function reconBfBillInfo1ToString_(value, stats) {
 /** Satu baris ringkasan di Execution Log, bukan satu baris per row yang kena. */
 function reconBfLogBillInfo1Summary_(stats) {
   if (stats.numberCount > 0) {
-    Logger.log('WARNING: ' + stats.numberCount + ' baris bill_info1 terbaca sbg Number (bukan Plain Text). ' +
-      'Kalau beneficiary account BI-FAST memang bisa diawali angka 0, leading zero-nya SUDAH HILANG di level sel ' +
-      'Sheet sebelum Apps Script sempat baca dan TIDAK BISA direkonstruksi lagi di titik ini (mengubah format kolom ' +
-      'SESUDAHNYA tidak mengembalikan digit yang sudah hilang) — matching bill_info1 vs beneficiary_account akan ' +
-      'gagal utk baris-baris ini. Format kolom bill_info1 sbg Plain Text SEBELUM data baru diisi/diimpor.');
+    Logger.log('WARNING: ' + stats.numberCount + ' baris bill_info1 terbaca sbg Number (bukan Plain Text) SAAT DIBACA. ' +
+      'Kolom sudah diatur ulang ke format Plain Text utk baris berikutnya (lihat reconBfEnsureBillInfo1PlainTextFormat_) ' +
+      '-- TAPI baris yang SUDAH kena di sync ini leading zero-nya (kalau ada) SUDAH HILANG permanen sebelum Apps Script ' +
+      'sempat baca, dan TIDAK BISA direkonstruksi oleh kode apa pun. Kalau beneficiary account BI-FAST memang bisa ' +
+      'diawali angka 0, baris-baris itu akan gagal matching (FP_ONLY/BANK_ONLY di Exception Queue, bukan MATCHED).');
+  }
+}
+
+/**
+ * Format kolom bill_info1 di sheet "Data FP" sbg Plain Text (idempotent,
+ * aman dipanggil SETIAP sync — hanya mengubah metadata format, TIDAK PERNAH
+ * mengubah/menimpa nilai sel apa pun). Mencegah kehilangan leading zero utk
+ * data BARU yang diisi/di-paste SETELAH ini berjalan (Google Sheets tidak
+ * otomatis mengubah nilai yang SUDAH tersimpan sbg Number jadi text hanya
+ * krn format kolom berubah — itu sebabnya baris LAMA yang sudah kena TETAP
+ * tidak bisa diperbaiki, hanya baris BARU yang terlindungi mulai sekarang).
+ * Dipanggil otomatis di awal reconBfReadFp_() -- pengguna TIDAK PERLU
+ * menjalankan apa pun secara manual di Sheet.
+ */
+function reconBfEnsureBillInfo1PlainTextFormat_(sheet, headerIndex) {
+  try {
+    const colIdx = Object.prototype.hasOwnProperty.call(headerIndex, 'bill_info1') ? headerIndex['bill_info1'] : 1;
+    const totalRows = Math.max(sheet.getMaxRows() - 1, 1); // dari baris 2 (data) s.d. baris terakhir SHEET (bukan cuma yg terisi), supaya baris baru nanti juga sudah terlindungi
+    sheet.getRange(2, colIdx + 1, totalRows, 1).setNumberFormat('@');
+  } catch (e) {
+    Logger.log('WARNING: gagal mengatur format Plain Text kolom bill_info1: ' + e.message);
   }
 }
 
@@ -165,6 +186,7 @@ function reconBfReadFp_() {
   const values = sheet.getDataRange().getValues();
   if (values.length < 2) return [];
   const headerIndex = reconBfHeaderIndex_(values[0]);
+  reconBfEnsureBillInfo1PlainTextFormat_(sheet, headerIndex); // cegah leading zero hilang lagi utk baris BARU ke depannya
 
   const rows = [];
   let skippedInvalid = 0;
