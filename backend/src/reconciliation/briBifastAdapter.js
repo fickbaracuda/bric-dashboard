@@ -247,8 +247,15 @@ function fixBriBifastFutureDateSwap(date, now) {
   }).formatToParts(date).reduce((acc, p) => { acc[p.type] = p.value; return acc; }, {});
   const y = parts.year, mo = Number(parts.month), d = Number(parts.day);
   if (d > 12) return { value: date, status: 'uncorrectable' };
+  // Intl.DateTimeFormat dgn hour12:false mengembalikan "24" utk tengah malam
+  // (bukan "00") pada sebagian build ICU/Node — kalau tidak dinormalisasi,
+  // ISO string hasil (mis. "...T24:51:00+07:00") INVALID dan new Date()
+  // mengembalikan Invalid Date, membuat baris tengah malam SELALU gagal
+  // dikoreksi (uncorrectable) padahal harusnya valid. Insiden nyata:
+  // ditemukan saat verifikasi data produksi 2026-07-17.
+  const hourFixed = parts.hour === '24' ? '00' : parts.hour;
 
-  const swapped = new Date(`${y}-${String(d).padStart(2, '0')}-${String(mo).padStart(2, '0')}T${parts.hour}:${parts.minute}:${parts.second}+07:00`);
+  const swapped = new Date(`${y}-${String(d).padStart(2, '0')}-${String(mo).padStart(2, '0')}T${hourFixed}:${parts.minute}:${parts.second}+07:00`);
   if (Number.isNaN(swapped.getTime()) || swapped.getTime() > now.getTime()) {
     return { value: date, status: 'uncorrectable' };
   }

@@ -165,6 +165,19 @@ test('fixBriBifastFutureDateSwap: masa depan tapi hari>12 -> tidak bisa dikoreks
   assert.strictEqual(fixed.status, 'uncorrectable');
   assert.strictEqual(fixed.value.getTime(), futureHighDay.getTime());
 });
+test('fixBriBifastFutureDateSwap: tengah malam WIB (Intl hour12:false -> "24" bukan "00") tetap terkoreksi', () => {
+  // Insiden nyata (data produksi 2026-07-17): waktu yg jatuh PERSIS tengah
+  // malam WIB gagal dikoreksi krn Intl.DateTimeFormat({hour12:false})
+  // mengembalikan hour="24" (bukan "00") pada build ICU/Node ini, membuat
+  // ISO string hasil swap ("...T24:51:00+07:00") invalid -> Invalid Date ->
+  // salah dilaporkan 'uncorrectable' padahal seharusnya valid.
+  const now = new Date('2026-07-17T12:00:00+07:00');
+  // 2026-09-06T17:51:00Z + 7 jam = 2026-09-07T00:51:00 WIB (tengah malam).
+  const midnightWib = new Date('2026-09-06T17:51:00.000Z');
+  const fixed = fixBriBifastFutureDateSwap(midnightWib, now);
+  assert.strictEqual(fixed.status, 'corrected');
+  assert.strictEqual(fixed.value.getTime(), new Date('2026-07-08T17:51:00.000Z').getTime());
+});
 test('parseBriBifastTransactionTime: dateSwapStatus dilaporkan & business_date benar setelah dikoreksi', () => {
   const now = new Date('2026-07-17T12:00:00+07:00');
   const time = parseBriBifastTransactionTime({ tglTran: '2026-09-07T09:07:00', tglEfektif: '2026-09-07T09:07:00', jamTran: 100800 }, now);
