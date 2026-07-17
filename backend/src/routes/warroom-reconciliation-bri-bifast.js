@@ -273,6 +273,11 @@ async function syncHandler(req, res) {
     }
 
     let bankInserted = 0, bankSkippedDuplicateFingerprint = 0;
+    // Guard tanggal-masa-depan (fixBriBifastFutureDateSwap) dievaluasi thd
+    // SATU `now` yang sama utk seluruh baris batch ini (bukan new Date() per
+    // baris) -- supaya konsisten & deterministik dalam 1 kali sync.
+    const parseNow = new Date();
+    let dateSwapCorrected = 0, dateSwapUncorrectable = 0;
     for (const row of bankRowsRaw) {
       const deskTran = nullIfEmpty(row.desk_tran);
       const trremk = nullIfEmpty(row.trremk);
@@ -286,7 +291,9 @@ async function syncHandler(req, res) {
       const seq = nullIfEmpty(row.seq);
 
       const classification = classifyBriBifastRow({ deskTran, trremk, mutasiDebet, mutasiKredit });
-      const time = parseBriBifastTransactionTime({ tglTran: row.tgl_tran, tglEfektif: row.tgl_efektif, jamTran: row.jam_tran });
+      const time = parseBriBifastTransactionTime({ tglTran: row.tgl_tran, tglEfektif: row.tgl_efektif, jamTran: row.jam_tran }, parseNow);
+      if (time.dateSwapStatus === 'corrected') dateSwapCorrected++;
+      else if (time.dateSwapStatus === 'uncorrectable') dateSwapUncorrectable++;
       const transferGroupKey = computeBriBifastGroupKey({
         bankCode: BANK_CODE, accountNo: norek, businessDate: time.businessDate,
         bankTraceId: classification.bankTraceId, jamTranNormalized: time.jamTranNormalized,
@@ -333,6 +340,12 @@ async function syncHandler(req, res) {
       );
       if (insertRes.rows.length) bankInserted++;
       else bankSkippedDuplicateFingerprint++;
+    }
+    if (dateSwapCorrected > 0) {
+      console.warn(`reconciliation-bri-bifast sync: ${dateSwapCorrected} baris TGL_TRAN/TGL_EFEKTIF dikoreksi (hari/bulan tertukar akibat locale Sheets, mutasi bank tidak mungkin bertanggal masa depan) utk business_date ${businessDate}.`);
+    }
+    if (dateSwapUncorrectable > 0) {
+      console.warn(`reconciliation-bri-bifast sync: ${dateSwapUncorrectable} baris TGL_TRAN/TGL_EFEKTIF di masa depan TAPI tidak bisa dikoreksi otomatis (hari>12 atau hasil tukar tetap tidak valid) utk business_date ${businessDate} — cek manual raw_data.`);
     }
 
     if (!isLastChunk) {

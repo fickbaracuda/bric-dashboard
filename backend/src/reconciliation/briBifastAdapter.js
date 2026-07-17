@@ -223,18 +223,60 @@ function formatDateJakartaBriBifast(date) {
 }
 
 /**
+ * Google Sheets kadang salah menafsir teks tanggal TGL_TRAN/TGL_EFEKTIF
+ * sbg MM/DD alih-alih DD/MM (atau sebaliknya), tergantung locale spreadsheet
+ * — begitu sel ter-parse jadi Date OBJECT oleh Sheets (kolom terdeteksi
+ * sbg tipe Date/DateTime), teks aslinya SUDAH TIDAK BISA direkonstruksi lagi
+ * di titik mana pun (insiden NYATA — pola identik dgn
+ * reconMdrFixPostDateSwap_ di Rekonsiliasi Mandiri, direplikasi di sini
+ * krn root cause-nya sama: ambiguitas locale Sheets, bukan spesifik 1 bank).
+ *
+ * Guard AMAN (tidak menyentuh tanggal yang sudah benar): mutasi bank yang
+ * SUDAH SETTLE mustahil bertanggal MASA DEPAN. Kalau hasil parse ternyata
+ * di masa depan DAN hari<=12 (sehingga pertukaran hari<->bulan menghasilkan
+ * tanggal valid & tidak lagi di masa depan), tukar bulan<->hari. Kalau
+ * tidak memenuhi syarat itu, dikembalikan apa adanya (lebih baik salah
+ * tanggal yang sudah ada drpd menebak salah arah).
+ */
+function fixBriBifastFutureDateSwap(date, now) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return { value: date, status: 'unchanged' };
+  if (date.getTime() <= now.getTime()) return { value: date, status: 'unchanged' };
+
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  }).formatToParts(date).reduce((acc, p) => { acc[p.type] = p.value; return acc; }, {});
+  const y = parts.year, mo = Number(parts.month), d = Number(parts.day);
+  if (d > 12) return { value: date, status: 'uncorrectable' };
+
+  const swapped = new Date(`${y}-${String(d).padStart(2, '0')}-${String(mo).padStart(2, '0')}T${parts.hour}:${parts.minute}:${parts.second}+07:00`);
+  if (Number.isNaN(swapped.getTime()) || swapped.getTime() > now.getTime()) {
+    return { value: date, status: 'uncorrectable' };
+  }
+  return { value: swapped, status: 'corrected' };
+}
+
+/**
  * row: { tglTran, tglEfektif, jamTran }. transaction_date_time = TGL_TRAN +
  * jam presisi dari JAM_TRAN (fallback ke jam bawaan TGL_TRAN kalau JAM_TRAN
  * tidak valid — extraction_warning dilaporkan terpisah oleh caller kalau
  * perlu). effective_date_time = TGL_EFEKTIF. business_date = tanggal
  * TGL_EFEKTIF dalam Asia/Jakarta (BUKAN toISOString().slice(0,10)).
+ * `now` (default new Date()) dipakai HANYA sbg basis guard "tidak boleh
+ * masa depan" (fixBriBifastFutureDateSwap) — dibuat parameter (bukan
+ * langsung new Date() di dalam) supaya pure/testable.
  */
-function parseBriBifastTransactionTime(row) {
+function parseBriBifastTransactionTime(row, now = new Date()) {
   const jamNormalized = normalizeJamTran(row.jamTran);
   const jamWasProvided = row.jamTran !== null && row.jamTran !== undefined && row.jamTran !== '';
   const jamInvalid = jamWasProvided && !jamNormalized;
 
   let transactionDateTime = parseFlexibleBriBifastDateTime(row.tglTran);
+  let tglTranSwap = 'unchanged';
+  if (transactionDateTime) {
+    const fixed = fixBriBifastFutureDateSwap(transactionDateTime, now);
+    transactionDateTime = fixed.value;
+    tglTranSwap = fixed.status;
+  }
   if (transactionDateTime && jamNormalized) {
     const dateStr = formatDateJakartaBriBifast(transactionDateTime);
     if (dateStr) {
@@ -243,12 +285,20 @@ function parseBriBifastTransactionTime(row) {
     }
   }
 
-  const effectiveDateTime = parseFlexibleBriBifastDateTime(row.tglEfektif);
+  let effectiveDateTime = parseFlexibleBriBifastDateTime(row.tglEfektif);
+  let tglEfektifSwap = 'unchanged';
+  if (effectiveDateTime) {
+    const fixed = fixBriBifastFutureDateSwap(effectiveDateTime, now);
+    effectiveDateTime = fixed.value;
+    tglEfektifSwap = fixed.status;
+  }
   const businessDate = effectiveDateTime ? formatDateJakartaBriBifast(effectiveDateTime) : null;
 
   return {
     transactionDateTime, effectiveDateTime, businessDate,
     jamTranNormalized: jamNormalized, extractionWarning: jamInvalid ? 'JAM_TRAN tidak valid, fallback ke jam TGL_TRAN.' : null,
+    dateSwapStatus: (tglTranSwap === 'corrected' || tglEfektifSwap === 'corrected') ? 'corrected'
+      : (tglTranSwap === 'uncorrectable' || tglEfektifSwap === 'uncorrectable') ? 'uncorrectable' : 'unchanged',
   };
 }
 
@@ -765,6 +815,7 @@ module.exports = {
   normalizeJamTran,
   parseFlexibleBriBifastDateTime,
   parseBriBifastTransactionTime,
+  fixBriBifastFutureDateSwap,
   formatDateJakartaBriBifast,
   computeBriBifastTimeOrderStatus,
   isBankPostingTimeEligible,

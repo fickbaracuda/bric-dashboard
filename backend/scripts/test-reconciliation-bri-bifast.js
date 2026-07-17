@@ -15,7 +15,7 @@
 const assert = require('assert');
 const {
   isBriBifastFpCandidate, extractBriBifastIdentifiers, classifyBriBifastRow,
-  normalizeJamTran, parseBriBifastTransactionTime, computeBriBifastTimeOrderStatus,
+  normalizeJamTran, parseBriBifastTransactionTime, fixBriBifastFutureDateSwap, computeBriBifastTimeOrderStatus,
   buildBriBifastBankGroups, reconcileBriBifastTransactions, applyBriBifastReversalCrossDateLookup,
   validateBriBifastBalance, buildBriBifastFingerprint, DEFAULT_FEE_BRI_BIFAST,
 } = require('../src/reconciliation/briBifastAdapter');
@@ -135,6 +135,41 @@ test('TEST 9: JAM_TRAN normalisasi', () => {
   assert.strictEqual(normalizeJamTran(3950), '00:39:50');
   assert.strictEqual(normalizeJamTran(4327), '00:43:27');
   assert.strictEqual(normalizeJamTran(12316), '01:23:16');
+});
+
+// ── fixBriBifastFutureDateSwap: insiden nyata locale Sheets salah tafsir
+// MM/DD vs DD/MM begitu sel ter-parse jadi Date object (root cause "0
+// matched" pada sync produksi 2026-07-17 -- TGL_TRAN "09/07/2026" [9 Juli]
+// ter-parse Sheets jadi 7 September, di masa depan drpd tanggal sync). ──
+test('fixBriBifastFutureDateSwap: tanggal masa depan & hari<=12 -> ditukar jadi tanggal valid', () => {
+  const now = new Date('2026-07-17T12:00:00+07:00');
+  // "09/07/2026" dibaca Sheets sbg 7 September (bulan=09,hari=07) -> masa
+  // depan drpd now -> ditukar jadi hari=09,bulan=07 = 9 Juli (valid, lampau).
+  const wronglyParsed = new Date('2026-09-07T09:07:00+07:00');
+  const fixed = fixBriBifastFutureDateSwap(wronglyParsed, now);
+  assert.strictEqual(fixed.status, 'corrected');
+  assert.strictEqual(fixed.value.getUTCFullYear(), 2026);
+  assert.strictEqual(fixed.value.getUTCMonth(), 6); // Juli, 0-indexed
+});
+test('fixBriBifastFutureDateSwap: tanggal bukan masa depan -> tidak diubah', () => {
+  const now = new Date('2026-07-17T12:00:00+07:00');
+  const alreadyPast = new Date('2026-07-09T09:07:00+07:00');
+  const fixed = fixBriBifastFutureDateSwap(alreadyPast, now);
+  assert.strictEqual(fixed.status, 'unchanged');
+  assert.strictEqual(fixed.value.getTime(), alreadyPast.getTime());
+});
+test('fixBriBifastFutureDateSwap: masa depan tapi hari>12 -> tidak bisa dikoreksi (uncorrectable)', () => {
+  const now = new Date('2026-07-17T12:00:00+07:00');
+  const futureHighDay = new Date('2026-09-25T09:07:00+07:00');
+  const fixed = fixBriBifastFutureDateSwap(futureHighDay, now);
+  assert.strictEqual(fixed.status, 'uncorrectable');
+  assert.strictEqual(fixed.value.getTime(), futureHighDay.getTime());
+});
+test('parseBriBifastTransactionTime: dateSwapStatus dilaporkan & business_date benar setelah dikoreksi', () => {
+  const now = new Date('2026-07-17T12:00:00+07:00');
+  const time = parseBriBifastTransactionTime({ tglTran: '2026-09-07T09:07:00', tglEfektif: '2026-09-07T09:07:00', jamTran: 100800 }, now);
+  assert.strictEqual(time.dateSwapStatus, 'corrected');
+  assert.strictEqual(time.businessDate, '2026-07-09');
 });
 
 // ── TEST 10: Principal + fee 77 -> MATCHED ──────────────────────────────────
