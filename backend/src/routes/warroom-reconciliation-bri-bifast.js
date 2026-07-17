@@ -147,7 +147,10 @@ function computeBriBifastHealthStatus({
   if (
     syncFailed ||
     (rate !== null && rate < T.YELLOW_MIN_MATCH_RATE) ||
-    invalidBusinessDateCount > 0 ||
+    // invalidBusinessDateCount SENGAJA TIDAK dipakai di sini -- sheet
+    // "Data Bank BRI BI Fast" rolling/historis (dikonfirmasi pemilik
+    // project), match ke tanggal mutasi bank berbeda itu NORMAL utk bank
+    // ini, bukan indikasi masalah (beda dari OCBC/Mandiri/BRI existing).
     duplicateCanonicalResultCount > 0 ||
     consumedAlsoBankOnlyCount > 0 ||
     accountConflictCount >= T.ACCOUNT_CONFLICT_MATERIAL_COUNT ||
@@ -605,11 +608,17 @@ async function analyticsHandler(req, res) {
 
     const rawResults = resultsRes.rows;
     const qualityChecks = computeBriBifastResultQualityChecks(rawResults, date);
-    const resultsValidDate = rawResults.filter(r =>
-      r.bank_transaction_date === null || r.bank_transaction_date === date ||
-      r.reversal_lookup_source === 'CROSS_DATE_TRACE'
-    );
-    const results = dedupeBriBifastResultsByCanonicalKey(resultsValidDate);
+    // BEDA dari OCBC/Mandiri/BRI existing: sheet "Data Bank BRI BI Fast"
+    // SENGAJA rolling/historis (dikonfirmasi pemilik project), bukan
+    // per-hari-eksklusif -- mutasi bank yang match ke FP hari ini BOLEH
+    // bertanggal beberapa hari sebelumnya (bukan data basi/nyasar dari sync
+    // lain). Karena itu TIDAK difilter berdasarkan bank_transaction_date di
+    // sini (beda dari bank lain yang punya sheet per-hari) -- hanya dedupe
+    // canonical key sbg pertahanan tambahan di luar UNIQUE index DB.
+    // invalid_business_date_count TETAP dihitung (computeBriBifastResultQualityChecks)
+    // sbg info transparansi, TAPI TIDAK PERNAH memicu has_issue/RED (lihat
+    // computeBriBifastHealthStatus) -- itu bukan indikasi masalah utk bank ini.
+    const results = dedupeBriBifastResultsByCanonicalKey(rawResults);
 
     const expectedFee = Number(batch.expected_fee) || DEFAULT_FEE_BRI_BIFAST;
     const rawDiag = computeBriBifastRawDiagnostics(bankRowsRes.rows, expectedFee);
@@ -741,8 +750,11 @@ async function analyticsHandler(req, res) {
 
     const extractionMediumRatio = safeDiv(rawDiag.medium_confidence_count, rawDiag.high_confidence_count + rawDiag.medium_confidence_count + rawDiag.conflict_count + rawDiag.none_confidence_count);
 
-    const hasIssue = qualityChecks.invalid_business_date_count > 0 ||
-      qualityChecks.duplicate_canonical_result_count > 0 ||
+    // invalid_business_date_count SENGAJA TIDAK ikut menentukan has_issue --
+    // sheet "Data Bank BRI BI Fast" rolling/historis (dikonfirmasi pemilik
+    // project), jadi match ke mutasi bank bertanggal beberapa hari sebelumnya
+    // itu NORMAL, bukan indikasi masalah kualitas data (beda dari bank lain).
+    const hasIssue = qualityChecks.duplicate_canonical_result_count > 0 ||
       qualityChecks.consumed_also_bank_only_count > 0;
     const data_quality_warning = {
       invalid_business_date_count: qualityChecks.invalid_business_date_count,
@@ -755,7 +767,6 @@ async function analyticsHandler(req, res) {
       unbalanced_bank_row_count: rawDiag.unbalanced_rows,
       has_issue: hasIssue,
       message: [
-        qualityChecks.invalid_business_date_count > 0 ? `Ditemukan ${qualityChecks.invalid_business_date_count} baris hasil dgn bank_transaction_date di luar tanggal ${date}.` : null,
         qualityChecks.duplicate_canonical_result_count > 0 ? `Ditemukan ${qualityChecks.duplicate_canonical_result_count} baris hasil berbagi canonical_transaction_key yang sama.` : null,
         qualityChecks.consumed_also_bank_only_count > 0 ? `Ditemukan ${qualityChecks.consumed_also_bank_only_count} canonical key yang sudah dipasangkan ke FP tapi juga muncul sbg BANK_ONLY.` : null,
         rawDiag.account_conflict_count > 0 ? `${rawDiag.account_conflict_count} mutasi memiliki konflik ekstraksi beneficiary account antara DESK_TRAN/TRREMK.` : null,
@@ -831,11 +842,17 @@ async function dailyReportHandler(req, res) {
 
     const rawResults = resultsRes.rows;
     const qualityChecks = computeBriBifastResultQualityChecks(rawResults, date);
-    const resultsValidDate = rawResults.filter(r =>
-      r.bank_transaction_date === null || r.bank_transaction_date === date ||
-      r.reversal_lookup_source === 'CROSS_DATE_TRACE'
-    );
-    const results = dedupeBriBifastResultsByCanonicalKey(resultsValidDate);
+    // BEDA dari OCBC/Mandiri/BRI existing: sheet "Data Bank BRI BI Fast"
+    // SENGAJA rolling/historis (dikonfirmasi pemilik project), bukan
+    // per-hari-eksklusif -- mutasi bank yang match ke FP hari ini BOLEH
+    // bertanggal beberapa hari sebelumnya (bukan data basi/nyasar dari sync
+    // lain). Karena itu TIDAK difilter berdasarkan bank_transaction_date di
+    // sini (beda dari bank lain yang punya sheet per-hari) -- hanya dedupe
+    // canonical key sbg pertahanan tambahan di luar UNIQUE index DB.
+    // invalid_business_date_count TETAP dihitung (computeBriBifastResultQualityChecks)
+    // sbg info transparansi, TAPI TIDAK PERNAH memicu has_issue/RED (lihat
+    // computeBriBifastHealthStatus) -- itu bukan indikasi masalah utk bank ini.
+    const results = dedupeBriBifastResultsByCanonicalKey(rawResults);
 
     const expectedFee = Number(batch.expected_fee) || DEFAULT_FEE_BRI_BIFAST;
     const rawDiag = computeBriBifastRawDiagnostics(bankRowsRes.rows, expectedFee);
@@ -904,8 +921,11 @@ async function dailyReportHandler(req, res) {
       reversal_nominal: byStatus.REVERSAL.nominal,
     };
 
-    const hasIssue = qualityChecks.invalid_business_date_count > 0 ||
-      qualityChecks.duplicate_canonical_result_count > 0 ||
+    // invalid_business_date_count SENGAJA TIDAK ikut menentukan has_issue --
+    // sheet "Data Bank BRI BI Fast" rolling/historis (dikonfirmasi pemilik
+    // project), jadi match ke mutasi bank bertanggal beberapa hari sebelumnya
+    // itu NORMAL, bukan indikasi masalah kualitas data (beda dari bank lain).
+    const hasIssue = qualityChecks.duplicate_canonical_result_count > 0 ||
       qualityChecks.consumed_also_bank_only_count > 0;
     const data_quality_warning = {
       invalid_business_date_count: qualityChecks.invalid_business_date_count,
@@ -918,7 +938,6 @@ async function dailyReportHandler(req, res) {
       unbalanced_bank_row_count: rawDiag.unbalanced_rows,
       has_issue: hasIssue,
       message: [
-        qualityChecks.invalid_business_date_count > 0 ? `Ditemukan ${qualityChecks.invalid_business_date_count} baris hasil dgn bank_transaction_date di luar tanggal ${date}.` : null,
         qualityChecks.duplicate_canonical_result_count > 0 ? `Ditemukan ${qualityChecks.duplicate_canonical_result_count} baris hasil berbagi canonical_transaction_key yang sama.` : null,
         qualityChecks.consumed_also_bank_only_count > 0 ? `Ditemukan ${qualityChecks.consumed_also_bank_only_count} canonical key yang sudah dipasangkan ke FP tapi juga muncul sbg BANK_ONLY.` : null,
         rawDiag.account_conflict_count > 0 ? `${rawDiag.account_conflict_count} mutasi memiliki konflik ekstraksi beneficiary account.` : null,
@@ -1061,7 +1080,16 @@ function buildTransactionsQuery(req) {
 
   const conditions = ['b.bank_code = $1', 'r.bank_code = $1'];
   const params = [BANK_CODE];
-  if (date) { params.push(date); conditions.push(`b.business_date = $${params.length}`); }
+  if (date) {
+    params.push(date);
+    conditions.push(`b.business_date = $${params.length}`);
+    // TIDAK memfilter berdasarkan r.bank_transaction_date di sini (beda dari
+    // rencana awal) -- sheet "Data Bank BRI BI Fast" SENGAJA rolling/historis
+    // (dikonfirmasi pemilik project), jadi mutasi bank yang match boleh
+    // bertanggal beberapa hari sebelum tanggal FP. Konsisten dgn
+    // analyticsHandler/dailyReportHandler yang JUGA tidak lagi memfilter ini
+    // (lihat catatan di sana).
+  }
   if (req.query.batch_id) { params.push(Number(req.query.batch_id)); conditions.push(`b.id = $${params.length}`); }
   if (status) {
     const statusList = status.split(',').map(s => s.trim()).filter(Boolean);
