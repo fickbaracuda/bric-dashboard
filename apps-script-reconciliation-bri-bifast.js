@@ -107,15 +107,32 @@ function reconBfToStringId_(value) {
  * kolom bill_info1 di Sheet sbg "Plain Text" SEBELUM data diisi. Fungsi ini
  * hanya menjamin Apps Script sendiri TIDAK PERNAH menambah kerusakan
  * (TIDAK PERNAH Number()/parseFloat() pada value ini).
+ *
+ * `stats` (opsional) mengumpulkan jumlah baris yang kena kasus ini, supaya
+ * caller bisa melapor SATU baris ringkasan di akhir (lihat
+ * reconBfLogBillInfo1Summary_) — BUKAN satu baris Logger.log per baris data,
+ * yang bisa ribuan baris tiap sync dan cepat memenuhi kuota Execution Log
+ * (pola sama dgn reconMdrLogPostDateSummary_ di Rekonsiliasi Mandiri).
  */
-function reconBfBillInfo1ToString_(value) {
+function reconBfBillInfo1ToString_(value, stats) {
   if (value === null || value === undefined) return null;
   if (typeof value === 'number') {
-    Logger.log('WARNING: bill_info1 terbaca sbg Number (' + value + ') — kemungkinan leading zero SUDAH hilang di level sel Sheet. Format kolom ini sbg Plain Text.');
+    if (stats) stats.numberCount++;
     return String(value);
   }
   const s = String(value).trim();
   return s === '' ? null : s;
+}
+
+/** Satu baris ringkasan di Execution Log, bukan satu baris per row yang kena. */
+function reconBfLogBillInfo1Summary_(stats) {
+  if (stats.numberCount > 0) {
+    Logger.log('WARNING: ' + stats.numberCount + ' baris bill_info1 terbaca sbg Number (bukan Plain Text). ' +
+      'Kalau beneficiary account BI-FAST memang bisa diawali angka 0, leading zero-nya SUDAH HILANG di level sel ' +
+      'Sheet sebelum Apps Script sempat baca dan TIDAK BISA direkonstruksi lagi di titik ini (mengubah format kolom ' +
+      'SESUDAHNYA tidak mengembalikan digit yang sudah hilang) — matching bill_info1 vs beneficiary_account akan ' +
+      'gagal utk baris-baris ini. Format kolom bill_info1 sbg Plain Text SEBELUM data baru diisi/diimpor.');
+  }
 }
 
 /** Map NAMA KOLOM (trim, lowercase) -> index kolom (0-based), dari baris header. */
@@ -151,6 +168,7 @@ function reconBfReadFp_() {
 
   const rows = [];
   let skippedInvalid = 0;
+  const billInfo1Stats = { numberCount: 0 };
   for (let r = 1; r < values.length; r++) {
     const row = values[r];
     const idTransaksi = reconBfToStringId_(reconBfCol_(row, headerIndex, 'id_transaksi', 0));
@@ -158,7 +176,7 @@ function reconBfReadFp_() {
     if (!/^\d+$/.test(idTransaksi)) { skippedInvalid++; continue; } // guard sama sprt bank lain: baris sampah/header ke-paste
     rows.push({
       id_transaksi: idTransaksi,
-      bill_info1: reconBfBillInfo1ToString_(reconBfCol_(row, headerIndex, 'bill_info1', 1)),
+      bill_info1: reconBfBillInfo1ToString_(reconBfCol_(row, headerIndex, 'bill_info1', 1), billInfo1Stats),
       nominal: reconBfCleanNum_(reconBfCol_(row, headerIndex, 'nominal', 2)),
       id_produk: reconBfToStringId_(reconBfCol_(row, headerIndex, 'id_produk', 3)),
       time_response: reconBfToIso_(reconBfCol_(row, headerIndex, 'time_response', 4)),
@@ -171,6 +189,7 @@ function reconBfReadFp_() {
   if (skippedInvalid > 0) {
     Logger.log('WARNING: ' + skippedInvalid + ' baris Data FP dilewati (id_transaksi bukan angka murni).');
   }
+  reconBfLogBillInfo1Summary_(billInfo1Stats);
   return rows;
 }
 
