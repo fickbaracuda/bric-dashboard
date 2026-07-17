@@ -31,7 +31,10 @@ function test(name, fn) { tests.push({ name, fn }); }
 function fp(idTransaksi, billInfo1, nominal, opts = {}) {
   return {
     idTransaksi, billInfo1, nominal,
-    idOutlet: opts.idOutlet ?? 'OUTLET1', idProduk: opts.idProduk ?? 'BLSTRMDR', idBiller: opts.idBiller ?? '11096',
+    idOutlet: opts.idOutlet ?? 'OUTLET1', idProduk: opts.idProduk ?? 'BLSTRMDR',
+    // '?? default' TIDAK dipakai di sini -- eksplisit 'null' (dites TEST 1)
+    // harus TETAP null, bukan diam-diam jatuh ke default '11096'.
+    idBiller: 'idBiller' in opts ? opts.idBiller : '11096',
     timeResponse: opts.timeResponse ?? null,
   };
 }
@@ -41,9 +44,13 @@ function fp(idTransaksi, billInfo1, nominal, opts = {}) {
 // credit sheet "Data Bank BRI BI Fast".
 function bankRow(deskTran, opts = {}) {
   const trremk = opts.trremk ?? deskTran;
+  const tlbds2 = opts.tlbds2 ?? null;
   const mutasiDebet = opts.mutasiDebet ?? null;
   const mutasiKredit = opts.mutasiKredit ?? null;
-  const classification = classifyBriBifastRow({ deskTran, trremk, mutasiDebet, mutasiKredit });
+  // tlbds2 WAJIB ikut dikirim ke classifyBriBifastRow() -- bankTraceId
+  // (prioritas TLBDS2 > DESK_TRAN fallback) baru bisa dites benar kalau
+  // sumbernya lengkap, bukan cuma dipasang di object hasil tanpa dipakai.
+  const classification = classifyBriBifastRow({ deskTran, trremk, tlbds2, mutasiDebet, mutasiKredit });
   const time = parseBriBifastTransactionTime({
     tglTran: opts.tglTran ?? '2026-07-10',
     tglEfektif: opts.tglEfektif ?? opts.tglTran ?? '2026-07-10',
@@ -180,8 +187,10 @@ test('TEST 14: 2 FP & 2 bank group utk account sama, tidak ada exact match -> TI
     fp('T6', '101765893345', 600000, { timeResponse: new Date('2026-07-10T11:06:00+07:00') }),
   ];
   const bankRows = [
-    bankRow(SAMPLE_DESK_1, { mutasiDebet: 700000, jamTran: 100800, seq: 'A' }),
-    bankRow(SAMPLE_DESK_1, { mutasiDebet: 800000, jamTran: 110800, seq: 'B' }),
+    // tlbds2 BEDA per baris -> 2 grup transfer TERPISAH (walau DESK_TRAN &
+    // beneficiary sama) -- trace id BI-FAST nyata memang unik per transfer.
+    bankRow(SAMPLE_DESK_1, { mutasiDebet: 700000, jamTran: 100800, seq: 'A', tlbds2: '20260710BRINIDJA010O9903057543' }),
+    bankRow(SAMPLE_DESK_1, { mutasiDebet: 800000, jamTran: 110800, seq: 'B', tlbds2: '20260710BRINIDJA010O9903057999' }),
   ];
   const results = reconcileBriBifastTransactions(fpRows, bankRows, {}, new Date('2026-07-10T23:00:00+07:00'));
   const r5 = results.find(x => x.idTransaksi === 'T5');
@@ -308,8 +317,9 @@ test('TEST 27: satu account dgn 2 FP & 2 bank group (exact match masing2) -> dip
     fp('T15', '101765893345', 600000, { timeResponse: new Date('2026-07-10T11:00:00+07:00') }),
   ];
   const bankRows = [
-    bankRow(SAMPLE_DESK_1, { mutasiDebet: 500000, jamTran: 100000, seq: 'A' }),
-    bankRow(SAMPLE_DESK_1, { mutasiDebet: 600000, jamTran: 110000, seq: 'B' }),
+    // tlbds2 BEDA per baris -> 2 grup transfer TERPISAH (lihat catatan TEST 14).
+    bankRow(SAMPLE_DESK_1, { mutasiDebet: 500000, jamTran: 100000, seq: 'A', tlbds2: '20260710BRINIDJA010O9903057543' }),
+    bankRow(SAMPLE_DESK_1, { mutasiDebet: 600000, jamTran: 110000, seq: 'B', tlbds2: '20260710BRINIDJA010O9903057999' }),
   ];
   const results = reconcileBriBifastTransactions(fpRows, bankRows, {}, new Date());
   const r14 = results.find(r => r.idTransaksi === 'T14');
@@ -466,11 +476,18 @@ test('DEFAULT_FEE_BRI_BIFAST = 77 (satu konfigurasi terpusat)', () => {
 });
 
 // ── buildBriBifastBankGroups: grouping key bukan cuma beneficiary/SEQ ───────
-test('buildBriBifastBankGroups: 2 transfer berbeda ke beneficiary sama (JAM_TRAN beda) -> 2 grup terpisah', () => {
+test('buildBriBifastBankGroups: 2 transfer berbeda ke beneficiary sama, TANPA bank_trace_id (fallback key JAM_TRAN+SEQ) -> 2 grup terpisah', () => {
+  // DESK_TRAN sengaja TANPA pola trace (20YYMMDDBRINIDJA...) supaya
+  // bankTraceId null di kedua baris -> group key jatuh ke fallback
+  // (account_no+business_date+JAM_TRAN+SEQ+beneficiary+DESK_TRAN), yang
+  // justru sedang diuji di sini (spec: "Jangan grouping hanya berdasarkan
+  // beneficiary_account" -- JAM_TRAN beda harus menghasilkan grup beda).
+  const deskNoTrace = 'BFST101765893345 APFT:JAGBIDJA';
   const rows = [
-    bankRow(SAMPLE_DESK_1, { mutasiDebet: 500000, jamTran: 100000, seq: 'A' }),
-    bankRow(SAMPLE_DESK_1, { mutasiDebet: 600000, jamTran: 150000, seq: 'B' }),
+    bankRow(deskNoTrace, { mutasiDebet: 500000, jamTran: 100000, seq: 'A' }),
+    bankRow(deskNoTrace, { mutasiDebet: 600000, jamTran: 150000, seq: 'B' }),
   ];
+  assert.strictEqual(rows[0].bankTraceId, null);
   const groups = buildBriBifastBankGroups(rows, { expectedFee: 77 });
   assert.strictEqual(groups.size, 2);
 });

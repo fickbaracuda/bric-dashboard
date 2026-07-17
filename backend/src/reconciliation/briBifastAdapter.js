@@ -397,14 +397,18 @@ function reconcileBriBifastTransactions(fpRows, bankRows, config = {}, now = new
 
   const groups = buildBriBifastBankGroups(bankRows, { expectedFee });
 
-  // Index grup VALID (principal_row_count===1, tidak conflict, tidak
-  // fee-only/credit-only) per beneficiary account — SATU beneficiary bisa
-  // punya BANYAK grup (banyak transfer ke akun yang sama hari itu).
+  // Index grup per beneficiary account — SATU beneficiary bisa punya BANYAK
+  // grup (banyak transfer ke akun yang sama hari itu). SENGAJA TIDAK
+  // memfilter berdasarkan principal_row_count di sini (beda dari heuristik
+  // fee-based yang dipakai utk BANK_ONLY tanpa konteks FP) — begitu FP
+  // nominal tersedia, principal SEBENARNYA ditentukan via exact match
+  // terhadap nominal FP (lihat TIER 1 di bawah), BUKAN via heuristik
+  // "MUTASI_DEBET != expected_fee". Grup dgn 2 baris debit (principal + fee
+  // salah nilai, mis. bukan Rp77) TETAP harus bisa jadi kandidat TIER 1.
   const groupsByBeneficiary = new Map();
   for (const g of groups.values()) {
     if (g.accountConflict) continue;
     if (!g.beneficiaryAccount) continue;
-    if (g.principalRowCount !== 1) continue; // 0 (fee/credit-only) atau >1 (ambigu) -> bukan kandidat berdiri sendiri di sini
     if (!groupsByBeneficiary.has(g.beneficiaryAccount)) groupsByBeneficiary.set(g.beneficiaryAccount, []);
     groupsByBeneficiary.get(g.beneficiaryAccount).push(g);
   }
@@ -470,14 +474,16 @@ function reconcileBriBifastTransactions(fpRows, bankRows, config = {}, now = new
     const candidateGroups = (groupsByBeneficiary.get(billInfo1) || []).filter(g => !consumedGroupKeys.has(g.groupKey));
 
     // ── TIER 1 — EXACT MATCH (beneficiary + nominal EXACT, eligible waktu) ──
+    // Cek SEMUA baris debit di grup (bukan cuma nonFeeDebitRows[0]) --
+    // principal SEBENARNYA adalah baris mana pun yang exact sama dgn
+    // nominal FP, terlepas dari heuristik fee-based (lihat catatan di atas).
     const fpNominal = result.fpNominal;
     let exactCandidates = [];
+    let anyExactNominalGroupExists = false;
     if (fpNominal !== null) {
-      exactCandidates = candidateGroups.filter(g => {
-        const principalRow = g.nonFeeDebitRows[0];
-        if (!principalRow || !numEq(principalRow.mutasiDebet, fpNominal)) return false;
-        return isBankPostingTimeEligible(g.firstTransactionTime, fpTimeResponse, timeConfig);
-      });
+      const groupsWithExactNominal = candidateGroups.filter(g => g.debitRows.some(r => numEq(r.mutasiDebet, fpNominal)));
+      anyExactNominalGroupExists = groupsWithExactNominal.length > 0;
+      exactCandidates = groupsWithExactNominal.filter(g => isBankPostingTimeEligible(g.firstTransactionTime, fpTimeResponse, timeConfig));
     }
 
     let winningGroup = null;
@@ -503,8 +509,14 @@ function reconcileBriBifastTransactions(fpRows, bankRows, config = {}, now = new
         winningGroup = scored[0].g;
       }
       matchTier = 'TIER1_EXACT';
-    } else {
+    } else if (!anyExactNominalGroupExists) {
       // ── TIER 2 — NOMINAL MISMATCH (pairing bersyarat KETAT) ──
+      // HANYA dicoba kalau BENAR-BENAR tidak ada kandidat exact nominal sama
+      // sekali (anyExactNominalGroupExists dicek TANPA filter eligibility
+      // waktu) -- kalau ada exact-nominal candidate yang cuma gagal krn
+      // IMPOSSIBLE_ORDER/di luar toleransi waktu, itu BUKAN skenario nominal
+      // mismatch (spec: "hanya boleh dilakukan jika ... tidak ada exact
+      // nominal candidate"), jadi TIDAK dipaksa jadi NOMINAL_MISMATCH juga.
       const eligibleForTier2 =
         (fpCountByBeneficiary.get(billInfo1) || 0) === 1 &&
         candidateGroups.length === 1 &&
