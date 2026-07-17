@@ -451,6 +451,26 @@ export const resolveReconciliationBri = (id, data) =>
 export const getReconciliationBriLogs = (id) =>
   axios.get(`${API_URL}/api/warroom/reconciliation/bri/${id}/logs`, { headers: authHeaders() }).then(r => r.data);
 
+/* WAR-ROOM — Rekonsiliasi FP vs BRI BI-FAST (TIDAK di-cache — data operasional, harus selalu fresh) */
+export const getReconciliationBriBifastAnalytics = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/bri-bifast/analytics`, { params, headers: authHeaders() }).then(r => r.data);
+export const getReconciliationBriBifastDailyReport = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/bri-bifast/daily-report`, { params, headers: authHeaders() }).then(r => r.data);
+export const getReconciliationBriBifastTransactions = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/bri-bifast/transactions`, { params, headers: authHeaders() }).then(r => r.data);
+export const getReconciliationBriBifastRawBank = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/bri-bifast/raw-bank`, { params, headers: authHeaders() }).then(r => r.data);
+export const getReconciliationBriBifastRawFp = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/bri-bifast/raw-fp`, { params, headers: authHeaders() }).then(r => r.data);
+export const getReconciliationBriBifastResolutionHistory = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/bri-bifast/resolution-history`, { params, headers: authHeaders() }).then(r => r.data);
+export const exportReconciliationBriBifast = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/bri-bifast/export`, { params, headers: authHeaders(), responseType: 'blob' }).then(r => r.data);
+export const resolveReconciliationBriBifast = (id, data) =>
+  axios.post(`${API_URL}/api/warroom/reconciliation/bri-bifast/${id}/resolve`, data, { headers: authHeaders() }).then(r => r.data);
+export const getReconciliationBriBifastLogs = (id) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/bri-bifast/${id}/logs`, { headers: authHeaders() }).then(r => r.data);
+
 /* WAR-ROOM — QRIS Issuance Control Tower */
 export const getQrisControlTowerAnalytics = () =>
   withCache('qris-control-tower-analytics', () =>

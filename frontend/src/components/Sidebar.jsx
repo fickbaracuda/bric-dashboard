@@ -185,6 +185,7 @@ export default function Sidebar({ onClose }) {
   const isWRReconOcbcPath = location.pathname === '/war-room/rekonsiliasi-ocbc';
   const isWRReconMandiriPath = location.pathname === '/war-room/rekonsiliasi/mandiri';
   const isWRReconBriPath = location.pathname === '/war-room/rekonsiliasi/bri';
+  const isWRReconBriBifastPath = location.pathname === '/war-room/rekonsiliasi/bri-bifast';
 
   const [winmeOpen, setWinmeOpen] = useState(isWinmePath || isWinmeTimPath || isWRIqCcPath || isWRQw3Path || isWRIQRawPath || isWRQrisPath || isWRTrxOutPath || isWRQrisCtlPath || isDataRawPath);
   const [timOpen,   setTimOpen]   = useState(isWinmeTimPath);
@@ -776,7 +777,7 @@ export default function Sidebar({ onClose }) {
             onClick={() => { setRekonOpen(o => !o); onClose(); }}
             className={({ isActive }) =>
               'sidebar-link sidebar-link-accordion' +
-              (isActive || isWRReconOcbcPath || isWRReconMandiriPath || isWRReconBriPath ? ' sidebar-link--active' : '')
+              (isActive || isWRReconOcbcPath || isWRReconMandiriPath || isWRReconBriPath || isWRReconBriBifastPath ? ' sidebar-link--active' : '')
             }
           >
             <i className="ti ti-building-bank" aria-hidden="true" />
@@ -822,6 +823,17 @@ export default function Sidebar({ onClose }) {
                 <i className="ti ti-building-bank" style={{ color: '#00529C' }} aria-hidden="true" />
                 <span>Rekonsiliasi BRI</span>
                 <span className="sidebar-warroom-badge" style={{ background: '#00529C' }}>BRI</span>
+              </NavLink>
+              <NavLink
+                to="/war-room/rekonsiliasi/bri-bifast"
+                onClick={onClose}
+                className={({ isActive }) =>
+                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                }
+              >
+                <i className="ti ti-building-bank" style={{ color: '#00529C' }} aria-hidden="true" />
+                <span>Rekonsiliasi BRI BI-FAST</span>
+                <span className="sidebar-warroom-badge" style={{ background: '#00529C' }}>BRI BF</span>
               </NavLink>
             </div>
           </Accordion>

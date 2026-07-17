@@ -5498,6 +5498,17 @@ body {
 .wrrbri-badge--none { background: #F3F4F6; color: #6B7280; }
 .wrrbri-badge--same_batch { background: #F3E8FF; color: #9333EA; }
 .wrrbri-badge--cross_date_lookup { background: #FFEDD5; color: #EA580C; }
+.wrrbri-badge--cross_date_trace { background: #FFEDD5; color: #EA580C; }
+
+/* BRI BI-FAST (wrrbf-*) — time_order_status (beda vocabulary dari BRI
+   existing: NORMAL/WARNING/DELAYED/EXTREME/IMPOSSIBLE_ORDER). Reuse
+   .wrrbri-badge sbg base, badge account_conflict pakai warna sama dgn
+   --conflict di atas. */
+.wrrbri-badge--normal { background: #DCFCE7; color: #059669; }
+.wrrbri-badge--warning { background: #FEF3C7; color: #B45309; }
+.wrrbri-badge--delayed { background: #FFEDD5; color: #EA580C; }
+.wrrbri-badge--extreme { background: #FEE2E2; color: #DC2626; }
+.wrrbri-badge--impossible_order { background: #450A0A; color: #FCA5A5; }
 
 /* ── Laporan Harian Rekonsiliasi (tab "Laporan Harian" OCBC) ── */
 .wrr-daily-report-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }

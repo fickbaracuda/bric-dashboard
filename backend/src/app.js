@@ -36,6 +36,7 @@ const quickWinQ3Routes    = require('./routes/warroom-quick-win-q3');
 const reconciliationRoutes = require('./routes/warroom-reconciliation');
 const reconciliationMandiriRoutes = require('./routes/warroom-reconciliation-mandiri');
 const reconciliationBriRoutes = require('./routes/warroom-reconciliation-bri');
+const reconciliationBriBifastRoutes = require('./routes/warroom-reconciliation-bri-bifast');
 const financeBalanceRequestsRoutes = require('./routes/finance-balance-requests');
 const systemRoutes        = require('./routes/system');
 const requireAuth         = require('./middleware/auth');
@@ -184,6 +185,16 @@ app.get('/api/warroom/reconciliation/bri/resolution-history', requireAuth, recon
 app.get('/api/warroom/reconciliation/bri/export',       requireAuth, reconciliationBriRoutes.exportHandler);
 app.post('/api/warroom/reconciliation/bri/:id/resolve', requireAuth, reconciliationBriRoutes.resolveHandler);
 app.get('/api/warroom/reconciliation/bri/:id/logs',     requireAuth, reconciliationBriRoutes.actionLogsHandler);
+app.post('/api/warroom/reconciliation/bri-bifast/sync',        reconciliationBriBifastRoutes.syncHandler); // token auth (APPS_SCRIPT_TOKEN), no JWT
+app.get('/api/warroom/reconciliation/bri-bifast/analytics',    requireAuth, reconciliationBriBifastRoutes.analyticsHandler);
+app.get('/api/warroom/reconciliation/bri-bifast/daily-report', requireAuth, reconciliationBriBifastRoutes.dailyReportHandler);
+app.get('/api/warroom/reconciliation/bri-bifast/transactions', requireAuth, reconciliationBriBifastRoutes.transactionsHandler);
+app.get('/api/warroom/reconciliation/bri-bifast/raw-bank',     requireAuth, reconciliationBriBifastRoutes.rawBankHandler);
+app.get('/api/warroom/reconciliation/bri-bifast/raw-fp',       requireAuth, reconciliationBriBifastRoutes.rawFpHandler);
+app.get('/api/warroom/reconciliation/bri-bifast/resolution-history', requireAuth, reconciliationBriBifastRoutes.resolutionHistoryHandler);
+app.get('/api/warroom/reconciliation/bri-bifast/export',       requireAuth, reconciliationBriBifastRoutes.exportHandler);
+app.post('/api/warroom/reconciliation/bri-bifast/:id/resolve', requireAuth, reconciliationBriBifastRoutes.resolveHandler);
+app.get('/api/warroom/reconciliation/bri-bifast/:id/logs',     requireAuth, reconciliationBriBifastRoutes.actionLogsHandler);
 app.use('/api/warroom',        requireAuth, warroomRoutes);
 
 app.post('/api/data-raw/outlet/sync',    dataRawRoutes.outletSyncHandler);    // token auth, no JWT

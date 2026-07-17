@@ -18,7 +18,7 @@ const router = express.Router();
 const rateLimit = require('express-rate-limit');
 const pool = require('../db');
 
-const VALID_BANK_CODES = ['OCBC', 'MANDIRI', 'BRI'];
+const VALID_BANK_CODES = ['OCBC', 'MANDIRI', 'BRI', 'BRI_BIFAST'];
 const DOUBLE_SUBMIT_WINDOW_SECONDS = 10;
 const PENDING_LIMIT = 20;
 
