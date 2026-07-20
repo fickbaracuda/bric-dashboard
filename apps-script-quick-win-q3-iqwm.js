@@ -641,6 +641,68 @@ function debugQuickWinQ3Sheets_() {
   Logger.log('=== SELESAI DEBUG DUMP ===');
 }
 
+/**
+ * Diagnostic KHUSUS untuk insiden breakdown rows meledak (mis. 138.101 baris
+ * InstaQRIS) — debugQuickWinQ3Sheets_() cuma dump 40 baris pertama, tidak
+ * cukup buat lihat DI MANA persisnya ledakan mulai pada sheet yang
+ * sebenarnya bisa ribuan baris. Read-only, tidak mengubah/mengirim apa pun.
+ * Jalankan ini, copy SELURUH Execution Log, laporkan.
+ */
+function debugQuickWinQ3BreakdownAnomaly_(sheetName) {
+  sheetName = sheetName || QW3_SHEET_BREAKDOWN_INSTAQRIS;
+  Logger.log('=== DEBUG ANOMALY DUMP — Sheet: "' + sheetName + '" (read-only) ===');
+  const sd = getSheetData_(sheetName);
+  const display = sd.displayValues;
+  const numRows = display.length;
+  const numCols = display[0] ? display[0].length : 0;
+  Logger.log('Total baris (getDataRange): ' + numRows + ', total kolom: ' + numCols);
+
+  // 1. Cari semua baris marker bulan (kolom A persis Juli/Agustus/September, sisanya kosong)
+  const monthMarkerRows = [];
+  for (let r = 0; r < numRows; r++) {
+    const rowDisp = display[r] || [];
+    const colA = (rowDisp[0] || '').trim();
+    const monthCandidate = monthNameToKey_(colA, null);
+    const restEmpty = rowDisp.slice(1).every(function (c) { return !String(c || '').trim(); });
+    if (monthCandidate && restEmpty) monthMarkerRows.push(r + 1);
+  }
+  Logger.log('Baris marker bulan ditemukan (harus 3: Juli/Agustus/September): [' + monthMarkerRows.join(', ') + ']');
+
+  // 2. Dump 30 baris SETELAH marker bulan terakhir -> lihat persis transisi ke data aneh
+  if (monthMarkerRows.length > 0) {
+    const lastMarkerRow = monthMarkerRows[monthMarkerRows.length - 1]; // 1-indexed
+    Logger.log('--- 30 baris setelah marker bulan terakhir (baris ' + lastMarkerRow + ') ---');
+    for (let r = lastMarkerRow; r < Math.min(lastMarkerRow + 30, numRows); r++) {
+      const row = display[r] || [];
+      Logger.log('Row ' + (r + 1) + ': [' + row.join(' | ') + ']');
+    }
+  }
+
+  // 3. Sample tiap-N-baris di SELURUH sheet supaya kelihatan bentuk data di
+  //    tengah & ujung tanpa nge-log ratusan ribu baris.
+  const sampleCount = 60;
+  const step = Math.max(1, Math.floor(numRows / sampleCount));
+  Logger.log('--- Sample tiap ' + step + ' baris (total sheet) ---');
+  for (let r = 0; r < numRows; r += step) {
+    const row = display[r] || [];
+    Logger.log('Row ' + (r + 1) + ': [' + row.slice(0, Math.min(numCols, 8)).join(' | ') + (numCols > 8 ? ' | ...' : '') + ']');
+  }
+
+  // 4. 10 baris terakhir sheet (ujung getDataRange) -> lihat di mana data berhenti sungguhan
+  Logger.log('--- 10 baris terakhir sheet ---');
+  for (let r = Math.max(0, numRows - 10); r < numRows; r++) {
+    const row = display[r] || [];
+    Logger.log('Row ' + (r + 1) + ': [' + row.slice(0, Math.min(numCols, 8)).join(' | ') + (numCols > 8 ? ' | ...' : '') + ']');
+  }
+
+  Logger.log('=== SELESAI DEBUG ANOMALY DUMP ===');
+}
+
+/** Sama seperti debugQuickWinQ3BreakdownAnomaly_ tapi untuk sheet Winme. */
+function debugQuickWinQ3BreakdownAnomalyWinme_() {
+  debugQuickWinQ3BreakdownAnomaly_(QW3_SHEET_BREAKDOWN_WINME);
+}
+
 /** Dry-run — build payload, TIDAK mengirim apa pun ke backend. Jalankan ini dulu. */
 function previewQuickWinQ3Payload() {
   Logger.log('=== PREVIEW Quick Win Q3 IQWM (dry-run — TIDAK mengirim ke backend) ===');
