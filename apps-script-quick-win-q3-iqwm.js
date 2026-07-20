@@ -372,6 +372,19 @@ function qw3LookupQuickwinNo_(resumeLookup, product, pointQuickWin) {
   return resumeLookup[key] !== undefined ? resumeLookup[key] : null;
 }
 
+// Batas wajar jumlah baris breakdown per sheet (data riil saat ini ~40-200
+// baris: maks ~4 metric x 3 bulan x (1 month_total + 5 minggu) x 3 quickwin).
+// Circuit breaker kalau parser somehow membaca ribuan baris -- insiden nyata
+// 2026-07-20: 138.203 baris terkirim karena data sisa/scratch outlet-level
+// (id_outlet | jumlah_transaksi | revenue_mdr, ribuan baris) tertinggal di
+// bawah tabel breakdown asli pada sheet, dan currentMonth/weekHeader yang
+// tidak pernah direset setelah section bulan terakhir membuat baris-baris
+// itu ikut ter-parse sebagai data breakdown palsu -> UrlFetchApp gagal
+// (Limit Exceeded: URLFetch POST Size). Diperbaiki juga lewat filter
+// metricType 'unknown' di bawah -- breaker ini cadangan kalau filter itu
+// tidak menangkap suatu kasus.
+const QW3_MAX_BREAKDOWN_ROWS_PER_SHEET = 1000;
+
 function parseBreakdownSheet_(sheetName, product, sheetData, resumeLookup) {
   const values = sheetData.values;
   const display = sheetData.displayValues;
@@ -382,6 +395,7 @@ function parseBreakdownSheet_(sheetName, product, sheetData, resumeLookup) {
   let currentMonth = null;   // { month_key, month_label }
   let weekHeader = null;     // hasil qw3ParseWeekSectionHeader_
   let currentPointQuickWin = null;
+  let unknownMetricSkipped = 0; // dihitung, di-summary 1 baris di akhir -- JANGAN log per-baris (insiden log spam bill_info1 sebelumnya)
 
   for (let r = 0; r < numRows; r++) {
     const rowDisp = display[r] || [];
@@ -418,6 +432,14 @@ function parseBreakdownSheet_(sheetName, product, sheetData, resumeLookup) {
     if (!metricLabel) continue; // baris tanpa metric label (kemungkinan baris aneh/kosong sebagian) -> lewati, jangan invent
 
     const metricType = normalizeMetricType_(metricLabel);
+    if (metricType === 'unknown') {
+      // Label metric tidak cocok NMAT/MAT/Revenue/Transaksi/Registrasi/
+      // Device/Produk Terjual -> bukan baris breakdown asli (kemungkinan
+      // data sisa/scratch tertinggal di bawah tabel, lihat komentar
+      // QW3_MAX_BREAKDOWN_ROWS_PER_SHEET di atas). Lewati, jangan ditebak.
+      unknownMetricSkipped++;
+      continue;
+    }
     const quickwinNo = qw3LookupQuickwinNo_(resumeLookup, product, currentPointQuickWin);
     const monthTargetTotal = weekHeader.targetResultCol !== null ? safeNumber_(values[r][weekHeader.targetResultCol], rowDisp[weekHeader.targetResultCol]) : null;
     const monthRealizationTotal = weekHeader.totalRealisasiCol !== null ? safeNumber_(values[r][weekHeader.totalRealisasiCol], rowDisp[weekHeader.totalRealisasiCol]) : null;
@@ -454,6 +476,15 @@ function parseBreakdownSheet_(sheetName, product, sheetData, resumeLookup) {
       const realizationValue = wc.realizationCol !== undefined ? safeNumber_(values[r][wc.realizationCol], rowDisp[wc.realizationCol]) : null;
       pushRow(weekKey, targetValue, realizationValue);
     });
+
+    if (rows.length > QW3_MAX_BREAKDOWN_ROWS_PER_SHEET) {
+      warnings.push('[' + sheetName + '] STOP: sudah lebih dari ' + QW3_MAX_BREAKDOWN_ROWS_PER_SHEET + ' baris breakdown terbaca (berhenti di baris sheet ke-' + (r + 1) + ' dari ' + numRows + ') — kemungkinan data sisa/scratch tertinggal di bawah tabel breakdown asli. Parsing dihentikan supaya tidak mengirim payload raksasa. Jalankan debugQuickWinQ3Sheets_() untuk cek isi sheet, bersihkan data sisa, baru sync lagi.');
+      break;
+    }
+  }
+
+  if (unknownMetricSkipped > 0) {
+    warnings.push('[' + sheetName + '] ' + unknownMetricSkipped + ' baris dilewati karena label metric tidak dikenali (bukan NMAT/MAT/Revenue/Transaksi/Registrasi/Device/Produk Terjual) — kemungkinan data sisa/scratch di luar section bulan Juli/Agustus/September. Kalau jumlahnya besar dan tidak diduga, cek sheet manual.');
   }
 
   if (rows.length === 0) {
