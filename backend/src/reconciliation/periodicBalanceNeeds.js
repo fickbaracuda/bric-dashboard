@@ -44,6 +44,35 @@ const DEFAULT_FEE_BY_BANK = {
   BNI: Number(process.env.RECON_BNI_FEE_DEFAULT) || 0,
 };
 
+/**
+ * Konvensi cross-date (bank_transaction_date != business_date batch)
+ * TIDAK SERAGAM antar bank -- masing-masing `dailyReportHandler`/
+ * `analyticsHandler` bank sudah punya aturannya sendiri, jadi shared query
+ * di sini WAJIB mengikuti aturan yang SAMA per bank (bukan satu guard
+ * dipaksakan ke semua), supaya total di tab "Kebutuhan Saldo" konsisten
+ * dgn total di tab lain bank yang sama:
+ * - 'strict'   : OCBC & MANDIRI -- baris dgn bank_transaction_date beda
+ *                dari business_date DIKECUALIKAN dari SELURUH kalkulasi
+ *                (lihat `resultsInDate`/dokumentasi masing2 file).
+ * - 'strict_reversal_carveout' : BRI (non-BIFAST) -- sama seperti 'strict',
+ *                KECUALI baris dgn `reversal_lookup_source =
+ *                'CROSS_DATE_LOOKUP'` (fitur reversal cross-date yang VALID,
+ *                lihat `resultsValidDate` di warroom-reconciliation-bri.js).
+ * - 'none'     : BRI_BIFAST (by design -- "rolling sheet", TIDAK PERNAH
+ *                difilter berdasarkan bank_transaction_date sama sekali,
+ *                lihat komentar di warroom-reconciliation-bri-bifast.js)
+ *                & BNI (dailyReportHandler/analyticsHandler BNI juga TIDAK
+ *                PERNAH mengecualikan baris cross-date dari total) --
+ *                seluruh baris FP-linked dihitung apa adanya.
+ */
+const CROSS_DATE_GUARD_MODE = {
+  OCBC: 'strict',
+  MANDIRI: 'strict',
+  BRI: 'strict_reversal_carveout',
+  BRI_BIFAST: 'none',
+  BNI: 'none',
+};
+
 function isValidBankCode(bankCode) {
   return BANK_ALLOWLIST.includes(bankCode);
 }
@@ -299,8 +328,15 @@ async function resolveExpectedFeePerBatch(pool, bankCode, batches) {
  * SATU KALI (recon_results sendiri sudah 1 baris per id_transaksi per
  * desain engine, DISTINCT ON di sini jaminan berlapis tambahan).
  */
-async function getHourlyTransactionRows(pool, batchIds) {
+async function getHourlyTransactionRows(pool, batchIds, bankCode) {
   if (!batchIds.length) return [];
+  const guardMode = CROSS_DATE_GUARD_MODE[bankCode] || 'strict';
+  let crossDateClause = '';
+  if (guardMode === 'strict') {
+    crossDateClause = "AND (r.bank_transaction_date IS NULL OR r.bank_transaction_date::text = b.business_date::text)";
+  } else if (guardMode === 'strict_reversal_carveout') {
+    crossDateClause = "AND (r.bank_transaction_date IS NULL OR r.bank_transaction_date::text = b.business_date::text OR r.reversal_lookup_source = 'CROSS_DATE_LOOKUP')";
+  } // 'none' -> crossDateClause tetap kosong, seluruh baris FP-linked dihitung apa adanya (BRI_BIFAST/BNI, sama dgn dailyReportHandler masing2)
   const res = await pool.query(
     `WITH deduped AS (
        SELECT DISTINCT ON (r.batch_id, COALESCE(r.canonical_transaction_key, r.id_transaksi, '__id_' || r.id::text))
@@ -310,7 +346,7 @@ async function getHourlyTransactionRows(pool, batchIds) {
        WHERE r.batch_id = ANY($1::bigint[])
          AND r.id_transaksi IS NOT NULL
          AND r.fp_time_response IS NOT NULL
-         AND (r.bank_transaction_date IS NULL OR r.bank_transaction_date::text = b.business_date::text)
+         ${crossDateClause}
        ORDER BY r.batch_id, COALESCE(r.canonical_transaction_key, r.id_transaksi, '__id_' || r.id::text), r.updated_at DESC
      )
      SELECT batch_id, EXTRACT(HOUR FROM (fp_time_response AT TIME ZONE 'Asia/Jakarta'))::int AS hour,
@@ -430,7 +466,7 @@ async function buildBalanceNeedsResponse({ pool, bankCode, startDate, endDate, e
 
   const [feeByDate, hourlyRowsRaw] = await Promise.all([
     resolveExpectedFeePerBatch(pool, bankCode, batches),
-    getHourlyTransactionRows(pool, batchIds),
+    getHourlyTransactionRows(pool, batchIds, bankCode),
   ]);
 
   const includedDayFees = batches.map(b => ({
@@ -463,6 +499,7 @@ module.exports = {
   BANK_ALLOWLIST,
   BANK_LABELS,
   DEFAULT_FEE_BY_BANK,
+  CROSS_DATE_GUARD_MODE,
   isValidBankCode,
   bankLabel,
   hourLabel,

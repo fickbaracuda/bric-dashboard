@@ -715,8 +715,8 @@ included day dihitung 0, expected fee ikut batch masing-masing tanggal
 spec bagian 4) — **76 test total**. Test tambahan khusus generalisasi
 multi-bank (allowlist, label, default fee per bank, resolusi expected fee
 OCBC vs bank lain, BRI BI-FAST tidak double-count, BNI funding comparison,
-rentang >90 hari) ada di
-`node backend/scripts/test-periodic-balance-needs.js` (25 test, terpisah
+rentang >90 hari, `CROSS_DATE_GUARD_MODE` per bank) ada di
+`node backend/scripts/test-periodic-balance-needs.js` (31 test, terpisah
 krn scope-nya generalisasi bank bukan OCBC spesifik). Skenario DB/live (resync, idempotensi,
 resolution manual existing, cross-date, regresi Mandiri, filter FP di luar
 business_date, dedup `DISTINCT ON` di query balance-needs-periodic)

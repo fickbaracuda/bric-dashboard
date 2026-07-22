@@ -17,10 +17,10 @@
 
 const assert = require('assert');
 const {
-  BANK_ALLOWLIST, BANK_LABELS, DEFAULT_FEE_BY_BANK,
+  BANK_ALLOWLIST, BANK_LABELS, DEFAULT_FEE_BY_BANK, CROSS_DATE_GUARD_MODE,
   isValidBankCode, bankLabel, hourLabel, dateRangeArray,
   computePeriodicBalanceNeeds, resolveExpectedFeePerBatch,
-  computeBniFundingComparison, buildBalanceNeedsResponse,
+  getHourlyTransactionRows, computeBniFundingComparison, buildBalanceNeedsResponse,
 } = require('../src/reconciliation/periodicBalanceNeeds');
 
 const tests = [];
@@ -243,6 +243,52 @@ test('resolveExpectedFeePerBatch: bank non-OCBC fallback ke default kalau expect
   assert.strictEqual(feeMapMandiri.get('2026-07-01'), DEFAULT_FEE_BY_BANK.MANDIRI);
   const feeMapBifast = await resolveExpectedFeePerBatch(fakePool, 'BRI_BIFAST', [{ id: 1, business_date: '2026-07-01', expected_fee: undefined }]);
   assert.strictEqual(feeMapBifast.get('2026-07-01'), DEFAULT_FEE_BY_BANK.BRI_BIFAST);
+});
+
+// ── REGRESI: cross-date guard TIDAK boleh seragam dipaksakan ke semua
+// bank -- insiden nyata ditemukan saat live-verify pasca-deploy: batch BRI
+// BI-FAST tanggal 2026-07-17 punya 917 baris MATCHED (recon_results,
+// id_transaksi terisi, fp_time_response terisi) tapi SEMUANYA punya
+// bank_transaction_date beda dari business_date batch (BI-FAST memang
+// "rolling sheet" by design, TIDAK PERNAH difilter berdasarkan itu di
+// dailyReportHandler-nya sendiri) -- guard 'strict' yang di-copy polos dari
+// OCBC membuat SELURUH 917 transaksi itu ter-exclude & Kebutuhan Saldo BI-
+// FAST tampil 0 padahal dailyReportHandler bank yg SAMA melaporkan
+// matched_transaksi=917. Fix: CROSS_DATE_GUARD_MODE per bank, mengikuti
+// konvensi masing2 dailyReportHandler/analyticsHandler bank itu sendiri
+// (bukan satu aturan dipaksakan ke semua) ───────────────────────────────
+test('CROSS_DATE_GUARD_MODE: OCBC & MANDIRI strict (exclude cross-date dari SELURUH kalkulasi, sama dgn dailyReportHandler masing2)', () => {
+  assert.strictEqual(CROSS_DATE_GUARD_MODE.OCBC, 'strict');
+  assert.strictEqual(CROSS_DATE_GUARD_MODE.MANDIRI, 'strict');
+});
+test('CROSS_DATE_GUARD_MODE: BRI strict TAPI dgn carve-out reversal cross-date valid (CROSS_DATE_LOOKUP)', () => {
+  assert.strictEqual(CROSS_DATE_GUARD_MODE.BRI, 'strict_reversal_carveout');
+});
+test('CROSS_DATE_GUARD_MODE: BRI_BIFAST & BNI "none" -- dailyReportHandler masing2 TIDAK PERNAH mengecualikan baris cross-date dari total, jadi shared query jg tidak boleh', () => {
+  assert.strictEqual(CROSS_DATE_GUARD_MODE.BRI_BIFAST, 'none');
+  assert.strictEqual(CROSS_DATE_GUARD_MODE.BNI, 'none');
+});
+test('getHourlyTransactionRows: OCBC mengirim klausa strict bank_transaction_date di SQL', async () => {
+  let capturedSql = null;
+  const fakePool = { query: async (sql) => { capturedSql = sql; return { rows: [] }; } };
+  await getHourlyTransactionRows(fakePool, [1], 'OCBC');
+  assert.match(capturedSql, /bank_transaction_date::text = b\.business_date::text/);
+  assert.doesNotMatch(capturedSql, /CROSS_DATE_LOOKUP/);
+});
+test('getHourlyTransactionRows: BRI mengirim klausa strict DENGAN carve-out CROSS_DATE_LOOKUP', async () => {
+  let capturedSql = null;
+  const fakePool = { query: async (sql) => { capturedSql = sql; return { rows: [] }; } };
+  await getHourlyTransactionRows(fakePool, [1], 'BRI');
+  assert.match(capturedSql, /bank_transaction_date::text = b\.business_date::text/);
+  assert.match(capturedSql, /CROSS_DATE_LOOKUP/);
+});
+test('getHourlyTransactionRows: BRI_BIFAST & BNI TIDAK mengirim klausa bank_transaction_date sama sekali (regresi insiden 917 baris ter-exclude)', async () => {
+  for (const code of ['BRI_BIFAST', 'BNI']) {
+    let capturedSql = null;
+    const fakePool = { query: async (sql) => { capturedSql = sql; return { rows: [] }; } };
+    await getHourlyTransactionRows(fakePool, [1], code);
+    assert.doesNotMatch(capturedSql, /bank_transaction_date/, `${code} tidak boleh memfilter bank_transaction_date`);
+  }
 });
 
 // ── TEST: BNI funding comparison -- funding_credit TIDAK dihitung sbg

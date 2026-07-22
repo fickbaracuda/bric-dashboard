@@ -345,6 +345,19 @@ string saat memanggil `buildBalanceNeedsResponse()`, bukan dari query param.
   (konsolidasi sudah dilakukan matching engine BI-FAST sendiri, lihat
   `docs/RECONCILIATION_BRI_BIFAST.md`) — service ini TIDAK menghitungnya
   dua kali sbg 2 transaksi terpisah.
+- **Cross-date guard TIDAK seragam antar bank** (`CROSS_DATE_GUARD_MODE`
+  di `periodicBalanceNeeds.js`) — insiden nyata ditemukan saat live-verify:
+  meng-copy polos guard `bank_transaction_date = business_date` dari OCBC
+  ke semua bank membuat 1 batch BRI BI-FAST (917 transaksi MATCHED) tampil
+  0 di Kebutuhan Saldo, padahal Laporan Harian bank yang sama melaporkan
+  917 (BI-FAST "rolling sheet" by design, `dailyReportHandler`-nya sendiri
+  TIDAK PERNAH mengecualikan baris cross-date). Fix: guard sekarang
+  mengikuti konvensi masing2 `dailyReportHandler`/`analyticsHandler` bank
+  itu sendiri — `strict` (OCBC, Mandiri: exclude SELURUH baris cross-date
+  dari kalkulasi), `strict_reversal_carveout` (BRI non-BIFAST: exclude
+  KECUALI `reversal_lookup_source='CROSS_DATE_LOOKUP'`), `none` (BRI
+  BI-FAST & BNI: TIDAK PERNAH exclude, seluruh baris FP-linked dihitung apa
+  adanya, sama seperti bank itu sendiri menghitungnya di tab lain).
 - **Query**: maksimal 3 query per request (active batches, hourly
   transaksi teragregasi via SATU `GROUP BY (business_date, hour)`, +
   enrichment opsional) — tidak pernah 24×hari×bank query.
@@ -397,7 +410,7 @@ header info Bank/rentang/Included Days/Missing Days), chart per jam
 `wrr-*` existing, tidak ada CSS baru per bank.
 
 ### Testing
-`node backend/scripts/test-periodic-balance-needs.js` (25 test) — allowlist
+`node backend/scripts/test-periodic-balance-needs.js` (31 test) — allowlist
 bank, label, default fee per bank, 24 bucket selalu ada, average÷
 included_days, included day nihil transaksi tetap 0, expected fee per
 batch (bukan diseragamkan), rentang tanpa batch → `empty:true`, dedup tidak
@@ -405,10 +418,11 @@ double-count, BRI BI-FAST 1 transaksi = 1 tx_count, rentang >90 hari
 ditolak, bank_code invalid ditolak SEBELUM query DB, resolusi fee OCBC
 (dari `recon_results`) vs bank lain (dari kolom batch), fee Rp0 BNI dipakai
 apa adanya, Funding Comparison BNI (net_cash_movement, scope row_type,
-struktur default batchIds kosong). Suite khusus OCBC
-(`test-reconciliation-ocbc.js`, 76 test, termasuk BALANCE-NEEDS TEST 1-7)
-tetap 100% lolos tanpa perubahan setelah refactor — bukti output OCBC
-byte-identik.
+struktur default batchIds kosong), **`CROSS_DATE_GUARD_MODE` per bank**
+(regresi insiden 917 baris BI-FAST ter-exclude — lihat di atas). Suite
+khusus OCBC (`test-reconciliation-ocbc.js`, 76 test, termasuk
+BALANCE-NEEDS TEST 1-7) tetap 100% lolos tanpa perubahan setelah refactor —
+bukti output OCBC byte-identik.
 
 ## Apps Script (`apps-script-reconciliation-bni.js`)
 Fungsi: `testReconciliationBni()` (dry-run), `pushReconciliationBni()`
