@@ -160,6 +160,7 @@ app.post('/api/warroom/reconciliation/sync',        reconciliationRoutes.syncHan
 app.get('/api/warroom/reconciliation/sync-request-status', reconciliationRoutes.syncRequestStatusHandler); // token auth, no JWT — dipanggil Apps Script (OCBC & Mandiri)
 app.get('/api/warroom/reconciliation/analytics',    requireAuth, reconciliationRoutes.analyticsHandler);
 app.get('/api/warroom/reconciliation/daily-report', requireAuth, reconciliationRoutes.dailyReportHandler);
+app.get('/api/warroom/reconciliation/ocbc/balance-needs-periodic', requireAuth, reconciliationRoutes.balanceNeedsPeriodicHandler); // tab "Kebutuhan Saldo" — kebutuhan saldo per periode, READ-ONLY
 app.get('/api/warroom/reconciliation/transactions', requireAuth, reconciliationRoutes.transactionsHandler);
 app.get('/api/warroom/reconciliation/export',       requireAuth, reconciliationRoutes.exportHandler);
 app.post('/api/warroom/reconciliation/request-sync', requireAuth, reconciliationRoutes.requestSyncHandler); // tombol "Sync Now" — generik utk OCBC & Mandiri (bank_code di body)

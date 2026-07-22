@@ -5,6 +5,7 @@ import {
   resolveReconciliation, getReconciliationLogs, requestReconciliationSync, getReconciliationDailyReport,
 } from '../services/api';
 import BalanceRequestButton from '../components/reconciliation/BalanceRequestButton';
+import OcbcPeriodicBalanceNeeds from '../components/reconciliation/OcbcPeriodicBalanceNeeds';
 
 const COLOR = '#DC2626';
 const TABS = [
@@ -13,6 +14,7 @@ const TABS = [
   { key: 'exception', label: 'Exception Queue', icon: 'ti-alert-triangle' },
   { key: 'fee', label: 'Fee Analysis', icon: 'ti-receipt-2' },
   { key: 'raw', label: 'Raw Data & Audit', icon: 'ti-database' },
+  { key: 'kebutuhan-saldo', label: 'Kebutuhan Saldo', icon: 'ti-cash' },
   { key: 'laporan', label: 'Laporan Harian', icon: 'ti-file-report' },
 ];
 const EXCEPTION_STATUSES = [
@@ -1039,6 +1041,7 @@ export default function WarRoomReconciliationOcbc() {
           {activeTab === 'exception' && <ReconTable date={date} scope="exception" onOpenAudit={setAuditId} initialStatus={jumpStatus} />}
           {activeTab === 'fee' && <FeeAnalysisTab analytics={analytics} />}
           {activeTab === 'raw' && <RawDataTab analytics={analytics} date={date} onExport={handleExport} exporting={exporting} />}
+          {activeTab === 'kebutuhan-saldo' && <OcbcPeriodicBalanceNeeds />}
           {activeTab === 'laporan' && <DailyReportTab date={date} />}
         </>)}
 

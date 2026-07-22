@@ -11,6 +11,7 @@ const {
   buildOcbcBankArchiveRows, computeBankRowFingerprint, normalizeDescriptionForFingerprint,
   parseOcbcRawDateTimeFallback, resolveOcbcTransactionDateTime, parseFlexibleOcbcDateTime,
   buildTransactionsQuery, normalizeCanonicalKey, buildOcbcBankGroups,
+  computeOcbcBalanceNeedsPeriodic, dateRangeArray,
 } = require('../src/routes/warroom-reconciliation');
 
 const tests = [];
@@ -690,6 +691,105 @@ test('reconcileTransactions (legacy, non-coverage) -- fix yang sama juga berlaku
   const results = reconcileTransactions(fpRows, bankRows, {}, new Date());
   assert.strictEqual(results.length, 1, `harus 1 result, got ${results.length}: ${JSON.stringify(results)}`);
   assert.strictEqual(results[0].reconStatus, 'REVERSAL');
+});
+
+// ── Tab "Kebutuhan Saldo" (balance-needs-periodic) — pure aggregation ────
+// Sesuai spec: cukup test penting, bukan suite panjang. Dedup transaksi
+// (canonical_transaction_key) sengaja TIDAK diuji di sini krn dilakukan di
+// level query SQL (DISTINCT ON per batch_id+canonical key SEBELUM GROUP BY
+// jam) -- sama filosofi dgn runOcbcEngineAndPersist yg didokumentasikan
+// tidak bisa di-unit-test murni tanpa DB (lihat catatan di atas file ini).
+test('BALANCE-NEEDS TEST 1: hasil selalu 24 bucket jam, walau data kosong utk sebagian jam', () => {
+  const selectedDates = dateRangeArray('2026-07-01', '2026-07-01');
+  const includedDayFees = [{ business_date: '2026-07-01', expected_fee: 25 }];
+  const hourlyRows = [{ business_date: '2026-07-01', hour: 10, tx_count: 2, principal_sum: 200000 }];
+  const result = computeOcbcBalanceNeedsPeriodic(selectedDates, includedDayFees, hourlyRows);
+  assert.strictEqual(result.hourly.length, 24, `harus 24 bucket, got ${result.hourly.length}`);
+  assert.deepStrictEqual(result.hourly.map(h => h.hour), Array.from({ length: 24 }, (_, i) => i));
+});
+test('BALANCE-NEEDS TEST 2: average dibagi included_days, BUKAN selected_days', () => {
+  // Rentang 7 hari dipilih, tapi cuma 2 hari yang punya batch OCBC.
+  const selectedDates = dateRangeArray('2026-07-01', '2026-07-07');
+  const includedDayFees = [
+    { business_date: '2026-07-01', expected_fee: 25 },
+    { business_date: '2026-07-03', expected_fee: 25 },
+  ];
+  const hourlyRows = [
+    { business_date: '2026-07-01', hour: 10, tx_count: 4, principal_sum: 400000 },
+    { business_date: '2026-07-03', hour: 10, tx_count: 2, principal_sum: 200000 },
+  ];
+  const result = computeOcbcBalanceNeedsPeriodic(selectedDates, includedDayFees, hourlyRows);
+  assert.strictEqual(result.coverage.selected_days, 7);
+  assert.strictEqual(result.coverage.included_days, 2);
+  assert.strictEqual(result.coverage.missing_days, 5);
+  const jam10 = result.hourly[10];
+  // total_transaction=6, total_principal=600000, fee=25*6=150 -> total_balance_need=600150
+  // average dibagi 2 (included_days), BUKAN 7 (selected_days): 600150/2 = 300075
+  assert.strictEqual(jam10.average_balance_need_per_day, 300075, `harus dibagi 2 (included_days), got ${jam10.average_balance_need_per_day}`);
+});
+test('BALANCE-NEEDS TEST 3: jam kosong pada included day tetap dihitung 0 (bukan diabaikan dari average)', () => {
+  const selectedDates = dateRangeArray('2026-07-01', '2026-07-02');
+  const includedDayFees = [
+    { business_date: '2026-07-01', expected_fee: 25 },
+    { business_date: '2026-07-02', expected_fee: 25 },
+  ];
+  // Tanggal 02 SAMA SEKALI tidak punya transaksi jam 10 -> harus dihitung 0, bukan di-skip.
+  const hourlyRows = [
+    { business_date: '2026-07-01', hour: 10, tx_count: 2, principal_sum: 200000 },
+  ];
+  const result = computeOcbcBalanceNeedsPeriodic(selectedDates, includedDayFees, hourlyRows);
+  const jam10 = result.hourly[10];
+  // total_balance_need = (200000+50) + (0+0) = 200050, dibagi 2 hari = 100025
+  assert.strictEqual(jam10.total_balance_need, 200050);
+  assert.strictEqual(jam10.average_balance_need_per_day, 100025);
+  assert.strictEqual(jam10.minimum_daily_need, 0, 'hari tanpa transaksi jam ini harus muncul sbg minimum 0, bukan diabaikan');
+});
+test('BALANCE-NEEDS TEST 4: expected fee mengikuti batch masing-masing tanggal (bukan fee batch terbaru)', () => {
+  const selectedDates = dateRangeArray('2026-07-01', '2026-07-02');
+  const includedDayFees = [
+    { business_date: '2026-07-01', expected_fee: 25 },  // fee lama
+    { business_date: '2026-07-02', expected_fee: 3000 }, // fee berubah di batch ini
+  ];
+  const hourlyRows = [
+    { business_date: '2026-07-01', hour: 9, tx_count: 1, principal_sum: 100000 },
+    { business_date: '2026-07-02', hour: 9, tx_count: 1, principal_sum: 100000 },
+  ];
+  const result = computeOcbcBalanceNeedsPeriodic(selectedDates, includedDayFees, hourlyRows);
+  const daily1 = result.daily.find(d => d.business_date === '2026-07-01');
+  const daily2 = result.daily.find(d => d.business_date === '2026-07-02');
+  assert.strictEqual(daily1.expected_fee, 25, 'tanggal 01 harus pakai fee batch-nya sendiri (25)');
+  assert.strictEqual(daily2.expected_fee, 3000, 'tanggal 02 harus pakai fee batch-nya sendiri (3000), TIDAK boleh ikut fee batch lain');
+});
+test('BALANCE-NEEDS TEST 5: rentang tanpa batch OCBC sama sekali -> empty:true', () => {
+  const selectedDates = dateRangeArray('2026-08-01', '2026-08-05');
+  const result = computeOcbcBalanceNeedsPeriodic(selectedDates, [], []);
+  assert.strictEqual(result.empty, true);
+  assert.strictEqual(result.coverage.included_days, 0);
+  assert.strictEqual(result.coverage.missing_days, 5);
+  assert.deepStrictEqual(result.hourly, []);
+  assert.deepStrictEqual(result.daily, []);
+});
+test('BALANCE-NEEDS TEST 6: dateRangeArray hasilkan tanggal inklusif start & end, kosong kalau end < start', () => {
+  assert.deepStrictEqual(dateRangeArray('2026-07-01', '2026-07-03'), ['2026-07-01', '2026-07-02', '2026-07-03']);
+  assert.deepStrictEqual(dateRangeArray('2026-07-03', '2026-07-01'), []);
+  assert.strictEqual(dateRangeArray('2026-07-01', '2026-07-01').length, 1);
+});
+test('BALANCE-NEEDS TEST 7: contoh spec bagian 4 -- jam 10:00 rata-rata 3 hari termasuk 0', () => {
+  const selectedDates = dateRangeArray('2026-07-01', '2026-07-04');
+  const includedDayFees = [
+    { business_date: '2026-07-01', expected_fee: 0 },
+    { business_date: '2026-07-02', expected_fee: 0 },
+    { business_date: '2026-07-03', expected_fee: 0 },
+    // 2026-07-04 TIDAK punya batch sama sekali (bukan included day)
+  ];
+  const hourlyRows = [
+    { business_date: '2026-07-01', hour: 10, tx_count: 1, principal_sum: 100000000 }, // Rp100jt
+    { business_date: '2026-07-02', hour: 10, tx_count: 1, principal_sum: 80000000 },  // Rp80jt
+    // 2026-07-03 jam 10 kosong -> 0
+  ];
+  const result = computeOcbcBalanceNeedsPeriodic(selectedDates, includedDayFees, hourlyRows);
+  const jam10 = result.hourly[10];
+  assert.strictEqual(jam10.average_balance_need_per_day, 60000000, `harus (100jt+80jt+0)/3 = 60jt, got ${jam10.average_balance_need_per_day}`);
 });
 
 // ── Runner ──────────────────────────────────────────────────────────────

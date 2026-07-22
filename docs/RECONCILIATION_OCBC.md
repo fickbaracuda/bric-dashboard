@@ -312,7 +312,8 @@ berturut-turut menghasilkan `result_count`/jumlah archive row identik.
 | `POST /api/warroom/reconciliation/sync` | `APPS_SCRIPT_TOKEN` (token SHARED, bukan token baru) | Terima chunk FP/bank, jalankan engine di chunk terakhir. Response menyertakan `fp_rows_skipped_outside_date` (lihat bagian "Validasi Tanggal Baris FP" di atas) |
 | `GET /api/warroom/reconciliation/sync-request-status?bank_code=` | `APPS_SCRIPT_TOKEN` | Dipanggil Apps Script tiap 1 menit — cek apakah tombol "Sync Now" ditekan sejak sync terakhir |
 | `GET /api/warroom/reconciliation/analytics?date=&bank_code=` | JWT | Summary (+ `valid_match_rate_*`, `actionable_exception_count`), distribusi status, validasi rekening, fee analysis, blok `coverage`, `active_batch` (batch_id/bank_code/business_date/account_no/synced_at), `data_quality_warning` (cross_date_result_count, seharusnya selalu null), recent batches. Kalau `date` diberikan tapi batch tidak ada, `empty:true` — TIDAK fallback ke batch tanggal lain |
-| `GET /api/warroom/reconciliation/daily-report?date=&bank_code=` | JWT | **Laporan Harian** (tab 6) — lihat bagian tersendiri di bawah |
+| `GET /api/warroom/reconciliation/daily-report?date=&bank_code=` | JWT | **Laporan Harian** (tab 7) — lihat bagian tersendiri di bawah |
+| `GET /api/warroom/reconciliation/ocbc/balance-needs-periodic?start_date=&end_date=` | JWT | **Kebutuhan Saldo** (tab 6) — kebutuhan saldo per jam/tanggal utk suatu periode (maks 90 hari), lihat bagian tersendiri di bawah |
 | `GET /api/warroom/reconciliation/transactions?date=&status=&coverage_status=&is_actionable=&id_outlet=&id_produk=&search=&page=&limit=&sort=&order=` | JWT | List berpaginasi; `status` & `coverage_status` boleh comma-separated. Field baru per baris: `coverage_status`, `coverage_reason`, `is_actionable`, `eligible_for_match_rate`, `archive_match` |
 | `GET /api/warroom/reconciliation/export?...` | JWT | CSV (di-fetch sbg blob di frontend krn butuh header Authorization) — + 5 kolom baru (Coverage Status/Reason/Actionable/Eligible for Match Rate/Archive Match) |
 | `POST /api/warroom/reconciliation/request-sync` | JWT | Tombol "Sync Now" — body `{bank_code}`, generik utk OCBC & Mandiri, hanya mencatat permintaan di `recon_sync_requests` |
@@ -407,7 +408,7 @@ menampilkan ringkasan cakupan di Execution Log.
 - Page: `frontend/src/pages/WarRoomReconciliationOcbc.jsx`
 - Menu: Payment Agent > War Room > **Rekonsiliasi OCBC** (badge `REK`, `#DC2626`)
 - CSS prefix: `wrr-*`, dark/light via CSS variable BRIC standar
-- 6 tab (urutan tetap): Executive Summary, Hasil Rekonsiliasi, Exception Queue, Fee Analysis, Raw Data & Audit, **Laporan Harian**
+- 7 tab (urutan tetap): Executive Summary, Hasil Rekonsiliasi, Exception Queue, Fee Analysis, Raw Data & Audit, **Kebutuhan Saldo**, Laporan Harian
 - **Executive Summary**: banner "Data OCBC Terbatas" muncul kalau
   `coverage.is_source_truncated=true`; panel "Cakupan Data Bank OCBC"
   (Bank Coverage Start/End, Trusted Coverage Start, Bank Rows Received,
@@ -469,7 +470,91 @@ menampilkan ringkasan cakupan di Execution Log.
   ternyata beda dari tanggal yang diminta user, frontend menampilkan error
   data integrity dan TIDAK merender hasil.
 
-## Laporan Harian (Tab 6) — laporan siap-cetak untuk Direktur
+## Kebutuhan Saldo (Tab 6) — kebutuhan saldo per periode (bukan 1 hari)
+
+### Tujuan
+Tab terpisah dari 5 tab lain (yang semuanya scoped ke 1 `date`/batch) — hanya
+menampilkan kebutuhan saldo OCBC teragregasi per **jam** untuk suatu
+**periode** (7/14/30 hari terakhir, Bulan Ini, Bulan Lalu, atau custom range
+maks 90 hari), supaya Operation & Finance bisa melihat pola kebutuhan saldo
+per jam (bukan cuma snapshot 1 hari). READ-ONLY murni — TIDAK menyentuh
+matching engine, `recon_status`, sync, coverage, atau Exception Queue.
+
+### Sumber data & definisi transaksi
+Transaksi FP = `recon_results` dengan `id_transaksi IS NOT NULL` (persis
+definisi `fpResultRows` di `dailyReportHandler`) — recon_results sudah
+deduped 1 baris per `id_transaksi` oleh engine (`processedIds` Set), jadi
+BANK_ONLY/REVERSAL-tanpa-FP sintetis (`id_transaksi` NULL) otomatis
+terkecuali (**tidak masuk kebutuhan saldo**), sementara PENDING_BANK/FP_ONLY/
+REVERSAL-dengan-FP/dst semuanya **masuk** (kebutuhan saldo timbul begitu FP
+diproses, terlepas hasil rekonsiliasinya). Waktu bucket jam pakai
+`fp_time_response` di-anchor Asia/Jakarta (`AT TIME ZONE 'Asia/Jakarta'` di
+SQL).
+
+### Expected fee — per batch, BUKAN hardcode Rp25
+Tidak ada kolom baru/migration. Expected fee tiap tanggal diturunkan dari
+data yang SUDAH ADA: `bank_fee - variance_fee` pada baris `recon_results`
+matched batch tanggal itu (konstan per batch, krn 1 config `expected_fee`
+berlaku utk seluruh sync hari itu — lihat `expectedFee` di
+`reconcileTransactionsWithCoverage`). Fallback `DEFAULT_FEE_BIFAST` (default
+Rp25, sama constant yang dipakai engine sendiri) HANYA kalau batch itu
+genuinely tidak punya baris matched sama sekali (mis. semua FP_ONLY).
+
+### Included days vs selected days
+`included_days` = tanggal dalam rentang yang PUNYA batch `recon_sync_batches`
+(`bank_code='OCBC'`) — average SELALU dibagi `included_days`, bukan
+`selected_days`. Jam yang tidak punya transaksi pada suatu included day tetap
+dihitung `0` (bukan di-skip dari average). Tidak ada fallback ke batch di
+luar rentang yang diminta.
+
+### Backend
+`GET /api/warroom/reconciliation/ocbc/balance-needs-periodic?start_date=&end_date=`
+(`balanceNeedsPeriodicHandler` di `warroom-reconciliation.js`) — JWT,
+`Cache-Control: no-store`, rentang maksimal 90 hari. Response: `coverage`
+(`selected_days`/`included_days`/`missing_days`/`included_dates`/
+`missing_dates`), `summary` (8 KPI), `hourly[]` (24 bucket tetap, tiap
+elemen: `total_transaction`, `average_transaction_per_day`,
+`total_principal`, `average_principal_per_day`, `total_expected_fee`,
+`average_fee_per_day`, `total_balance_need`, `average_balance_need_per_day`,
+`maximum_daily_need`, `minimum_daily_need`, `peak_date`), `daily[]`
+(1 baris per included day, sort tanggal terbaru dulu: `transaction_count`,
+`principal`, `expected_fee`, `total_balance_need`, `peak_hour`,
+`peak_hour_need`). `empty:true` kalau tidak ada batch OCBC sama sekali pada
+rentang yang diminta (tidak pernah fallback ke rentang lain).
+
+Query dedup transaksi per `(batch_id, canonical_transaction_key)` via
+`DISTINCT ON` SEBELUM `GROUP BY (business_date, hour)` — SATU query agregasi
+(bukan 24 query per jam), cross-date guard sama dgn endpoint OCBC lain
+(`bank_transaction_date` harus cocok `business_date` batch kalau terisi).
+Perhitungan bucket/average/peak murni di fungsi pure
+`computeOcbcBalanceNeedsPeriodic()` (tidak menyentuh DB, diuji langsung —
+lihat bagian Testing) dipanggil oleh handler dengan hasil query sbg input.
+
+### Frontend
+- Komponen: `frontend/src/components/reconciliation/OcbcPeriodicBalanceNeeds.jsx`,
+  dipasang sbg tab `kebutuhan-saldo` di `WarRoomReconciliationOcbc.jsx`
+  (posisi sebelum Laporan Harian), independen dari filter tanggal 1-hari yang
+  dipakai 5 tab lain.
+- Filter periode sendiri: 7/14/30 Hari Terakhir, Bulan Ini, Bulan Lalu,
+  Custom Date Range (maks 90 hari, divalidasi di frontend & backend).
+  Default: 7 hari terakhir (Asia/Jakarta). Ganti periode -> data lama
+  dikosongkan segera + request lama diabaikan via `requestIdRef` (sama pola
+  race-condition guard dgn tab lain di halaman ini).
+- Chart.js line chart (2 seri: Average/Total Kebutuhan Saldo per Jam +
+  Maximum Kebutuhan Harian), toggle Average/Total Periode mengganti seri
+  utama antara `average_balance_need_per_day` dan `total_balance_need` per
+  jam (seri Maximum tetap `maximum_daily_need`). Tooltip menampilkan jam,
+  average transaksi/principal/fee/kebutuhan per hari, maximum kebutuhan, dan
+  peak date.
+- Tabel per jam (+ baris TOTAL) dan tabel detail per tanggal, keduanya
+  `wrr-table` dengan scroll horizontal mobile bawaan (`wrr-table-wrap`).
+  Empty state: "Belum ada batch Rekonsiliasi OCBC pada periode ini."
+- Tombol **Export Rekap Saldo** — 1 file CSV dgn 2 section (REKAP PER JAM +
+  REKAP PER TANGGAL).
+- CSS prefix: `wrr-balance-periodic-*` (reuse `wrr-panel`/`wrr-kpi-*`/
+  `wrr-table`/`wrr-btn`/`wrr-select` existing utk konsistensi visual).
+
+## Laporan Harian (Tab 7) — laporan siap-cetak untuk Direktur
 
 ### Tujuan
 Ringkasan rekonsiliasi harian OCBC yang bisa langsung ditunjukkan/dicetak
@@ -596,12 +681,17 @@ dgn credit, exact+fallback sama-sama match -> 1 group) +
 `normalizeCanonicalKey` (preserve leading zero) + TEST 7f/7g (fingerprint
 SAMA meski detik `transaction_date_time` berbeda dalam menit yang sama —
 regresi insiden DUPLICATE_BANK produksi 2.049 baris, lihat Troubleshooting;
-fingerprint TETAP beda kalau beda MENIT) — **69 test total**. Skenario
-DB/live (resync, idempotensi, resolution manual existing, cross-date,
-regresi Mandiri, filter FP di luar business_date) diverifikasi end-to-end
-lewat server sungguhan (pola yang sama dgn TEST 8/TEST 10 coverage-aware —
-lihat catatan di file test soal kenapa `runOcbcEngineAndPersist` sendiri
-tidak bisa di-unit-test tanpa DB).
+fingerprint TETAP beda kalau beda MENIT) + BALANCE-NEEDS TEST 1-7 (pure
+`computeOcbcBalanceNeedsPeriodic()`/`dateRangeArray()` — 24 bucket tetap,
+average dibagi `included_days` bukan `selected_days`, jam kosong pada
+included day dihitung 0, expected fee ikut batch masing-masing tanggal
+(bukan fee batch lain), rentang tanpa batch -> `empty:true`, contoh numerik
+spec bagian 4) — **76 test total**. Skenario DB/live (resync, idempotensi,
+resolution manual existing, cross-date, regresi Mandiri, filter FP di luar
+business_date, dedup `DISTINCT ON` di query balance-needs-periodic)
+diverifikasi end-to-end lewat server sungguhan (pola yang sama dgn TEST
+8/TEST 10 coverage-aware — lihat catatan di file test soal kenapa
+`runOcbcEngineAndPersist` sendiri tidak bisa di-unit-test tanpa DB).
 
 **Repair data cross-date yang terlanjur salah**:
 `node backend/scripts/repair-reconciliation-cross-date.js` (default

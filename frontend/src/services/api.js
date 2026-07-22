@@ -376,6 +376,9 @@ export const getReconciliationAnalytics = (params = {}) =>
   axios.get(`${API_URL}/api/warroom/reconciliation/analytics`, { params, headers: authHeaders() }).then(r => r.data);
 export const getReconciliationDailyReport = (params = {}) =>
   axios.get(`${API_URL}/api/warroom/reconciliation/daily-report`, { params, headers: authHeaders() }).then(r => r.data);
+// Tab "Kebutuhan Saldo" — kebutuhan saldo per periode (bukan 1 hari). TIDAK di-cache.
+export const getOcbcPeriodicBalanceNeeds = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/ocbc/balance-needs-periodic`, { params, headers: authHeaders() }).then(r => r.data);
 export const getReconciliationTransactions = (params = {}) =>
   axios.get(`${API_URL}/api/warroom/reconciliation/transactions`, { params, headers: authHeaders() }).then(r => r.data);
 // Export butuh Authorization header (JWT) -> tidak bisa lewat <a href> biasa,

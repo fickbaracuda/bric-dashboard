@@ -5527,6 +5527,19 @@ body {
 .wrr-daily-report-recommend-list { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 8px; font-size: 13px; color: var(--text-2); }
 .wrr-daily-report-copy-msg { font-size: 12px; color: var(--text-3); }
 
+/* ── Tab "Kebutuhan Saldo" Rekonsiliasi OCBC (wrr-balance-periodic-*) ── */
+.wrr-balance-periodic-custom-range { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; color: var(--text-3); }
+.wrr-balance-periodic-custom-range label { font-weight: 600; }
+.wrr-balance-periodic-chart-wrap { position: relative; height: 320px; }
+.wrr-balance-periodic-toggle { display: flex; gap: 4px; background: var(--bg-page); border: 1px solid var(--border); border-radius: 8px; padding: 3px; }
+.wrr-balance-periodic-toggle-btn {
+  padding: 5px 12px; border-radius: 6px; border: none; background: transparent; color: var(--text-3);
+  font-size: 12px; font-weight: 700; cursor: pointer; font-family: inherit;
+}
+.wrr-balance-periodic-toggle-btn:hover { color: var(--text-1); }
+.wrr-balance-periodic-toggle-btn--active { background: #DC2626; color: #fff; }
+.wrr-balance-periodic-total-row td { font-weight: 800; color: var(--text-1); background: var(--bg-page); border-top: 2px solid var(--border); }
+
 /* ── Print (Cetak / Simpan PDF) ── */
 @media print {
   @page { size: A4; margin: 15mm; }
