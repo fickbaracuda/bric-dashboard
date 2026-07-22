@@ -37,6 +37,7 @@ const reconciliationRoutes = require('./routes/warroom-reconciliation');
 const reconciliationMandiriRoutes = require('./routes/warroom-reconciliation-mandiri');
 const reconciliationBriRoutes = require('./routes/warroom-reconciliation-bri');
 const reconciliationBriBifastRoutes = require('./routes/warroom-reconciliation-bri-bifast');
+const reconciliationBniRoutes = require('./routes/warroom-reconciliation-bni');
 const financeBalanceRequestsRoutes = require('./routes/finance-balance-requests');
 const systemRoutes        = require('./routes/system');
 const requireAuth         = require('./middleware/auth');
@@ -196,6 +197,16 @@ app.get('/api/warroom/reconciliation/bri-bifast/resolution-history', requireAuth
 app.get('/api/warroom/reconciliation/bri-bifast/export',       requireAuth, reconciliationBriBifastRoutes.exportHandler);
 app.post('/api/warroom/reconciliation/bri-bifast/:id/resolve', requireAuth, reconciliationBriBifastRoutes.resolveHandler);
 app.get('/api/warroom/reconciliation/bri-bifast/:id/logs',     requireAuth, reconciliationBriBifastRoutes.actionLogsHandler);
+app.post('/api/warroom/reconciliation/bni/sync',        reconciliationBniRoutes.syncHandler); // token auth (APPS_SCRIPT_TOKEN), no JWT
+app.get('/api/warroom/reconciliation/bni/analytics',    requireAuth, reconciliationBniRoutes.analyticsHandler);
+app.get('/api/warroom/reconciliation/bni/daily-report', requireAuth, reconciliationBniRoutes.dailyReportHandler);
+app.get('/api/warroom/reconciliation/bni/transactions', requireAuth, reconciliationBniRoutes.transactionsHandler);
+app.get('/api/warroom/reconciliation/bni/raw-bank',     requireAuth, reconciliationBniRoutes.rawBankHandler);
+app.get('/api/warroom/reconciliation/bni/raw-fp',       requireAuth, reconciliationBniRoutes.rawFpHandler);
+app.get('/api/warroom/reconciliation/bni/resolution-history', requireAuth, reconciliationBniRoutes.resolutionHistoryHandler);
+app.get('/api/warroom/reconciliation/bni/export',       requireAuth, reconciliationBniRoutes.exportHandler);
+app.post('/api/warroom/reconciliation/bni/:id/resolve', requireAuth, reconciliationBniRoutes.resolveHandler);
+app.get('/api/warroom/reconciliation/bni/:id/logs',     requireAuth, reconciliationBniRoutes.actionLogsHandler);
 app.use('/api/warroom',        requireAuth, warroomRoutes);
 
 app.post('/api/data-raw/outlet/sync',    dataRawRoutes.outletSyncHandler);    // token auth, no JWT

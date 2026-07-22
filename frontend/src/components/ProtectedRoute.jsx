@@ -11,6 +11,7 @@ const RECONCILIATION_PATHS = [
   '/war-room/rekonsiliasi/mandiri',
   '/war-room/rekonsiliasi/bri',
   '/war-room/rekonsiliasi/bri-bifast',
+  '/war-room/rekonsiliasi/bni',
 ];
 const DEFAULT_RECONCILIATION_PATH = '/war-room/rekonsiliasi-ocbc';
 

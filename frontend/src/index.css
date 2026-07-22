@@ -5510,6 +5510,15 @@ body {
 .wrrbri-badge--extreme { background: #FEE2E2; color: #DC2626; }
 .wrrbri-badge--impossible_order { background: #450A0A; color: #FCA5A5; }
 
+/* BNI (reuse .wrrbri-badge base) — coverage_status tambahan yang belum ada
+   di set BRI/BRI BI-FAST (boundary_partial/undetermined), + tema BNI #F15A23
+   dipakai di WarRoomReconciliationBni.jsx via inline COLOR const (pola sama
+   dgn semua halaman rekonsiliasi lain -- TIDAK ada CSS terpisah per bank,
+   hanya reuse kelas wrr dan wrrbri yang sudah generik). */
+.wrrbri-badge--boundary_partial { background: #FEF3C7; color: #B45309; }
+.wrrbri-badge--undetermined { background: #F3F4F6; color: #9CA3AF; }
+.wrrbri-badge--funding_credit { background: #DBEAFE; color: #1D4ED8; }
+
 /* ── Laporan Harian Rekonsiliasi (tab "Laporan Harian" OCBC) ── */
 .wrr-daily-report-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
 .wrr-daily-report-header {

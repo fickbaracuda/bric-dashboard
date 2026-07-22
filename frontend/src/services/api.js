@@ -474,6 +474,26 @@ export const resolveReconciliationBriBifast = (id, data) =>
 export const getReconciliationBriBifastLogs = (id) =>
   axios.get(`${API_URL}/api/warroom/reconciliation/bri-bifast/${id}/logs`, { headers: authHeaders() }).then(r => r.data);
 
+/* WAR-ROOM — Rekonsiliasi FP vs BNI (TIDAK di-cache — data operasional, harus selalu fresh) */
+export const getReconciliationBniAnalytics = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/bni/analytics`, { params, headers: authHeaders() }).then(r => r.data);
+export const getReconciliationBniDailyReport = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/bni/daily-report`, { params, headers: authHeaders() }).then(r => r.data);
+export const getReconciliationBniTransactions = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/bni/transactions`, { params, headers: authHeaders() }).then(r => r.data);
+export const getReconciliationBniRawBank = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/bni/raw-bank`, { params, headers: authHeaders() }).then(r => r.data);
+export const getReconciliationBniRawFp = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/bni/raw-fp`, { params, headers: authHeaders() }).then(r => r.data);
+export const getReconciliationBniResolutionHistory = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/bni/resolution-history`, { params, headers: authHeaders() }).then(r => r.data);
+export const exportReconciliationBni = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/bni/export`, { params, headers: authHeaders(), responseType: 'blob' }).then(r => r.data);
+export const resolveReconciliationBni = (id, data) =>
+  axios.post(`${API_URL}/api/warroom/reconciliation/bni/${id}/resolve`, data, { headers: authHeaders() }).then(r => r.data);
+export const getReconciliationBniLogs = (id) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/bni/${id}/logs`, { headers: authHeaders() }).then(r => r.data);
+
 /* WAR-ROOM — QRIS Issuance Control Tower */
 export const getQrisControlTowerAnalytics = () =>
   withCache('qris-control-tower-analytics', () =>
