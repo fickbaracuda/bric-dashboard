@@ -5528,6 +5528,7 @@ body {
 .wrr-daily-report-copy-msg { font-size: 12px; color: var(--text-3); }
 
 /* ── Tab "Kebutuhan Saldo" Rekonsiliasi OCBC (wrr-balance-periodic-*) ── */
+.wrr-balance-periodic-export-group { display: flex; gap: 8px; flex-wrap: wrap; }
 .wrr-balance-periodic-custom-range { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; color: var(--text-3); }
 .wrr-balance-periodic-custom-range label { font-weight: 600; }
 .wrr-balance-periodic-chart-wrap { position: relative; height: 320px; }

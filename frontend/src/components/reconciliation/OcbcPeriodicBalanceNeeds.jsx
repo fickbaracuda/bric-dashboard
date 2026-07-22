@@ -48,6 +48,42 @@ function csvEscape(v) {
   const s = String(v);
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
+function csvRow(obj) {
+  return Object.values(obj).map(csvEscape).join(',');
+}
+
+/* Data mentah (numerik, bukan string ter-format) supaya siap dihitung ulang
+   di Excel — dipakai bareng oleh export CSV & XLS supaya isinya konsisten. */
+function hourlyExportRows(hourly) {
+  return (hourly || []).map(h => ({
+    'Jam': h.label,
+    'Total Transaksi': h.total_transaction,
+    'Average Transaksi/Hari': h.average_transaction_per_day,
+    'Total Principal': h.total_principal,
+    'Total Fee': h.total_expected_fee,
+    'Total Kebutuhan': h.total_balance_need,
+    'Average Kebutuhan/Hari': h.average_balance_need_per_day,
+    'Maximum Harian': h.maximum_daily_need,
+    'Peak Date': h.peak_date,
+  }));
+}
+function dailyExportRows(daily) {
+  return (daily || []).map(d => ({
+    'Tanggal': d.business_date,
+    'Jumlah Transaksi': d.transaction_count,
+    'Principal': d.principal,
+    'Expected Fee': d.expected_fee,
+    'Total Kebutuhan': d.total_balance_need,
+    'Peak Hour': hourLabel(d.peak_hour),
+    'Kebutuhan pada Peak Hour': d.peak_hour_need,
+  }));
+}
+function buildBalanceNeedsWorkbook(XLSX, data) {
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hourlyExportRows(data.hourly)), 'Rekap Per Jam');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(dailyExportRows(data.daily)), 'Rekap Per Tanggal');
+  return wb;
+}
 
 /* ─── Tanggal (Asia/Jakarta) — SAMA pola dgn todayJakarta() backend, murni util tanggal kalender jadi aman dihitung via Date.UTC (tidak perlu re-anchor timezone tiap operasi). ─── */
 function todayJakartaIso() {
@@ -226,21 +262,34 @@ export default function OcbcPeriodicBalanceNeeds() {
       .finally(() => { if (myRequestId === requestIdRef.current) setLoading(false); });
   }, [range.start, range.end]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleExport = useCallback(() => {
+  const handleExportCsv = useCallback(() => {
     if (!data || data.empty) return;
+    const hourlyRows = hourlyExportRows(data.hourly);
+    const dailyRows = dailyExportRows(data.daily);
     const lines = [];
     lines.push('REKAP PER JAM');
-    lines.push(['Hour', 'Total Transaction', 'Average Transaction Per Day', 'Total Principal', 'Total Expected Fee', 'Total Balance Need', 'Average Balance Need Per Day', 'Maximum Daily Need', 'Peak Date'].join(','));
-    for (const h of data.hourly || []) {
-      lines.push([hourLabel(h.hour), h.total_transaction, h.average_transaction_per_day, h.total_principal, h.total_expected_fee, h.total_balance_need, h.average_balance_need_per_day, h.maximum_daily_need, h.peak_date].map(csvEscape).join(','));
-    }
+    if (hourlyRows.length) lines.push(Object.keys(hourlyRows[0]).join(','));
+    for (const row of hourlyRows) lines.push(csvRow(row));
     lines.push('');
     lines.push('REKAP PER TANGGAL');
-    lines.push(['Tanggal', 'Jumlah Transaksi', 'Principal', 'Expected Fee', 'Total Kebutuhan', 'Peak Hour', 'Kebutuhan pada Peak Hour'].join(','));
-    for (const d of data.daily || []) {
-      lines.push([d.business_date, d.transaction_count, d.principal, d.expected_fee, d.total_balance_need, hourLabel(d.peak_hour), d.peak_hour_need].map(csvEscape).join(','));
-    }
+    if (dailyRows.length) lines.push(Object.keys(dailyRows[0]).join(','));
+    for (const row of dailyRows) lines.push(csvRow(row));
     downloadBlob(new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' }), `kebutuhan-saldo-ocbc-${range.start}_${range.end}.csv`);
+  }, [data, range]);
+
+  const [xlsxLoading, setXlsxLoading] = useState(false);
+  // Lazy-load 'xlsx' (SheetJS, ~330kb) HANYA saat tombol Export XLS diklik --
+  // supaya tidak membengkakkan bundle utama yang dimuat semua halaman.
+  const handleExportXlsx = useCallback(async () => {
+    if (!data || data.empty) return;
+    setXlsxLoading(true);
+    try {
+      const XLSX = await import('xlsx');
+      const wb = buildBalanceNeedsWorkbook(XLSX, data);
+      XLSX.writeFile(wb, `kebutuhan-saldo-ocbc-${range.start}_${range.end}.xlsx`);
+    } finally {
+      setXlsxLoading(false);
+    }
   }, [data, range]);
 
   const isEmpty = !loading && !error && !validationError && data?.empty === true;
@@ -251,9 +300,14 @@ export default function OcbcPeriodicBalanceNeeds() {
       <div className="wrr-panel">
         <div className="wrr-panel-title-row">
           <div className="wrr-panel-title"><i className="ti ti-filter" style={{ color: COLOR }} /> Filter Periode</div>
-          <button className="wrr-btn wrr-btn-primary" onClick={handleExport} disabled={!hasData}>
-            <i className="ti ti-download" /> Export Rekap Saldo
-          </button>
+          <div className="wrr-balance-periodic-export-group">
+            <button className="wrr-btn" onClick={handleExportCsv} disabled={!hasData}>
+              <i className="ti ti-download" /> Export CSV
+            </button>
+            <button className="wrr-btn wrr-btn-primary" onClick={handleExportXlsx} disabled={!hasData || xlsxLoading}>
+              <i className="ti ti-download" /> {xlsxLoading ? 'Menyiapkan...' : 'Export XLS'}
+            </button>
+          </div>
         </div>
         <div className="wrr-filter-row">
           <select className="wrr-select" value={preset} onChange={e => setPreset(e.target.value)}>

@@ -549,8 +549,17 @@ lihat bagian Testing) dipanggil oleh handler dengan hasil query sbg input.
 - Tabel per jam (+ baris TOTAL) dan tabel detail per tanggal, keduanya
   `wrr-table` dengan scroll horizontal mobile bawaan (`wrr-table-wrap`).
   Empty state: "Belum ada batch Rekonsiliasi OCBC pada periode ini."
-- Tombol **Export Rekap Saldo** — 1 file CSV dgn 2 section (REKAP PER JAM +
-  REKAP PER TANGGAL).
+- 2 tombol export, sama-sama berisi 2 bagian (Rekap Per Jam + Rekap Per
+  Tanggal): **Export CSV** (1 file `.csv`, 2 section dgn baris judul
+  `REKAP PER JAM`/`REKAP PER TANGGAL`) dan **Export XLS** (1 file `.xlsx`
+  asli, 2 sheet terpisah — "Rekap Per Jam" & "Rekap Per Tanggal" — via
+  library `xlsx` SheetJS, **diinstall dari CDN resmi SheetJS**
+  (`https://cdn.sheetjs.com/xlsx-latest/xlsx-latest.tgz`), BUKAN dari npm
+  registry — versi npm registry-nya sudah lama tidak di-update & punya
+  vulnerability high-severity tanpa fix (prototype pollution + ReDoS),
+  sedangkan build CDN resmi sudah dipatch. Lihat `frontend/package.json`
+  (`"xlsx": "https://cdn.sheetjs.com/..."`) — kalau suatu saat perlu update
+  versi, ganti URL tarball-nya, JANGAN `npm install xlsx` biasa.
 - CSS prefix: `wrr-balance-periodic-*` (reuse `wrr-panel`/`wrr-kpi-*`/
   `wrr-table`/`wrr-btn`/`wrr-select` existing utk konsistensi visual).
 
