@@ -448,7 +448,7 @@ async function syncHandler(req, res) {
             transaction_id_from_hash, transaction_id_from_reference, extracted_transaction_id,
             extraction_confidence, id_conflict, coverage_status, is_actionable, eligible_for_match_rate,
             recon_status, aging_minutes, notes, reversal_date, reversal_amount, reversal_lookup_source, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,true,true,$29,$30,$31,$32,$33,$34,NOW())
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,NOW())
          ON CONFLICT (batch_id, canonical_transaction_key) DO UPDATE SET
            bank_code=EXCLUDED.bank_code, id_transaksi=EXCLUDED.id_transaksi,
            id_outlet=EXCLUDED.id_outlet, id_produk=EXCLUDED.id_produk, id_biller=EXCLUDED.id_biller,
@@ -462,7 +462,7 @@ async function syncHandler(req, res) {
            transaction_id_from_hash=EXCLUDED.transaction_id_from_hash, transaction_id_from_reference=EXCLUDED.transaction_id_from_reference,
            extracted_transaction_id=EXCLUDED.extracted_transaction_id, extraction_confidence=EXCLUDED.extraction_confidence,
            id_conflict=EXCLUDED.id_conflict, coverage_status=EXCLUDED.coverage_status,
-           is_actionable=true, eligible_for_match_rate=true,
+           is_actionable=EXCLUDED.is_actionable, eligible_for_match_rate=EXCLUDED.eligible_for_match_rate,
            recon_status=EXCLUDED.recon_status, aging_minutes=EXCLUDED.aging_minutes, notes=EXCLUDED.notes,
            reversal_date=EXCLUDED.reversal_date, reversal_amount=EXCLUDED.reversal_amount,
            reversal_lookup_source=EXCLUDED.reversal_lookup_source, updated_at=NOW()`,
@@ -472,7 +472,7 @@ async function syncHandler(req, res) {
           r.variancePrincipal, r.varianceFee, r.timeDifferenceSeconds, r.timeOrderStatus, r.matchingMethod,
           r.beneficiaryAccount, r.recipientName, r.branch, r.journalNo,
           r.transactionIdFromHash, r.transactionIdFromReference, r.extractedTransactionId,
-          r.extractionConfidence, !!r.idConflict, r.coverageStatus,
+          r.extractionConfidence, !!r.idConflict, r.coverageStatus, true, true,
           r.reconStatus, r.agingMinutes, r.notes, r.reversalDate, r.reversalAmount, r.reversalLookupSource,
         ]
       );
