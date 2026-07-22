@@ -8,6 +8,8 @@ import {
   requestReconciliationSync,
 } from '../services/api';
 import BalanceRequestButton from '../components/reconciliation/BalanceRequestButton';
+import PeriodicBalanceNeeds from '../components/reconciliation/PeriodicBalanceNeeds';
+import { getBniPeriodicBalanceNeeds } from '../services/api';
 
 // Halaman ini REUSE layout/komponen generik "wrr-*"/"wrrbri-*" yang sudah
 // dibangun utk Rekonsiliasi OCBC/Mandiri/BRI/BRI BI-FAST existing
@@ -24,6 +26,7 @@ const TABS = [
   { key: 'funding', label: 'Saldo & Funding Analysis', icon: 'ti-cash' },
   { key: 'time', label: 'Time & Posting Analysis', icon: 'ti-clock' },
   { key: 'raw', label: 'Raw Data & Audit', icon: 'ti-database' },
+  { key: 'balance-needs', label: 'Kebutuhan Saldo', icon: 'ti-report-money' },
   { key: 'daily-report', label: 'Laporan Harian', icon: 'ti-file-report' },
 ];
 const EXCEPTION_STATUSES = [
@@ -1063,6 +1066,9 @@ export default function WarRoomReconciliationBni() {
           {activeTab === 'funding' && <FundingTab analytics={analytics} date={date} />}
           {activeTab === 'time' && <TimeAnalysisTab analytics={analytics} />}
           {activeTab === 'raw' && <RawDataTab analytics={analytics} date={date} onExport={handleExport} exporting={exporting} />}
+          {activeTab === 'balance-needs' && (
+            <PeriodicBalanceNeeds bankCode="BNI" bankLabel="BNI" themeColor={COLOR} fetchData={getBniPeriodicBalanceNeeds} supportsFundingComparison defaultRange="7d" />
+          )}
           {activeTab === 'daily-report' && <DailyReportTab date={date} />}
         </>)}
 

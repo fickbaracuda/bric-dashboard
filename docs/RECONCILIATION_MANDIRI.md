@@ -136,7 +136,8 @@ presisi jam-menit tidak hilang) / `account_no` / `currency` /
 | `GET /api/warroom/reconciliation/sync-request-status?bank_code=MANDIRI` | `APPS_SCRIPT_TOKEN` | Endpoint GENERIK (bukan di bawah `/mandiri`) — dipanggil Apps Script Mandiri tiap 1 menit, cek tombol "Sync Now" |
 | `POST /api/warroom/reconciliation/request-sync` | JWT | Endpoint GENERIK (bukan di bawah `/mandiri`) — tombol "Sync Now", body `{bank_code: 'MANDIRI'}` |
 | `GET /api/warroom/reconciliation/mandiri/analytics?date=` | JWT | Kalau `date` TIDAK dikirim, fallback ke batch tanggal PALING BARU (`ORDER BY business_date DESC LIMIT 1`) — beda dari `daily-report` yang default ke hari ini, TIDAK PERNAH fallback. Response: `meta`, `active_batch`, `data_quality_warning`, `summary` (+ `actionable_exception_count`/`actionable_exception_nominal`), `status_distribution`, `fee_analysis`, `time_analysis`, `balance_validation`, `recent_batches` (14 batch terakhir) |
-| `GET /api/warroom/reconciliation/mandiri/daily-report?date=` | JWT | **Laporan Harian** (tab 7) — lihat bagian tersendiri di bawah |
+| `GET /api/warroom/reconciliation/mandiri/balance-needs-periodic?start_date=&end_date=` | JWT | **Kebutuhan Saldo** (tab 7) — SHARED service, lihat bagian tersendiri di bawah |
+| `GET /api/warroom/reconciliation/mandiri/daily-report?date=` | JWT | **Laporan Harian** (tab 8) — lihat bagian tersendiri di bawah |
 | `GET /api/warroom/reconciliation/mandiri/transactions?date=&status=&id_outlet=&id_produk=&id_biller=&account_no=&search=&page=&limit=&sort=&order=` | JWT | List berpaginasi, `status` boleh comma-separated. TIDAK ada param `coverage_status` (Mandiri tidak punya konsep itu) |
 | `GET /api/warroom/reconciliation/mandiri/raw-bank?date=` | JWT | Raw baris mutasi Mandiri + hasil ekstraksi (account_no, currency, post_date_time, remarks, additional_desc, debit, credit, close_balance, extracted_transaction_id, bank_row_type, extraction_method) |
 | `GET /api/warroom/reconciliation/mandiri/raw-fp?date=` | JWT | Raw baris DATA FP |
@@ -185,9 +186,29 @@ jadi tidak perlu filter tambahan di sisi backend Laporan Harian.
   yang dibangun utk Laporan Harian OCBC, TIDAK diduplikasi) + `wrrm-*`
   (elemen BARU khusus Mandiri: validasi saldo, bucket waktu, sub-tab Raw
   Data & Audit)
-- **7 tab (urutan tetap, Laporan Harian WAJIB paling akhir)**: Executive
+- **8 tab (urutan tetap, Laporan Harian WAJIB paling akhir)**: Executive
   Summary, Hasil Rekonsiliasi, Exception Queue, Fee Analysis, **Time &
-  Posting Analysis**, Raw Data & Audit, **Laporan Harian**.
+  Posting Analysis**, Raw Data & Audit, **Kebutuhan Saldo**, **Laporan
+  Harian**.
+
+## Kebutuhan Saldo (Tab 7) — SHARED service, bukan implementasi terpisah
+Dipasang via komponen shared
+`frontend/src/components/reconciliation/PeriodicBalanceNeeds.jsx`
+(`bankCode="MANDIRI"`, `bankLabel="Mandiri"`, tanpa
+`supportsFundingComparison` — panel Funding Comparison hanya utk BNI),
+fetch via `getMandiriPeriodicBalanceNeeds()` di `services/api.js`. Route
+handler `balanceNeedsPeriodicHandler` di
+`warroom-reconciliation-mandiri.js` HANYA mengunci
+`bankCode: 'MANDIRI'` lalu memanggil
+`periodicBalanceNeeds.buildBalanceNeedsResponse()` — tidak menduplikasi
+rumus apa pun. Expected fee per tanggal diambil langsung dari
+`recon_sync_batches.expected_fee` (diisi `mandiriAdapter.js` saat sync),
+fallback default Rp100 (`DEFAULT_FEE_BY_BANK.MANDIRI`) hanya kalau batch
+genuinely tidak punya nilai. Mekanisme lengkap (included days, dedup
+transaksi, 24 bucket jam, KPI, export, testing) — lihat
+`docs/RECONCILIATION_BNI.md` bagian "Kebutuhan Saldo", dijelaskan sekali
+di sana krn identik di semua bank kecuali panel Funding Comparison (BNI
+saja).
 
 ### Tab 1 — Executive Summary
 KPI grid 12-card, susunannya SAMA dgn OCBC (disamakan menyusul permintaan

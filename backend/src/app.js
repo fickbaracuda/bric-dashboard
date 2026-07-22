@@ -170,6 +170,7 @@ app.get('/api/warroom/reconciliation/:id/logs',     requireAuth, reconciliationR
 app.post('/api/warroom/reconciliation/mandiri/sync',        reconciliationMandiriRoutes.syncHandler); // token auth (APPS_SCRIPT_TOKEN), no JWT
 app.get('/api/warroom/reconciliation/mandiri/analytics',    requireAuth, reconciliationMandiriRoutes.analyticsHandler);
 app.get('/api/warroom/reconciliation/mandiri/daily-report', requireAuth, reconciliationMandiriRoutes.dailyReportHandler);
+app.get('/api/warroom/reconciliation/mandiri/balance-needs-periodic', requireAuth, reconciliationMandiriRoutes.balanceNeedsPeriodicHandler); // tab "Kebutuhan Saldo"
 app.get('/api/warroom/reconciliation/mandiri/transactions', requireAuth, reconciliationMandiriRoutes.transactionsHandler);
 app.get('/api/warroom/reconciliation/mandiri/raw-bank',     requireAuth, reconciliationMandiriRoutes.rawBankHandler);
 app.get('/api/warroom/reconciliation/mandiri/raw-fp',       requireAuth, reconciliationMandiriRoutes.rawFpHandler);
@@ -180,6 +181,7 @@ app.get('/api/warroom/reconciliation/mandiri/:id/logs',     requireAuth, reconci
 app.post('/api/warroom/reconciliation/bri/sync',        reconciliationBriRoutes.syncHandler); // token auth (APPS_SCRIPT_TOKEN), no JWT
 app.get('/api/warroom/reconciliation/bri/analytics',    requireAuth, reconciliationBriRoutes.analyticsHandler);
 app.get('/api/warroom/reconciliation/bri/daily-report', requireAuth, reconciliationBriRoutes.dailyReportHandler);
+app.get('/api/warroom/reconciliation/bri/balance-needs-periodic', requireAuth, reconciliationBriRoutes.balanceNeedsPeriodicHandler); // tab "Kebutuhan Saldo"
 app.get('/api/warroom/reconciliation/bri/transactions', requireAuth, reconciliationBriRoutes.transactionsHandler);
 app.get('/api/warroom/reconciliation/bri/raw-bank',     requireAuth, reconciliationBriRoutes.rawBankHandler);
 app.get('/api/warroom/reconciliation/bri/raw-fp',       requireAuth, reconciliationBriRoutes.rawFpHandler);
@@ -190,6 +192,7 @@ app.get('/api/warroom/reconciliation/bri/:id/logs',     requireAuth, reconciliat
 app.post('/api/warroom/reconciliation/bri-bifast/sync',        reconciliationBriBifastRoutes.syncHandler); // token auth (APPS_SCRIPT_TOKEN), no JWT
 app.get('/api/warroom/reconciliation/bri-bifast/analytics',    requireAuth, reconciliationBriBifastRoutes.analyticsHandler);
 app.get('/api/warroom/reconciliation/bri-bifast/daily-report', requireAuth, reconciliationBriBifastRoutes.dailyReportHandler);
+app.get('/api/warroom/reconciliation/bri-bifast/balance-needs-periodic', requireAuth, reconciliationBriBifastRoutes.balanceNeedsPeriodicHandler); // tab "Kebutuhan Saldo"
 app.get('/api/warroom/reconciliation/bri-bifast/transactions', requireAuth, reconciliationBriBifastRoutes.transactionsHandler);
 app.get('/api/warroom/reconciliation/bri-bifast/raw-bank',     requireAuth, reconciliationBriBifastRoutes.rawBankHandler);
 app.get('/api/warroom/reconciliation/bri-bifast/raw-fp',       requireAuth, reconciliationBriBifastRoutes.rawFpHandler);
@@ -200,6 +203,7 @@ app.get('/api/warroom/reconciliation/bri-bifast/:id/logs',     requireAuth, reco
 app.post('/api/warroom/reconciliation/bni/sync',        reconciliationBniRoutes.syncHandler); // token auth (APPS_SCRIPT_TOKEN), no JWT
 app.get('/api/warroom/reconciliation/bni/analytics',    requireAuth, reconciliationBniRoutes.analyticsHandler);
 app.get('/api/warroom/reconciliation/bni/daily-report', requireAuth, reconciliationBniRoutes.dailyReportHandler);
+app.get('/api/warroom/reconciliation/bni/balance-needs-periodic', requireAuth, reconciliationBniRoutes.balanceNeedsPeriodicHandler); // tab "Kebutuhan Saldo"
 app.get('/api/warroom/reconciliation/bni/transactions', requireAuth, reconciliationBniRoutes.transactionsHandler);
 app.get('/api/warroom/reconciliation/bni/raw-bank',     requireAuth, reconciliationBniRoutes.rawBankHandler);
 app.get('/api/warroom/reconciliation/bni/raw-fp',       requireAuth, reconciliationBniRoutes.rawFpHandler);

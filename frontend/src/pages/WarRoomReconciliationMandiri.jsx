@@ -7,6 +7,8 @@ import {
 } from '../services/api';
 import DailyReportMandiriTab from '../components/reconciliation/DailyReportMandiriTab';
 import BalanceRequestButton from '../components/reconciliation/BalanceRequestButton';
+import PeriodicBalanceNeeds from '../components/reconciliation/PeriodicBalanceNeeds';
+import { getMandiriPeriodicBalanceNeeds } from '../services/api';
 
 // Halaman ini REUSE layout/komponen generik "wrr-*" yang sudah dibangun untuk
 // Rekonsiliasi OCBC (frontend/src/pages/WarRoomReconciliationOcbc.jsx) —
@@ -23,6 +25,7 @@ const TABS = [
   { key: 'fee', label: 'Fee Analysis', icon: 'ti-receipt-2' },
   { key: 'time', label: 'Time & Posting Analysis', icon: 'ti-clock' },
   { key: 'raw', label: 'Raw Data & Audit', icon: 'ti-database' },
+  { key: 'balance-needs', label: 'Kebutuhan Saldo', icon: 'ti-cash' },
   { key: 'daily-report', label: 'Laporan Harian', icon: 'ti-file-report' },
 ];
 const EXCEPTION_STATUSES = [
@@ -943,6 +946,9 @@ export default function WarRoomReconciliationMandiri() {
           {activeTab === 'fee' && <FeeAnalysisTab analytics={analytics} />}
           {activeTab === 'time' && <TimeAnalysisTab analytics={analytics} />}
           {activeTab === 'raw' && <RawDataTab analytics={analytics} date={date} onExport={handleExport} exporting={exporting} />}
+          {activeTab === 'balance-needs' && (
+            <PeriodicBalanceNeeds bankCode="MANDIRI" bankLabel="Mandiri" themeColor={COLOR} fetchData={getMandiriPeriodicBalanceNeeds} defaultRange="7d" />
+          )}
           {activeTab === 'daily-report' && <DailyReportMandiriTab date={date} />}
         </>)}
 

@@ -376,9 +376,23 @@ export const getReconciliationAnalytics = (params = {}) =>
   axios.get(`${API_URL}/api/warroom/reconciliation/analytics`, { params, headers: authHeaders() }).then(r => r.data);
 export const getReconciliationDailyReport = (params = {}) =>
   axios.get(`${API_URL}/api/warroom/reconciliation/daily-report`, { params, headers: authHeaders() }).then(r => r.data);
-// Tab "Kebutuhan Saldo" — kebutuhan saldo per periode (bukan 1 hari). TIDAK di-cache.
-export const getOcbcPeriodicBalanceNeeds = (params = {}) =>
-  axios.get(`${API_URL}/api/warroom/reconciliation/ocbc/balance-needs-periodic`, { params, headers: authHeaders() }).then(r => r.data);
+// Tab "Kebutuhan Saldo" — kebutuhan saldo per periode (bukan 1 hari). TIDAK
+// di-cache. `signal` (AbortController, opsional) WAJIB dipisah dari `params`
+// sebelum diteruskan ke axios -- kalau ikut masuk `params` akan salah
+// diserialisasi jadi query string literal ("?signal=[object AbortSignal]").
+export const getOcbcPeriodicBalanceNeeds = ({ signal, ...params } = {}) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/ocbc/balance-needs-periodic`, { params, headers: authHeaders(), signal }).then(r => r.data);
+// Generic — dipakai shared component PeriodicBalanceNeeds.jsx utk bank
+// SELAIN OCBC (Mandiri/BRI/BRI BI-FAST/BNI berbagi 1 fungsi ini via prop
+// `basePath`, wrapper per-bank di bawah HANYA mengunci basePath). Sengaja
+// TIDAK dipakai utk OCBC (getOcbcPeriodicBalanceNeeds tetap dipertahankan
+// apa adanya demi backward-compat, walau endpoint backend-nya sama pola).
+export const getPeriodicBalanceNeeds = (basePath, { signal, ...params } = {}) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/${basePath}/balance-needs-periodic`, { params, headers: authHeaders(), signal }).then(r => r.data);
+export const getMandiriPeriodicBalanceNeeds = (params = {}) => getPeriodicBalanceNeeds('mandiri', params);
+export const getBriPeriodicBalanceNeeds = (params = {}) => getPeriodicBalanceNeeds('bri', params);
+export const getBriBifastPeriodicBalanceNeeds = (params = {}) => getPeriodicBalanceNeeds('bri-bifast', params);
+export const getBniPeriodicBalanceNeeds = (params = {}) => getPeriodicBalanceNeeds('bni', params);
 export const getReconciliationTransactions = (params = {}) =>
   axios.get(`${API_URL}/api/warroom/reconciliation/transactions`, { params, headers: authHeaders() }).then(r => r.data);
 // Export butuh Authorization header (JWT) -> tidak bisa lewat <a href> biasa,

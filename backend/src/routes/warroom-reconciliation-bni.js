@@ -25,6 +25,7 @@
  */
 
 const pool = require('../db');
+const periodicBalanceNeeds = require('../reconciliation/periodicBalanceNeeds');
 const {
   extractToken, nullIfEmpty, cleanNum, isValidIdTransaksi,
   csvEscape, safeDiv, RECON_STATUSES, EXCEPTION_STATUSES, normalizeCanonicalKey,
@@ -1176,6 +1177,31 @@ async function actionLogsHandler(req, res) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// GET /api/warroom/reconciliation/bni/balance-needs-periodic
+// Tab "Kebutuhan Saldo" — wrapper TIPIS: hanya mengunci bank_code='BNI' dan
+// memanggil shared service (backend/src/reconciliation/
+// periodicBalanceNeeds.js, referensi utama = implementasi OCBC). TIDAK ADA
+// rumus/matching logic BNI yang disentuh di sini. `bank_specific` diisi
+// via computeBniFundingComparison() — HANYA utk BNI (spec eksplisit:
+// funding credit BUKAN kebutuhan saldo, cuma info pembanding tambahan).
+// ─────────────────────────────────────────────────────────────────────────
+async function balanceNeedsPeriodicHandler(req, res) {
+  try {
+    res.set('Cache-Control', 'no-store');
+    const startDate = req.query.start_date;
+    const endDate = req.query.end_date;
+    const result = await periodicBalanceNeeds.buildBalanceNeedsResponse({
+      pool, bankCode: 'BNI', startDate, endDate,
+      enrichBankSpecific: periodicBalanceNeeds.computeBniFundingComparison,
+    });
+    res.status(result.statusCode).json(result.body);
+  } catch (e) {
+    console.error('reconciliation-bni balance-needs-periodic error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+}
+
 module.exports = {
   syncHandler,
   analyticsHandler,
@@ -1186,6 +1212,7 @@ module.exports = {
   exportHandler,
   resolveHandler,
   actionLogsHandler,
+  balanceNeedsPeriodicHandler,
   resolutionHistoryHandler,
   // exported utk unit test (backend/scripts/test-reconciliation-bni.js)
   buildTransactionsQuery,

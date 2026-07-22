@@ -228,7 +228,8 @@ bank sama sekali).
 | `GET /api/warroom/reconciliation/sync-request-status?bank_code=BRI` | `APPS_SCRIPT_TOKEN` | Endpoint GENERIK (bukan di bawah `/bri`, dipakai bareng OCBC/Mandiri) — dipanggil Apps Script BRI tiap 1 menit, cek tombol "Sync Now" |
 | `POST /api/warroom/reconciliation/request-sync` | JWT | Endpoint GENERIK — tombol "Sync Now", body `{bank_code: 'BRI'}` |
 | `GET /api/warroom/reconciliation/bri/analytics?date=` | JWT | Kalau `date` TIDAK dikirim, fallback ke batch tanggal PALING BARU (`ORDER BY business_date DESC LIMIT 1`) — kalau `date` DIKIRIM, query exact match, TIDAK fallback. Response: `meta`, `active_batch`, `summary` (+ `actionable_exception_count`/`actionable_exception_nominal`), `status_distribution`, `coverage`, `fee_analysis`, `time_analysis`, `balance_validation`, `extraction_summary`, `cross_date_reversal_count`, `data_quality_warning`, `recent_batches` (14 batch terakhir) |
-| `GET /api/warroom/reconciliation/bri/daily-report?date=` | JWT | **Laporan Harian** (tab 7) — lihat bagian tersendiri di bawah |
+| `GET /api/warroom/reconciliation/bri/balance-needs-periodic?start_date=&end_date=` | JWT | **Kebutuhan Saldo** (tab 7) — SHARED service, lihat bagian tersendiri di bawah |
+| `GET /api/warroom/reconciliation/bri/daily-report?date=` | JWT | **Laporan Harian** (tab 8) — lihat bagian tersendiri di bawah |
 | `GET /api/warroom/reconciliation/bri/transactions?date=&status=&coverage_status=&id_outlet=&id_produk=&id_biller=&search=&page=&limit=&sort=&order=` | JWT | List berpaginasi, `status` boleh comma-separated, `coverage_status` (`IN_FP_COVERAGE`/`OUTSIDE_FP_COVERAGE`) bisa difilter — TIDAK ada di Mandiri |
 | `GET /api/warroom/reconciliation/bri/raw-bank?date=` | JWT | Raw mutasi BRI + hasil ekstraksi/klasifikasi/balance check (18 kolom + JSON `raw_data`) |
 | `GET /api/warroom/reconciliation/bri/raw-fp?date=` | JWT | Raw baris DATA FP |
@@ -330,10 +331,25 @@ extraction_summary: {
   - `.wrrbri-badge` + varian `--in_fp_coverage`/`--outside_fp_coverage`
     (Coverage), `--high`/`--medium`/`--conflict`/`--none` (Extraction
     Confidence)
-- **7 tab (urutan tetap, Laporan Harian WAJIB paling akhir)**: Executive
+- **8 tab (urutan tetap, Laporan Harian WAJIB paling akhir)**: Executive
   Summary, Hasil Rekonsiliasi, Exception Queue, Fee Analysis, Time &
   Posting Analysis, Raw Data & Audit (4 sub-tab: Raw DATA FP, Raw DATA
-  BRI, Sync History, Resolution History), **Laporan Harian**.
+  BRI, Sync History, Resolution History), **Kebutuhan Saldo**, **Laporan
+  Harian**.
+
+## Kebutuhan Saldo (Tab 7) — SHARED service, bukan implementasi terpisah
+Dipasang via komponen shared
+`frontend/src/components/reconciliation/PeriodicBalanceNeeds.jsx`
+(`bankCode="BRI"`, `bankLabel="BRI"`, tanpa `supportsFundingComparison`),
+fetch via `getBriPeriodicBalanceNeeds()` di `services/api.js`. Route
+handler `balanceNeedsPeriodicHandler` di `warroom-reconciliation-bri.js`
+HANYA mengunci `bankCode: 'BRI'` lalu memanggil
+`periodicBalanceNeeds.buildBalanceNeedsResponse()`. Expected fee per
+tanggal diambil dari `recon_sync_batches.expected_fee` (kolom batch, BUKAN
+raw debit mentah), fallback default Rp150 (`DEFAULT_FEE_BY_BANK.BRI`)
+hanya kalau batch genuinely tidak punya nilai. Mekanisme lengkap (included
+days, dedup transaksi, 24 bucket jam, KPI, export, testing) — lihat
+`docs/RECONCILIATION_BNI.md` bagian "Kebutuhan Saldo".
 
 ### Tab 1 — Executive Summary
 Panel "Coverage Window" (scope mode, coverage start/end, jumlah bank

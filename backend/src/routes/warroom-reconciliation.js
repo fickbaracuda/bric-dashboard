@@ -12,6 +12,7 @@
 
 const pool = require('../db');
 const crypto = require('crypto');
+const periodicBalanceNeeds = require('../reconciliation/periodicBalanceNeeds');
 
 // Reuse token sync UMUM (sesuai instruksi) — BUKAN token khusus baru.
 const SYNC_TOKEN = process.env.APPS_SCRIPT_TOKEN;
@@ -1945,242 +1946,26 @@ async function dailyReportHandler(req, res) {
 // (mis. semua FP_ONLY). Tidak ada kolom baru/migration -- murni agregasi dari
 // recon_sync_batches + recon_results yang sudah ada.
 // ─────────────────────────────────────────────────────────────────────────
-const HOUR_LABELS = Array.from({ length: 24 }, (_, h) => `${String(h).padStart(2, '0')}:00–${String(h).padStart(2, '0')}:59`);
-
-function dateRangeArray(startStr, endStr) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(startStr) || !/^\d{4}-\d{2}-\d{2}$/.test(endStr)) return [];
-  const [sy, sm, sd] = startStr.split('-').map(Number);
-  const [ey, em, ed] = endStr.split('-').map(Number);
-  const start = Date.UTC(sy, sm - 1, sd);
-  const end = Date.UTC(ey, em - 1, ed);
-  if (Number.isNaN(start) || Number.isNaN(end) || end < start) return [];
-  const out = [];
-  for (let t = start; t <= end; t += 86400000) out.push(new Date(t).toISOString().slice(0, 10));
-  return out;
-}
-
-/**
- * Pure aggregation — TIDAK menyentuh DB, diuji langsung di
- * backend/scripts/test-reconciliation-ocbc.js (sama filosofi dgn
- * buildTransactionsQuery/reconcileTransactions).
- *
- * @param {string[]} selectedDates - seluruh tanggal kalender dlm rentang yg diminta user (dari dateRangeArray), TERMASUK yg tidak punya batch
- * @param {{business_date:string, expected_fee:number}[]} includedDayFees - HANYA tanggal yg punya batch OCBC pada rentang ini, + expected fee actual batch itu (sudah diturunkan dari recon_results, fallback DEFAULT_FEE_BIFAST)
- * @param {{business_date:string, hour:number, tx_count:number, principal_sum:number}[]} hourlyRows - hasil query agregasi SQL (GROUP BY business_date, hour) — SATU baris per (tanggal,jam) yg benar2 py transaksi; jam yg tidak muncul di sini berarti 0 (diisi otomatis di bawah). Dedup transaksi (canonical_transaction_key) SUDAH dilakukan di level query SQL (DISTINCT ON per batch_id+canonical key, sebelum GROUP BY) -- di sini tinggal jumlah bersih.
- */
-function computeOcbcBalanceNeedsPeriodic(selectedDates, includedDayFees, hourlyRows) {
-  const includedDates = includedDayFees.map(d => d.business_date);
-  const feeByDate = new Map(includedDayFees.map(d => [d.business_date, d.expected_fee]));
-  const missingDates = selectedDates.filter(d => !includedDates.includes(d));
-
-  const coverage = {
-    selected_days: selectedDates.length,
-    included_days: includedDates.length,
-    missing_days: missingDates.length,
-    included_dates: includedDates,
-    missing_dates: missingDates,
-  };
-
-  if (includedDates.length === 0) {
-    return { empty: true, coverage, summary: null, hourly: [], daily: [] };
-  }
-
-  // matrix[date][hour] -- default 0, ditimpa oleh hourlyRows yang benar2 ada
-  // transaksinya. Ini yang menjamin "jam kosong pada included day tetap
-  // dihitung 0" (bukan diabaikan/di-skip dari average).
-  const matrix = new Map();
-  for (const d of includedDates) matrix.set(d, Array.from({ length: 24 }, () => ({ tx_count: 0, principal_sum: 0 })));
-  for (const row of hourlyRows) {
-    const hours = matrix.get(row.business_date);
-    if (!hours) continue; // defense-in-depth: baris di luar includedDates (seharusnya tidak pernah terjadi krn query sudah di-scope batch_id)
-    const hour = Number(row.hour);
-    if (!Number.isInteger(hour) || hour < 0 || hour > 23) continue;
-    hours[hour] = { tx_count: Number(row.tx_count) || 0, principal_sum: Number(row.principal_sum) || 0 };
-  }
-
-  const includedDaysCount = includedDates.length;
-  const hourly = [];
-  for (let h = 0; h < 24; h++) {
-    let totalTransaction = 0, totalPrincipal = 0, totalExpectedFee = 0;
-    let maxNeed = -Infinity, minNeed = Infinity, peakDate = null;
-    for (const d of includedDates) {
-      const cell = matrix.get(d)[h];
-      const fee = feeByDate.get(d);
-      const need = cell.principal_sum + cell.tx_count * fee;
-      totalTransaction += cell.tx_count;
-      totalPrincipal += cell.principal_sum;
-      totalExpectedFee += cell.tx_count * fee;
-      if (need > maxNeed) { maxNeed = need; peakDate = d; }
-      if (need < minNeed) minNeed = need;
-    }
-    const totalBalanceNeed = totalPrincipal + totalExpectedFee;
-    hourly.push({
-      hour: h,
-      label: HOUR_LABELS[h],
-      total_transaction: totalTransaction,
-      average_transaction_per_day: safeDiv(totalTransaction, includedDaysCount),
-      total_principal: totalPrincipal,
-      average_principal_per_day: safeDiv(totalPrincipal, includedDaysCount),
-      total_expected_fee: totalExpectedFee,
-      average_fee_per_day: safeDiv(totalExpectedFee, includedDaysCount),
-      total_balance_need: totalBalanceNeed,
-      average_balance_need_per_day: safeDiv(totalBalanceNeed, includedDaysCount),
-      maximum_daily_need: maxNeed,
-      minimum_daily_need: minNeed,
-      peak_date: peakDate,
-    });
-  }
-
-  const daily = includedDates.map(d => {
-    const hours = matrix.get(d);
-    const fee = feeByDate.get(d);
-    let transactionCount = 0, principal = 0, peakHour = 0, peakHourNeed = -Infinity;
-    for (let h = 0; h < 24; h++) {
-      const cell = hours[h];
-      transactionCount += cell.tx_count;
-      principal += cell.principal_sum;
-      const need = cell.principal_sum + cell.tx_count * fee;
-      if (need > peakHourNeed) { peakHourNeed = need; peakHour = h; }
-    }
-    const expectedFee = transactionCount * fee;
-    return {
-      business_date: d,
-      transaction_count: transactionCount,
-      principal,
-      expected_fee: expectedFee,
-      total_balance_need: principal + expectedFee,
-      peak_hour: peakHour,
-      peak_hour_need: peakHourNeed,
-    };
-  }).sort((a, b) => b.business_date.localeCompare(a.business_date)); // tanggal terbaru dulu (spec bagian 8)
-
-  const totalTransaction = hourly.reduce((s, h) => s + h.total_transaction, 0);
-  const totalPrincipal = hourly.reduce((s, h) => s + h.total_principal, 0);
-  const totalExpectedFee = hourly.reduce((s, h) => s + h.total_expected_fee, 0);
-  const totalBalanceNeed = totalPrincipal + totalExpectedFee;
-
-  let peakHourIdx = 0, peakHourAvg = -Infinity;
-  for (const h of hourly) {
-    const avg = h.average_balance_need_per_day === null ? -Infinity : h.average_balance_need_per_day;
-    if (avg > peakHourAvg) { peakHourAvg = avg; peakHourIdx = h.hour; }
-  }
-  let maxDailyNeed = -Infinity, maxDailyNeedDate = null;
-  for (const d of daily) {
-    if (d.total_balance_need > maxDailyNeed) { maxDailyNeed = d.total_balance_need; maxDailyNeedDate = d.business_date; }
-  }
-
-  return {
-    empty: false,
-    coverage,
-    summary: {
-      total_transaction: totalTransaction,
-      total_principal: totalPrincipal,
-      total_expected_fee: totalExpectedFee,
-      total_balance_need: totalBalanceNeed,
-      average_transaction_per_day: safeDiv(totalTransaction, includedDaysCount),
-      average_balance_need_per_day: safeDiv(totalBalanceNeed, includedDaysCount),
-      peak_hour: peakHourIdx,
-      peak_hour_average: peakHourAvg === -Infinity ? null : peakHourAvg,
-      maximum_daily_need: maxDailyNeed === -Infinity ? 0 : maxDailyNeed,
-      maximum_daily_need_date: maxDailyNeedDate,
-    },
-    hourly,
-    daily,
-  };
-}
+// Sejak refactor "Kebutuhan Saldo" multi-bank, SELURUH logic (dateRangeArray,
+// agregasi hourly/daily/summary, resolusi expected fee, query DB) SUDAH
+// PINDAH ke backend/src/reconciliation/periodicBalanceNeeds.js (SHARED dgn
+// Mandiri/BRI/BRI BI-FAST/BNI) -- referensi utama & sumber kebenaran ada di
+// sana. dateRangeArray/computeOcbcBalanceNeedsPeriodic di bawah HANYA alias
+// (backward-compat utk test-reconciliation-ocbc.js & konsumen lain yang
+// sudah meng-import nama ini dari file ini) -- TIDAK ADA rumus yang
+// diduplikasi, dan TIDAK ADA satu pun angka existing yang berubah (setiap
+// field yang SUDAH ADA sebelumnya menghasilkan nilai yang SAMA persis;
+// field baru dari shared service, mis. peak_hour_label, murni tambahan).
+const dateRangeArray = periodicBalanceNeeds.dateRangeArray;
+const computeOcbcBalanceNeedsPeriodic = periodicBalanceNeeds.computePeriodicBalanceNeeds;
 
 async function balanceNeedsPeriodicHandler(req, res) {
   try {
     res.set('Cache-Control', 'no-store');
-
     const startDate = nullIfEmpty(req.query.start_date);
     const endDate = nullIfEmpty(req.query.end_date);
-    if (!startDate || !endDate || !/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
-      return res.status(400).json({ error: 'start_date & end_date wajib diisi, format YYYY-MM-DD' });
-    }
-    const selectedDates = dateRangeArray(startDate, endDate);
-    if (selectedDates.length === 0) {
-      return res.status(400).json({ error: 'end_date harus sama atau setelah start_date' });
-    }
-    if (selectedDates.length > 90) {
-      return res.status(400).json({ error: 'Rentang tanggal maksimal 90 hari' });
-    }
-
-    const bankCode = 'OCBC';
-    const batchesRes = await pool.query(
-      `SELECT id, business_date::text AS business_date
-       FROM recon_sync_batches
-       WHERE bank_code = $1 AND business_date BETWEEN $2 AND $3
-       ORDER BY business_date`,
-      [bankCode, startDate, endDate]
-    );
-    const includedBatches = batchesRes.rows;
-
-    if (includedBatches.length === 0) {
-      const result = computeOcbcBalanceNeedsPeriodic(selectedDates, [], []);
-      return res.json({
-        success: true, empty: true, start_date: startDate, end_date: endDate, timezone: 'Asia/Jakarta',
-        coverage: result.coverage, summary: null, hourly: [], daily: [],
-        message: 'Belum ada batch Rekonsiliasi OCBC pada periode ini.',
-      });
-    }
-
-    const batchIds = includedBatches.map(b => b.id);
-    const batchDateById = new Map(includedBatches.map(b => [Number(b.id), b.business_date]));
-
-    const [feeRes, hourlyRes] = await Promise.all([
-      // Expected fee AKTUAL per batch (bukan hardcode Rp25) -- diturunkan dari
-      // baris matched batch itu sendiri (bank_fee - variance_fee konstan per
-      // batch, lihat catatan panjang di atas fungsi ini).
-      pool.query(
-        `SELECT batch_id, MIN(bank_fee - variance_fee) AS derived_fee
-         FROM recon_results
-         WHERE batch_id = ANY($1::bigint[]) AND variance_fee IS NOT NULL AND bank_fee IS NOT NULL
-         GROUP BY batch_id`,
-        [batchIds]
-      ),
-      // Dedup per (batch_id, canonical_transaction_key) SEBELUM GROUP BY jam
-      // -- jaminan berlapis di luar unique index DB (sama filosofi dedupeMap
-      // di dailyReportHandler), lalu agregasi SEKALIGUS per (business_date,
-      // hour) -- SATU query, bukan 24 query per jam. Cross-date guard sama
-      // dgn seluruh endpoint OCBC lain (bank_transaction_date harus cocok
-      // business_date batchnya kalau terisi).
-      pool.query(
-        `WITH deduped AS (
-           SELECT DISTINCT ON (r.batch_id, COALESCE(r.canonical_transaction_key, '__id_' || r.id::text))
-             r.batch_id, r.fp_nominal, r.fp_time_response
-           FROM recon_results r
-           JOIN recon_sync_batches b ON b.id = r.batch_id
-           WHERE r.batch_id = ANY($1::bigint[])
-             AND r.id_transaksi IS NOT NULL
-             AND r.fp_time_response IS NOT NULL
-             AND (r.bank_transaction_date IS NULL OR r.bank_transaction_date::text = b.business_date::text)
-           ORDER BY r.batch_id, COALESCE(r.canonical_transaction_key, '__id_' || r.id::text), r.updated_at DESC
-         )
-         SELECT batch_id, EXTRACT(HOUR FROM (fp_time_response AT TIME ZONE 'Asia/Jakarta'))::int AS hour,
-           COUNT(*) AS tx_count, COALESCE(SUM(fp_nominal), 0) AS principal_sum
-         FROM deduped
-         GROUP BY batch_id, hour`,
-        [batchIds]
-      ),
-    ]);
-
-    const feeByBatchId = new Map(feeRes.rows.map(r => [Number(r.batch_id), Number(r.derived_fee)]));
-    const includedDayFees = includedBatches.map(b => ({
-      business_date: b.business_date,
-      expected_fee: feeByBatchId.has(Number(b.id)) ? feeByBatchId.get(Number(b.id)) : DEFAULT_FEE_BIFAST,
-    }));
-
-    const hourlyRows = hourlyRes.rows
-      .map(r => ({ business_date: batchDateById.get(Number(r.batch_id)), hour: Number(r.hour), tx_count: Number(r.tx_count), principal_sum: Number(r.principal_sum) }))
-      .filter(r => r.business_date);
-
-    const result = computeOcbcBalanceNeedsPeriodic(selectedDates, includedDayFees, hourlyRows);
-
-    res.json({
-      success: true, empty: result.empty, start_date: startDate, end_date: endDate, timezone: 'Asia/Jakarta',
-      coverage: result.coverage, summary: result.summary, hourly: result.hourly, daily: result.daily,
-    });
+    const result = await periodicBalanceNeeds.buildBalanceNeedsResponse({ pool, bankCode: 'OCBC', startDate, endDate });
+    res.status(result.statusCode).json(result.body);
   } catch (e) {
     console.error('reconciliation ocbc balance-needs-periodic error:', e.message);
     res.status(500).json({ error: e.message });

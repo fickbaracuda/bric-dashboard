@@ -22,6 +22,7 @@
  */
 
 const pool = require('../db');
+const periodicBalanceNeeds = require('../reconciliation/periodicBalanceNeeds');
 const {
   extractToken, nullIfEmpty, cleanNum, isValidIdTransaksi,
   csvEscape, safeDiv, RECON_STATUSES, EXCEPTION_STATUSES, normalizeCanonicalKey,
@@ -1404,11 +1405,32 @@ async function actionLogsHandler(req, res) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// GET /api/warroom/reconciliation/bri/balance-needs-periodic
+// Tab "Kebutuhan Saldo" — wrapper TIPIS: hanya mengunci bank_code='BRI' dan
+// memanggil shared service (backend/src/reconciliation/
+// periodicBalanceNeeds.js, referensi utama = implementasi OCBC). TIDAK ADA
+// rumus/matching logic BRI yang disentuh di sini.
+// ─────────────────────────────────────────────────────────────────────────
+async function balanceNeedsPeriodicHandler(req, res) {
+  try {
+    res.set('Cache-Control', 'no-store');
+    const startDate = req.query.start_date;
+    const endDate = req.query.end_date;
+    const result = await periodicBalanceNeeds.buildBalanceNeedsResponse({ pool, bankCode: 'BRI', startDate, endDate });
+    res.status(result.statusCode).json(result.body);
+  } catch (e) {
+    console.error('reconciliation-bri balance-needs-periodic error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+}
+
 module.exports = {
   syncHandler,
   analyticsHandler,
   dailyReportHandler,
   transactionsHandler,
+  balanceNeedsPeriodicHandler,
   rawBankHandler,
   rawFpHandler,
   exportHandler,

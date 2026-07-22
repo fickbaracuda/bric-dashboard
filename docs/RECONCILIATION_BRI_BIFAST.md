@@ -281,6 +281,7 @@ tidak merusak bank_code existing.
 ```
 POST /api/warroom/reconciliation/bri-bifast/sync                (token APPS_SCRIPT_TOKEN, no JWT)
 GET  /api/warroom/reconciliation/bri-bifast/analytics?date=
+GET  /api/warroom/reconciliation/bri-bifast/balance-needs-periodic?start_date=&end_date=  (Kebutuhan Saldo, SHARED service)
 GET  /api/warroom/reconciliation/bri-bifast/daily-report?date=
 GET  /api/warroom/reconciliation/bri-bifast/transactions         (date, status, id_outlet,
                                                                    id_produk, id_biller,
@@ -331,10 +332,30 @@ RED dievaluasi dulu, lalu YELLOW, fallback GREEN:
 
 ## Frontend
 
-`frontend/src/pages/WarRoomReconciliationBriBifast.jsx` — 7 tab (Laporan
+`frontend/src/pages/WarRoomReconciliationBriBifast.jsx` — 8 tab (Laporan
 Harian WAJIB paling akhir): Executive Summary, Hasil Rekonsiliasi, Exception
-Queue, Fee Analysis, Time & Posting Analysis, Raw Data & Audit, Laporan
-Harian (`DailyReportBriBifastTab.jsx`, komponen terpisah).
+Queue, Fee Analysis, Time & Posting Analysis, Raw Data & Audit, **Kebutuhan
+Saldo**, Laporan Harian (`DailyReportBriBifastTab.jsx`, komponen terpisah).
+
+### Kebutuhan Saldo (Tab 7) — SHARED service, bukan implementasi terpisah
+Dipasang via komponen shared
+`frontend/src/components/reconciliation/PeriodicBalanceNeeds.jsx`
+(`bankCode="BRI_BIFAST"`, `bankLabel="BRI BI-FAST"`, tanpa
+`supportsFundingComparison`), fetch via
+`getBriBifastPeriodicBalanceNeeds()` di `services/api.js`. Route handler
+`balanceNeedsPeriodicHandler` di `warroom-reconciliation-bri-bifast.js`
+HANYA mengunci `bankCode: 'BRI_BIFAST'` lalu memanggil
+`periodicBalanceNeeds.buildBalanceNeedsResponse()`. Prinsipal + fee 1
+transaksi BI-FAST SUDAH dikonsolidasi jadi SATU baris `recon_results` oleh
+`buildBriBifastBankGroups()`/`reconcileBriBifastTransactions()` (lihat
+bagian "Grouping Transfer" & "Matching Satu ke Satu" di atas) — service
+Kebutuhan Saldo TIDAK menghitungnya dua kali sbg 2 transaksi terpisah,
+cukup mengonsumsi `recon_results` apa adanya. Expected fee per tanggal dari
+`recon_sync_batches.expected_fee`, fallback default Rp77
+(`DEFAULT_FEE_BY_BANK.BRI_BIFAST`) hanya kalau batch genuinely tidak
+punya nilai. Mekanisme lengkap (included days, dedup transaksi, 24 bucket
+jam, KPI, export, testing) — lihat `docs/RECONCILIATION_BNI.md` bagian
+"Kebutuhan Saldo".
 
 Executive Summary: 12 KPI (Total Transaksi FP, Total Nominal FP, Bank
 Transfer Group, Matched Transaksi, Matched Nominal, Pending Bank, FP Only,

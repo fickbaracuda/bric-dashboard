@@ -248,6 +248,7 @@ insert ulang) — manual resolution & audit log bertahan setelah resync.
 | `POST /api/warroom/reconciliation/bni/sync` | `APPS_SCRIPT_TOKEN` (token SHARED) | Chunk 1500 baris. 2-pass: insert raw → (chunk terakhir) hitung coverage dari SELURUH FP batch → klasifikasi tiap baris bank → jalankan engine → upsert `recon_results`. |
 | `GET /api/warroom/reconciliation/bni/analytics?date=` | JWT | Summary, coverage, extraction_summary, funding_summary, time_analysis, data_quality_warning. `empty:true` kalau batch tanggal tsb tidak ada — TIDAK fallback. |
 | `GET /api/warroom/reconciliation/bni/daily-report?date=` | JWT | Laporan Harian — default hari ini WIB, TIDAK fallback tanggal lain. |
+| `GET /api/warroom/reconciliation/bni/balance-needs-periodic?start_date=&end_date=` | JWT | **Kebutuhan Saldo** — kebutuhan saldo per jam/tanggal utk suatu periode (maks 90 hari) + panel Funding Comparison (khusus BNI), lihat bagian tersendiri di bawah. |
 | `GET /api/warroom/reconciliation/bni/transactions?date=&status=&id_transaksi=&id_produk=&id_outlet=&id_biller=&beneficiary_account=&recipient_name=&journal_no=&coverage_status=&search=&page=&limit=&sort=&order=` | JWT | List berpaginasi. |
 | `GET /api/warroom/reconciliation/bni/raw-fp?date=` / `raw-bank?date=` | JWT | Raw Data & Audit sub-tab. |
 | `GET /api/warroom/reconciliation/bni/export?...` | JWT | CSV. |
@@ -283,12 +284,131 @@ mutasi luar coverage **TIDAK PERNAH** memengaruhi health.
   TIDAK ada CSS terpisah per bank. Badge baru ditambahkan ke set generik:
   `.wrrbri-badge--boundary_partial`, `.wrrbri-badge--undetermined`,
   `.wrrbri-badge--funding_credit`.
-- **7 tab**: Executive Summary, Hasil Rekonsiliasi, Exception Queue, Saldo &
+- **8 tab**: Executive Summary, Hasil Rekonsiliasi, Exception Queue, Saldo &
   Funding Analysis, Time & Posting Analysis (detik), Raw Data & Audit (4
-  sub-tab: Raw FP/Raw Bank/Sync History/Resolution History), Laporan Harian.
+  sub-tab: Raw FP/Raw Bank/Sync History/Resolution History), **Kebutuhan
+  Saldo** (tab baru, posisi sebelum Laporan Harian), Laporan Harian.
 - Endpoint TIDAK di-cache, request ID guard (`requestIdRef`) saat tanggal
   berganti — sama pola dgn semua halaman rekonsiliasi lain.
 - `<BalanceRequestButton bankCode="BNI" />` — komponen shared, tidak diubah.
+
+## Kebutuhan Saldo (Tab) — SHARED cross-bank, referensi utama OCBC
+
+### Tujuan & sumber kebenaran
+Fitur ini dibangun PERTAMA KALI khusus utk tab "Kebutuhan Saldo" OCBC
+(lihat `docs/RECONCILIATION_OCBC.md`), lalu di-generalisasi jadi SHARED
+service `backend/src/reconciliation/periodicBalanceNeeds.js` dipakai
+sekaligus oleh 5 bank (OCBC/Mandiri/BRI/BRI BI-FAST/BNI) — **bukan** 5
+implementasi terpisah. Dokumen ini adalah penjelasan PALING LENGKAP
+mekanismenya (krn BNI satu-satunya bank dgn enrichment tambahan/Funding
+Comparison) — dokumen Mandiri/BRI/BRI BI-FAST cukup merujuk ke sini dan
+menyebut hal yang beda per bank saja (label, default fee, ada/tidaknya
+funding panel).
+
+Server-side bank_code allowlist (`BANK_ALLOWLIST` di
+`periodicBalanceNeeds.js`): `OCBC`, `MANDIRI`, `BRI`, `BRI_BIFAST`, `BNI` —
+**tidak pernah** menerima `bank_code` arbitrary dari frontend; tiap wrapper
+route (`warroom-reconciliation-*.js`) mengunci `bankCode` sbg literal
+string saat memanggil `buildBalanceNeedsResponse()`, bukan dari query param.
+
+### Mekanisme umum (berlaku SEMUA bank)
+- **Periode**: Hari Ini, 7/14/30 Hari Terakhir, Bulan Ini, Bulan Lalu,
+  Custom Range (maks 90 hari, ditolak 400 kalau lebih), default 7 hari
+  terakhir, Asia/Jakarta.
+- **Active batch per tanggal**: `recon_sync_batches` dgn
+  `bank_code = $1 AND business_date BETWEEN $2 AND $3 AND status = 'success'`
+  — UNIQUE `(business_date, bank_code)` menjamin tidak pernah ada 2 batch
+  bertabrakan; tidak pernah fallback ke bank/tanggal lain.
+- **Included days vs selected days**: `included_days` = tanggal yg PUNYA
+  batch sukses bank tsb pada rentang. Average SELALU dibagi
+  `included_days`, BUKAN `selected_days` (tanggal kalender tanpa batch
+  dikecualikan dari pembagi, bukan dianggap 0). Jam tanpa transaksi pada
+  included day tetap dihitung 0 (bukan di-skip dari average).
+- **Transaksi yang dihitung**: seluruh baris `recon_results` dgn
+  `id_transaksi` terisi (FP canonical), REGARDLESS status akhir (MATCHED,
+  MATCHED_NO_FEE, PENDING_BANK, FP_ONLY, NOMINAL_MISMATCH, FEE_MISMATCH,
+  DUPLICATE_BANK, REVERSAL, NEED_REVIEW — kebutuhan saldo timbul begitu FP
+  diproses, bukan setelah matched). Dedup `DISTINCT ON
+  (batch_id, COALESCE(canonical_transaction_key, id_transaksi, ...))`
+  menjamin duplikat hanya dihitung SATU KALI. **Dikecualikan**: BANK_ONLY,
+  FUNDING_CREDIT, baris bank mentah tanpa FP, OUT_OF_SCOPE — semuanya
+  structural (`id_transaksi IS NULL`), otomatis tidak pernah ikut query.
+- **Expected fee per batch**: OCBC diturunkan dari `recon_results`
+  (`bank_fee - variance_fee`, desain lama TIDAK diubah); bank lain
+  (Mandiri/BRI/BRI BI-FAST/BNI) pakai `recon_sync_batches.expected_fee`
+  langsung (diisi adapter saat sync). Fallback ke `DEFAULT_FEE_BY_BANK`
+  (OCBC 25, Mandiri 100, BRI 150, BRI BI-FAST 77, BNI 0) HANYA kalau batch
+  genuinely tidak punya evidence fee — **tidak pernah** dipaksakan/hardcode
+  ke seluruh periode. Fee Rp0 eksplisit (umum di BNI) dipakai apa adanya,
+  bukan dianggap "tidak ada nilai".
+- **BRI BI-FAST**: prinsipal + fee 1 transaksi = SATU baris `recon_results`
+  (konsolidasi sudah dilakukan matching engine BI-FAST sendiri, lihat
+  `docs/RECONCILIATION_BRI_BIFAST.md`) — service ini TIDAK menghitungnya
+  dua kali sbg 2 transaksi terpisah.
+- **Query**: maksimal 3 query per request (active batches, hourly
+  transaksi teragregasi via SATU `GROUP BY (business_date, hour)`, +
+  enrichment opsional) — tidak pernah 24×hari×bank query.
+- **Response**: `success`, `empty`, `bank_code`, `bank_label`,
+  `start_date`/`end_date`, `timezone: "Asia/Jakarta"`, `generated_at`,
+  `coverage` (`selected_days`/`included_days`/`missing_days`/
+  `included_dates`/`missing_dates`), `summary` (10 KPI termasuk
+  `peak_hour_label` format "09:00–09:59"), `hourly[]` (24 bucket tetap),
+  `daily[]` (1 baris per included day, sort terbaru dulu, termasuk
+  `average_transaction_value = principal/transaction_count`, 0 kalau
+  count=0), `bank_specific` (`{}` kosong utk bank tanpa enrichment,
+  Funding Comparison utk BNI). `empty:true` kalau tidak ada batch bank ini
+  sama sekali pada rentang (pesan: "Belum ada batch Rekonsiliasi {Bank}
+  pada periode ini.").
+
+### Khusus BNI — Funding Comparison (`bank_specific`, opsional)
+`computeBniFundingComparison()` — GROUP BY `business_date` + `bank_row_type`
+dari `recon_bank_transactions` (JOIN `recon_sync_batches`), scope HANYA 3
+row type (`FUNDING_CREDIT`, `FASTPAY_DEBIT`, `CREDIT_REVERSAL`). Hasil:
+`total_funding_credit`, `funding_transaction_count`, `total_fastpay_debit`,
+`total_reversal_credit`, `net_cash_movement = funding_credit +
+reversal_credit - fastpay_debit`, `funding_need_difference = funding_credit
+- total_balance_need`, `daily[]` (breakdown per tanggal, dipakai kolom
+funding opsional di tabel & seri opsional di grafik per tanggal). Panel ini
+**HANYA muncul di BNI** (`supportsFundingComparison` prop di komponen
+frontend) — funding masuk BUKAN kebutuhan saldo, murni info arus dana utk
+perbandingan, disertai disclaimer eksplisit di UI dan **tidak pernah**
+disebut "saldo rekening aktual" (tidak ada opening balance di sumber data).
+
+### Backend per-bank — wrapper TIPIS
+Tiap `warroom-reconciliation-{bank}.js` (Mandiri/BRI/BRI BI-FAST/BNI) HANYA
+punya `balanceNeedsPeriodicHandler` yg mengunci `bankCode` literal lalu
+memanggil `periodicBalanceNeeds.buildBalanceNeedsResponse()` — **tidak
+pernah** menduplikasi rumus. Endpoint didaftarkan di `app.js` (JWT,
+`requireAuth`) setelah masing-masing endpoint `daily-report` bank tsb.
+Hanya BNI yg mengirim `enrichBankSpecific: periodicBalanceNeeds.computeBniFundingComparison`.
+
+### Frontend — komponen shared
+`frontend/src/components/reconciliation/PeriodicBalanceNeeds.jsx` —
+SATU komponen dipakai 5 halaman lewat props (`bankCode`, `bankLabel`,
+`themeColor`, `fetchData`, `supportsFundingComparison`, `defaultRange`).
+`OcbcPeriodicBalanceNeeds.jsx` jadi wrapper tipis (~20 baris) supaya import
+di `WarRoomReconciliationOcbc.jsx` TIDAK PERLU berubah sama sekali — nol
+risiko terhadap tab OCBC yang sudah berjalan. Fitur umum: AbortController +
+request-ID guard (ganti bank/periode → data lama dikosongkan, response
+basi diabaikan), export CSV & XLSX ("Rekap Per Jam" + "Rekap Per Tanggal",
+header info Bank/rentang/Included Days/Missing Days), chart per jam
+(Average/Total toggle) & chart per tanggal, tabel per jam (+ TOTAL row,
+**tidak pernah** menjumlahkan kolom Maximum) & tabel per tanggal. CSS reuse
+`wrr-*` existing, tidak ada CSS baru per bank.
+
+### Testing
+`node backend/scripts/test-periodic-balance-needs.js` (25 test) — allowlist
+bank, label, default fee per bank, 24 bucket selalu ada, average÷
+included_days, included day nihil transaksi tetap 0, expected fee per
+batch (bukan diseragamkan), rentang tanpa batch → `empty:true`, dedup tidak
+double-count, BRI BI-FAST 1 transaksi = 1 tx_count, rentang >90 hari
+ditolak, bank_code invalid ditolak SEBELUM query DB, resolusi fee OCBC
+(dari `recon_results`) vs bank lain (dari kolom batch), fee Rp0 BNI dipakai
+apa adanya, Funding Comparison BNI (net_cash_movement, scope row_type,
+struktur default batchIds kosong). Suite khusus OCBC
+(`test-reconciliation-ocbc.js`, 76 test, termasuk BALANCE-NEEDS TEST 1-7)
+tetap 100% lolos tanpa perubahan setelah refactor — bukti output OCBC
+byte-identik.
 
 ## Apps Script (`apps-script-reconciliation-bni.js`)
 Fungsi: `testReconciliationBni()` (dry-run), `pushReconciliationBni()`

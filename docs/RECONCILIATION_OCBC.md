@@ -530,6 +530,23 @@ Perhitungan bucket/average/peak murni di fungsi pure
 `computeOcbcBalanceNeedsPeriodic()` (tidak menyentuh DB, diuji langsung —
 lihat bagian Testing) dipanggil oleh handler dengan hasil query sbg input.
 
+**Refactor shared (Mandiri/BRI/BRI BI-FAST/BNI)**: seluruh logic di atas
+(allowlist bank, `dateRangeArray`, fungsi pure agregasi, resolusi query
+active batch/expected fee/hourly rows, orkestrasi response) sekarang tinggal
+di `backend/src/reconciliation/periodicBalanceNeeds.js` — SHARED dipakai
+tab "Kebutuhan Saldo" di 5 bank rekonsiliasi. `warroom-reconciliation.js`
+(OCBC) HANYA delegate ke sana lewat alias
+(`computeOcbcBalanceNeedsPeriodic = periodicBalanceNeeds.computePeriodicBalanceNeeds`,
+`dateRangeArray = periodicBalanceNeeds.dateRangeArray`) dan
+`balanceNeedsPeriodicHandler` memanggil `periodicBalanceNeeds.buildBalanceNeedsResponse({ pool, bankCode: 'OCBC', ... })`
+— **byte-for-byte identik** dgn implementasi lama (diverifikasi: 76 test
+OCBC existing lolos 100% tanpa perubahan setelah refactor). Detail lengkap
+mekanisme shared (per-bank rules, BNI funding comparison, dst) ada di
+`docs/RECONCILIATION_BNI.md` bagian "Kebutuhan Saldo" (paling lengkap krn
+BNI satu-satunya bank dgn enrichment tambahan) — jangan duplikasi
+penjelasan mekanisme umum di 4 dokumen bank lain, cukup rujuk ke sana dan
+sebutkan hal yang BEDA per bank saja.
+
 ### Frontend
 - Komponen: `frontend/src/components/reconciliation/OcbcPeriodicBalanceNeeds.jsx`,
   dipasang sbg tab `kebutuhan-saldo` di `WarRoomReconciliationOcbc.jsx`
@@ -695,7 +712,12 @@ fingerprint TETAP beda kalau beda MENIT) + BALANCE-NEEDS TEST 1-7 (pure
 average dibagi `included_days` bukan `selected_days`, jam kosong pada
 included day dihitung 0, expected fee ikut batch masing-masing tanggal
 (bukan fee batch lain), rentang tanpa batch -> `empty:true`, contoh numerik
-spec bagian 4) — **76 test total**. Skenario DB/live (resync, idempotensi,
+spec bagian 4) — **76 test total**. Test tambahan khusus generalisasi
+multi-bank (allowlist, label, default fee per bank, resolusi expected fee
+OCBC vs bank lain, BRI BI-FAST tidak double-count, BNI funding comparison,
+rentang >90 hari) ada di
+`node backend/scripts/test-periodic-balance-needs.js` (25 test, terpisah
+krn scope-nya generalisasi bank bukan OCBC spesifik). Skenario DB/live (resync, idempotensi,
 resolution manual existing, cross-date, regresi Mandiri, filter FP di luar
 business_date, dedup `DISTINCT ON` di query balance-needs-periodic)
 diverifikasi end-to-end lewat server sungguhan (pola yang sama dgn TEST
