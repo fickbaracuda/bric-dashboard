@@ -515,9 +515,19 @@ async function syncHandler(req, res) {
       [batchId, BANK_CODE, currentKeys.length ? currentKeys : ['']]
     );
 
+    // Diagnostic TIER3 (fallback_candidate_count/fallback_matched_count/
+    // fallback_ambiguous_count/orphan_unconsumed_fastpay_count) dari
+    // reconcileBniTransactions() -- disimpan sbg sub-key `raw_summary.
+    // fallback_diagnostics` (JSONB existing, BUKAN kolom/tabel baru) supaya
+    // analyticsHandler/dailyReportHandler bisa expose tanpa recompute dari
+    // recon_results (yang tidak menyimpan alasan "ambigu" vs "tidak ada
+    // kandidat sama sekali").
     await client.query(
-      `UPDATE recon_sync_batches SET fp_row_count = $2, bank_row_count = $3, status = 'success', synced_at = NOW() WHERE id = $1`,
-      [batchId, fpAllRes.rows.length, bankAllRes.rows.length]
+      `UPDATE recon_sync_batches
+       SET fp_row_count = $2, bank_row_count = $3, status = 'success', synced_at = NOW(),
+           raw_summary = COALESCE(raw_summary, '{}'::jsonb) || jsonb_build_object('fallback_diagnostics', $4::jsonb)
+       WHERE id = $1`,
+      [batchId, fpAllRes.rows.length, bankAllRes.rows.length, JSON.stringify(results.fallbackDiagnostics || {})]
     );
 
     await client.query('COMMIT');
@@ -527,6 +537,7 @@ async function syncHandler(req, res) {
       bank_rows_skipped_duplicate_fingerprint: bankSkippedDuplicateFingerprint,
       result_count: finalResults.length, cross_date_result_count: crossDateResultCount,
       coverage_start: coverage.coverageStart, coverage_end: coverage.coverageEnd,
+      fallback_diagnostics: results.fallbackDiagnostics || null,
       engine_run: true, synced_at: new Date().toISOString(),
     });
   } catch (err) {
@@ -703,6 +714,13 @@ async function analyticsHandler(req, res) {
       ].filter(Boolean).join(' ') || null,
     };
 
+    // TIER3 UNIQUE_TIME_AMOUNT_FALLBACK diagnostic -- dihitung SEKALI saat
+    // sync (reconcileBniTransactions), disimpan di raw_summary.fallback_diagnostics
+    // (lihat syncHandler), dibaca apa adanya di sini (BUKAN dihitung ulang
+    // dari recon_results -- info "ambigu" tidak bisa direkonstruksi
+    // sepenuhnya dari hasil akhir yang sudah tersimpan).
+    const fallback_diagnostics = (batch.raw_summary && batch.raw_summary.fallback_diagnostics) || null;
+
     res.json({
       empty: false,
       meta: {
@@ -719,7 +737,7 @@ async function analyticsHandler(req, res) {
         coverage_start: null, coverage_end: null, synced_at: batch.synced_at, sync_status: batch.status,
       },
       summary, status_distribution, coverage, time_analysis, extraction_summary, funding_summary,
-      data_quality_warning, recent_batches: recentBatches,
+      data_quality_warning, fallback_diagnostics, recent_batches: recentBatches,
     });
   } catch (e) {
     console.error('reconciliation-bni analytics error:', e.message);
@@ -895,6 +913,8 @@ async function dailyReportHandler(req, res) {
     }
     if (rekomendasi.length === 0) rekomendasi.push('Tidak ada tindak lanjut mendesak — seluruh transaksi FP telah berhasil direkonsiliasi dgn BNI.');
 
+    const fallback_diagnostics = (batch.raw_summary && batch.raw_summary.fallback_diagnostics) || null;
+
     res.json({
       success: true, empty: false,
       generated_at: generatedAt, report_status: reportStatus, health_status: healthStatus,
@@ -916,7 +936,7 @@ async function dailyReportHandler(req, res) {
         coverage_tolerance_after_minutes: batch.coverage_tolerance_after_minutes,
         outside_coverage_bank_count: rawDiag.outside_coverage_bank_count,
       },
-      data_quality_warning, status_distribution, top_10_exception,
+      data_quality_warning, fallback_diagnostics, status_distribution, top_10_exception,
       ringkasan_direktur, rekomendasi_tindak_lanjut: rekomendasi,
     });
   } catch (e) {

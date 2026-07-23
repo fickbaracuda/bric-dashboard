@@ -220,6 +220,7 @@ function SummaryTab({ analytics, date }) {
   const ext = analytics?.extraction_summary;
   const fund = analytics?.funding_summary;
   const dq = analytics?.data_quality_warning;
+  const fb = analytics?.fallback_diagnostics;
   return (
     <>
       <div className="wrr-kpi-grid">
@@ -258,6 +259,19 @@ function SummaryTab({ analytics, date }) {
           </div>
         </div>
       </div>
+
+      {fb && (
+        <div className="wrr-panel">
+          <div className="wrr-panel-title"><i className="ti ti-git-merge" style={{ color: COLOR }} /> Fallback Matching (TIER3)
+            <InfoIcon text="UNIQUE_TIME_AMOUNT_FALLBACK -- mencocokkan transaksi FASTPAY dgn Description transaction ID tidak lengkap (mis. 'BMS_SNAP API #3562' terpotong) via nominal+waktu unik (selisih <=3 detik), HANYA kalau kandidat FP & bank sama-sama tunggal." /></div>
+          <div className="wrr-dq-note-grid">
+            <div><span className="wrr-dq-note-label">Kandidat Fallback</span><span className="wrr-dq-note-value">{fmtN(fb.fallback_candidate_count)}</span></div>
+            <div><span className="wrr-dq-note-label">Berhasil Matched</span><span className="wrr-dq-note-value">{fmtN(fb.fallback_matched_count)}</span></div>
+            <div><span className="wrr-dq-note-label">Ambigu (&gt;1 kandidat)</span><span className="wrr-dq-note-value">{fmtN(fb.fallback_ambiguous_count)}</span></div>
+            <div><span className="wrr-dq-note-label">Sisa Belum Cocok</span><span className="wrr-dq-note-value">{fmtN(fb.orphan_unconsumed_fastpay_count)}</span></div>
+          </div>
+        </div>
+      )}
 
       <div className="wrr-panel">
         <div className="wrr-panel-title"><i className="ti ti-building-bank" style={{ color: COLOR }} /> Funding Summary

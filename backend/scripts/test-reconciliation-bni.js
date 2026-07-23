@@ -9,9 +9,10 @@ const assert = require('assert');
 const {
   isBniFpCandidate, extractBniIdentifiers, classifyBniBankRow, parseBniDateTime, formatDateJakartaBni,
   computeBniCoverage, classifyBniCoverageStatus, reconcileBniTransactions, buildBniBankFingerprint,
+  matchBniFallbackCandidates,
 } = require('../src/reconciliation/bniAdapter');
 const {
-  buildTransactionsQuery,
+  buildTransactionsQuery, dedupeBniResultsByCanonicalKey, computeBniActionableException,
 } = require('../src/routes/warroom-reconciliation-bni');
 
 const tests = [];
@@ -51,6 +52,18 @@ function fastpayDesc(id, opts = {}) {
   const refToken = (opts.refPrefix || '35') + id;
   const beneficiary = opts.beneficiary || '0246405258';
   return `TRANSFER KE | BMS_SNAP API #${id} FASTPAY ${beneficiary}/${refToken} | ${opts.recipient || 'KOPERASI KREDIT HANDAYANI BAJAWA'}`;
+}
+/** Pola PERSIS insiden produksi 2026-07-22: "FASTPAY <glob 25 digit>
+ * BMS_SNAP API #3562 <glob 16 digit> <nama> |<perusahaan>" -- hash
+ * terpotong 4 digit ("#3562", BUKAN 10 digit), TIDAK ada "/" sama sekali
+ * (jadi reference extraction juga gagal). idTransaksi yang benar TERSELIP
+ * di ekor glob 25-digit pertama, TAPI regex TIDAK dirancang mengandalkan
+ * itu (spec eksplisit -- TIDAK boleh menganggap glob angka panjang sbg
+ * id_transaksi), makanya extraction tetap NONE/null. */
+function malformedFastpayDesc(idTransaksi, opts = {}) {
+  const globPrefix = opts.globPrefix || '9884490859696';
+  const globTail = opts.globTail || '9884490859696901';
+  return `TRANSFER KE | FASTPAY ${globPrefix}${idTransaksi} BMS_SNAP API #3562 ${globTail} ${opts.recipient || 'Nama Pemilik-USAHA'} |${opts.company || 'PT CONTOH PERUSAHAAN'}`;
 }
 
 // ── TEST 1: id_biller selain 141 tidak menjadi kandidat FP ──────────────
@@ -237,19 +250,27 @@ test('TEST 19: FASTPAY debit + credit exact ID sama hari -> REVERSAL', () => {
   assert.strictEqual(results[0].reversalAmount, 300000);
 });
 
-// ── TEST 20: malformed ID di coverage -> NEED_REVIEW ─────────────────────
-test('TEST 20: deskripsi FASTPAY tapi ID malformed, DALAM coverage -> NEED_REVIEW', () => {
+// ── TEST 20: malformed ID di coverage -> FASTPAY_DEBIT_FALLBACK_CANDIDATE,
+// tetap NEED_REVIEW di hasil akhir kalau TIER3 gagal (nominal/waktu tidak
+// cocok dgn FP manapun) ───────────────────────────────────────────────────
+test('TEST 20: deskripsi FASTPAY tapi ID malformed, DALAM coverage -> FASTPAY_DEBIT_FALLBACK_CANDIDATE, tetap NEED_REVIEW kalau TIER3 gagal', () => {
   const fpRows = [
     fp('3562421102', 100000, { timeResponse: jkt('2026-07-22T08:35:00') }),
     fp('3562421202', 120000, { timeResponse: jkt('2026-07-22T08:45:00') }),
   ];
+  // debit 50000 tidak sama dgn nominal FP manapun (100000/120000) DAN waktu
+  // (08:40) berselisih >3 detik dari keduanya -- TIER3 tidak akan menemukan
+  // pasangan, jadi row ini SEHARUSNYA tetap NEED_REVIEW di hasil akhir.
   const rawBank = [rawBankRow({ description: 'TRANSFER KE | BMS_SNAP API #3562 FASTPAY tanpa referensi valid', debit: 50000, transactionDateTime: jkt('2026-07-22T08:40:00') })];
   const bankRows = preprocessBankRows(rawBank, fpRows);
-  assert.strictEqual(bankRows[0].bankRowType, 'NEED_REVIEW');
+  assert.strictEqual(bankRows[0].bankRowType, 'FASTPAY_DEBIT_FALLBACK_CANDIDATE');
   const results = reconcileBniTransactions(fpRows, bankRows, { expectedFee: 0 }, jkt('2026-07-22T10:00:00'));
   const review = results.find(r => r.idTransaksi === null);
   assert.ok(review);
   assert.strictEqual(review.reconStatus, 'NEED_REVIEW');
+  assert.strictEqual(results.fallbackDiagnostics.fallback_candidate_count, 1);
+  assert.strictEqual(results.fallbackDiagnostics.fallback_matched_count, 0);
+  assert.strictEqual(results.fallbackDiagnostics.orphan_unconsumed_fastpay_count, 1);
 });
 test('TEST 20b: deskripsi FASTPAY malformed ID, LUAR coverage -> OUT_OF_SCOPE (bukan actionable)', () => {
   const fpRows = [fp('3562421103', 100000, { timeResponse: jkt('2026-07-22T08:39:00') })];
@@ -353,6 +374,202 @@ test('TEST 29: buildTransactionsQuery -- tanpa date -> TIDAK ada filter business
   const { whereClause } = buildTransactionsQuery({ query: {} });
   assert.ok(!whereClause.includes('business_date'));
 });
+
+// ═══════════════════════════════════════════════════════════════════════
+// TIER3 UNIQUE_TIME_AMOUNT_FALLBACK -- test fokus insiden 2026-07-22 (4
+// transaksi FASTPAY dgn Description "BMS_SNAP API #3562" terpotong 4
+// digit, salah dihitung dobel sbg FP_ONLY + NEED_REVIEW terpisah)
+// ═══════════════════════════════════════════════════════════════════════
+
+// ── TEST 31: exact ID tetap MATCHED (regresi -- TIER3 tidak boleh
+// mengganggu/mendahului TIER1) ────────────────────────────────────────────
+test('TEST 31: exact ID tetap menjadi MATCHED, TIER3 tidak pernah dipanggil utk kandidat yang sudah exact-match', () => {
+  const fpRows = [fp('3562421200', 300000, { timeResponse: jkt('2026-07-22T08:39:01') })];
+  const rawBank = [rawBankRow({ description: fastpayDesc('3562421200'), debit: 300000, transactionDateTime: jkt('2026-07-22T08:39:01') })];
+  const bankRows = preprocessBankRows(rawBank, fpRows);
+  const results = reconcileBniTransactions(fpRows, bankRows, { expectedFee: 0 }, jkt('2026-07-22T10:00:00'));
+  assert.strictEqual(results.length, 1);
+  assert.strictEqual(results[0].reconStatus, 'MATCHED');
+  assert.strictEqual(results[0].matchingMethod, 'TIER1_EXACT');
+  assert.strictEqual(results.fallbackDiagnostics.fallback_candidate_count, 0, 'bank row dgn ID valid TIDAK boleh masuk kandidat fallback');
+});
+
+// ── TEST 32: malformed #3562 tidak dianggap ID valid ─────────────────────
+test('TEST 32: malformed "#3562" (4 digit, bukan 10) tidak diekstrak sbg ID -- glob angka panjang TIDAK dipakai sbg pengganti', () => {
+  const desc = malformedFastpayDesc('3562461864');
+  const info = extractBniIdentifiers(desc);
+  assert.strictEqual(info.transactionIdFromHash, null, 'hash "#3562" cuma 4 digit, TIDAK boleh cocok pola 10 digit');
+  assert.strictEqual(info.transactionIdFromReference, null, 'tidak ada "/" sama sekali di Description, reference extraction harus null');
+  assert.strictEqual(info.extractedTransactionId, null);
+  assert.strictEqual(info.extractionConfidence, 'NONE');
+});
+
+// ── TEST 33: selisih 0 detik, kandidat unik -> MATCHED via fallback ──────
+test('TEST 33: exact nominal + tanggal sama + selisih 0 detik + kandidat unik -> MATCHED via UNIQUE_TIME_AMOUNT_FALLBACK', () => {
+  const fpRows = [fp('3562461864', 165203, { timeResponse: jkt('2026-07-22T09:51:48') })];
+  const rawBank = [rawBankRow({ description: malformedFastpayDesc('3562461864'), debit: 165203, transactionDateTime: jkt('2026-07-22T09:51:48') })];
+  const bankRows = preprocessBankRows(rawBank, fpRows);
+  assert.strictEqual(bankRows[0].bankRowType, 'FASTPAY_DEBIT_FALLBACK_CANDIDATE');
+  const results = reconcileBniTransactions(fpRows, bankRows, { expectedFee: 0 }, jkt('2026-07-22T12:00:00'));
+  assert.strictEqual(results.length, 1, 'HARUS cuma 1 result (MATCHED gabungan), bukan FP_ONLY + NEED_REVIEW terpisah');
+  assert.strictEqual(results[0].reconStatus, 'MATCHED');
+  assert.strictEqual(results[0].matchingMethod, 'UNIQUE_TIME_AMOUNT_FALLBACK');
+  assert.strictEqual(results[0].idTransaksi, '3562461864');
+  assert.strictEqual(results[0].bankPrincipal, 165203);
+  assert.strictEqual(results[0].timeDifferenceSeconds, 0);
+});
+
+// ── TEST 34: selisih 1 detik, kandidat unik -> MATCHED ───────────────────
+// (2 FP anchor tambahan supaya "core" coverage window tidak zero-width --
+// pola sama dgn TEST 15, prasyarat teknis coverage/BOUNDARY_PARTIAL vs
+// INSIDE_FP_COVERAGE, TIDAK terjadi pada data produksi asli krn 1 batch
+// selalu berisi ratusan FP row sepanjang hari.)
+test('TEST 34: selisih 1 detik dan kandidat unik menjadi MATCHED via fallback', () => {
+  const fpRows = [
+    fp('3562550000', 999999, { timeResponse: jkt('2026-07-22T08:00:00') }), // anchor awal
+    fp('3562559003', 348780, { timeResponse: jkt('2026-07-22T13:22:04') }), // target
+    fp('3562570000', 999999, { timeResponse: jkt('2026-07-22T18:00:00') }), // anchor akhir
+  ];
+  const rawBank = [rawBankRow({ description: malformedFastpayDesc('3562559003'), debit: 348780, transactionDateTime: jkt('2026-07-22T13:22:03') })];
+  const bankRows = preprocessBankRows(rawBank, fpRows);
+  assert.strictEqual(bankRows[0].coverageStatus, 'INSIDE_FP_COVERAGE');
+  const results = reconcileBniTransactions(fpRows, bankRows, { expectedFee: 0 }, jkt('2026-07-22T19:00:00'));
+  const target = results.find(r => r.idTransaksi === '3562559003');
+  assert.ok(target);
+  assert.strictEqual(target.reconStatus, 'MATCHED');
+  assert.strictEqual(target.matchingMethod, 'UNIQUE_TIME_AMOUNT_FALLBACK');
+  assert.strictEqual(Math.abs(target.timeDifferenceSeconds), 1);
+});
+
+// ── TEST 35: selisih >3 detik -> TIDAK fallback ──────────────────────────
+test('TEST 35: selisih waktu lebih dari 3 detik tidak boleh fallback -- tetap FP_ONLY & NEED_REVIEW terpisah', () => {
+  const fpRows = [
+    fp('3562550001', 999999, { timeResponse: jkt('2026-07-22T08:00:00') }), // anchor awal
+    fp('3562562381', 131280, { timeResponse: jkt('2026-07-22T13:29:11') }), // target
+    fp('3562570001', 999999, { timeResponse: jkt('2026-07-22T18:00:00') }), // anchor akhir
+  ];
+  const rawBank = [rawBankRow({ description: malformedFastpayDesc('3562562381'), debit: 131280, transactionDateTime: jkt('2026-07-22T13:29:16') })]; // selisih 5 detik
+  const bankRows = preprocessBankRows(rawBank, fpRows);
+  assert.strictEqual(bankRows[0].coverageStatus, 'INSIDE_FP_COVERAGE');
+  const results = reconcileBniTransactions(fpRows, bankRows, { expectedFee: 0, graceMinutes: 0 }, jkt('2026-07-22T19:00:00'));
+  const fpResult = results.find(r => r.idTransaksi === '3562562381');
+  const bankResult = results.find(r => r.idTransaksi === null);
+  assert.strictEqual(fpResult.reconStatus, 'FP_ONLY');
+  assert.ok(bankResult, 'bank row harus tetap ada sbg NEED_REVIEW (bukan diam-diam hilang jadi OUT_OF_SCOPE)');
+  assert.strictEqual(bankResult.reconStatus, 'NEED_REVIEW');
+  assert.strictEqual(results.fallbackDiagnostics.fallback_matched_count, 0);
+});
+
+// ── TEST 36: nominal sama, 2 kandidat FP -> ambigu, TIDAK di-match ───────
+test('TEST 36: nominal sama tapi ada DUA kandidat FP dlm window 3 detik -> tidak di-match, tetap NEED_REVIEW (bukan menebak)', () => {
+  const fpRows = [
+    fp('3562660001', 400000, { timeResponse: jkt('2026-07-22T16:20:17') }),
+    fp('3562660002', 400000, { timeResponse: jkt('2026-07-22T16:20:18') }), // beda 1 detik, nominal SAMA -- keduanya kandidat valid utk bank row yg sama
+  ];
+  const rawBank = [rawBankRow({ description: malformedFastpayDesc('3562660939'), debit: 400000, transactionDateTime: jkt('2026-07-22T16:20:18') })];
+  const bankRows = preprocessBankRows(rawBank, fpRows);
+  const results = reconcileBniTransactions(fpRows, bankRows, { expectedFee: 0, graceMinutes: 0 }, jkt('2026-07-22T17:00:00'));
+  const fp1 = results.find(r => r.idTransaksi === '3562660001');
+  const fp2 = results.find(r => r.idTransaksi === '3562660002');
+  const bankResult = results.find(r => r.idTransaksi === null);
+  assert.strictEqual(fp1.reconStatus, 'FP_ONLY', 'ambigu -- TIDAK boleh menebak salah satu FP');
+  assert.strictEqual(fp2.reconStatus, 'FP_ONLY');
+  assert.ok(bankResult, 'bank row harus tetap ada sbg NEED_REVIEW (bukan diam-diam hilang)');
+  assert.strictEqual(bankResult.reconStatus, 'NEED_REVIEW');
+  assert.strictEqual(results.fallbackDiagnostics.fallback_matched_count, 0);
+  assert.strictEqual(results.fallbackDiagnostics.fallback_ambiguous_count, 1);
+});
+
+// ── TEST 37: bank row fallback consumed -> TIDAK menghasilkan NEED_REVIEW/BANK_ONLY ──
+test('TEST 37: bank row yang berhasil consumed via fallback TIDAK menghasilkan hasil NEED_REVIEW atau BANK_ONLY tambahan', () => {
+  const fpRows = [
+    fp('3562550002', 999999, { timeResponse: jkt('2026-07-22T08:00:00') }), // anchor awal
+    fp('3562660939', 400000, { timeResponse: jkt('2026-07-22T16:20:18') }), // target
+    fp('3562570002', 999999, { timeResponse: jkt('2026-07-22T18:00:00') }), // anchor akhir
+  ];
+  const rawBank = [rawBankRow({ description: malformedFastpayDesc('3562660939'), debit: 400000, transactionDateTime: jkt('2026-07-22T16:20:17') })];
+  const bankRows = preprocessBankRows(rawBank, fpRows);
+  assert.strictEqual(bankRows[0].coverageStatus, 'INSIDE_FP_COVERAGE');
+  const results = reconcileBniTransactions(fpRows, bankRows, { expectedFee: 0 }, jkt('2026-07-22T19:00:00'));
+  // pastikan fallback SUNGGUH terjadi (bukan bank row diam-diam hilang jadi OUT_OF_SCOPE)
+  assert.strictEqual(results.fallbackDiagnostics.fallback_matched_count, 1);
+  const target = results.find(r => r.idTransaksi === '3562660939');
+  assert.strictEqual(target.reconStatus, 'MATCHED');
+  const needReviewOrBankOnly = results.filter(r => r.reconStatus === 'NEED_REVIEW' || r.reconStatus === 'BANK_ONLY');
+  assert.strictEqual(needReviewOrBankOnly.length, 0, 'tidak boleh ada NEED_REVIEW/BANK_ONLY sisa dari bank row yang sudah consumed');
+});
+
+// ── TEST 38: FP matched fallback -> TIDAK menghasilkan FP_ONLY ───────────
+test('TEST 38: FP yang berhasil matched via fallback TIDAK menghasilkan hasil FP_ONLY terpisah', () => {
+  const fpRows = [
+    fp('3562550003', 999999, { timeResponse: jkt('2026-07-22T08:00:00') }), // anchor awal
+    fp('3562660939', 400000, { timeResponse: jkt('2026-07-22T16:20:18') }), // target
+    fp('3562570003', 999999, { timeResponse: jkt('2026-07-22T18:00:00') }), // anchor akhir
+  ];
+  const rawBank = [rawBankRow({ description: malformedFastpayDesc('3562660939'), debit: 400000, transactionDateTime: jkt('2026-07-22T16:20:17') })];
+  const bankRows = preprocessBankRows(rawBank, fpRows);
+  const results = reconcileBniTransactions(fpRows, bankRows, { expectedFee: 0 }, jkt('2026-07-22T19:00:00'));
+  const fpOnlyForTarget = results.filter(r => r.idTransaksi === '3562660939' && r.reconStatus === 'FP_ONLY');
+  assert.strictEqual(fpOnlyForTarget.length, 0);
+  const target = results.find(r => r.idTransaksi === '3562660939');
+  assert.ok(target);
+  assert.strictEqual(target.reconStatus, 'MATCHED');
+});
+
+// ── TEST 39: funding credit TIDAK masuk Actionable Exception ────────────
+test('TEST 39: FUNDING_CREDIT tidak pernah dihitung sbg Actionable Exception (row DB-shape, snake_case)', () => {
+  const dbRows = [
+    { canonical_transaction_key: 'FUND::1', recon_status: 'FUNDING_CREDIT', fp_nominal: null, bank_total_debit: null, id_conflict: false },
+    { canonical_transaction_key: '3562421200', recon_status: 'MATCHED', fp_nominal: 300000, bank_total_debit: null, id_conflict: false },
+    { canonical_transaction_key: '3562421999', recon_status: 'FP_ONLY', fp_nominal: 100000, bank_total_debit: null, id_conflict: false },
+  ];
+  const actionable = computeBniActionableException(dbRows);
+  assert.strictEqual(actionable.count, 1, 'FUNDING_CREDIT & MATCHED tidak boleh ikut terhitung, hanya FP_ONLY');
+});
+
+// ── TEST 40: Actionable Exception dihitung distinct canonical key ───────
+test('TEST 40: Actionable Exception dihitung DISTINCT canonical_transaction_key (dedupe dulu, bukan raw count)', () => {
+  const dbRowsRaw = [
+    { id: 1, canonical_transaction_key: '3562421999', recon_status: 'FP_ONLY', fp_nominal: 100000, bank_total_debit: null, id_conflict: false },
+    { id: 2, canonical_transaction_key: '3562421999', recon_status: 'FP_ONLY', fp_nominal: 100000, bank_total_debit: null, id_conflict: false }, // duplikat canonical key (mis. sisa row lama)
+  ];
+  const deduped = dedupeBniResultsByCanonicalKey(dbRowsRaw);
+  assert.strictEqual(deduped.length, 1, 'harus 1 baris per canonical_transaction_key, bukan 2');
+  const actionable = computeBniActionableException(deduped);
+  assert.strictEqual(actionable.count, 1);
+});
+
+// ── TEST 41: 4 sample malformed (pola PERSIS insiden produksi 2026-07-22) -> 4 MATCHED ──
+test('TEST 41: empat sample malformed (data aktual insiden 2026-07-22) menghasilkan empat MATCHED via fallback, actionable exception dari keempatnya = 0', () => {
+  const samples = [
+    { id: '3562461864', nominal: 165203, fpTime: '2026-07-22T09:51:48', bankTime: '2026-07-22T09:51:48' },
+    { id: '3562559003', nominal: 348780, fpTime: '2026-07-22T13:22:04', bankTime: '2026-07-22T13:22:03' },
+    { id: '3562562381', nominal: 131280, fpTime: '2026-07-22T13:29:12', bankTime: '2026-07-22T13:29:11' },
+    { id: '3562660939', nominal: 400000, fpTime: '2026-07-22T16:20:18', bankTime: '2026-07-22T16:20:17' },
+  ];
+  const fpRows = samples.map(s => fp(s.id, s.nominal, { timeResponse: jkt(s.fpTime) }));
+  const rawBank = samples.map(s => rawBankRow({ description: malformedFastpayDesc(s.id), debit: s.nominal, transactionDateTime: jkt(s.bankTime) }));
+  const bankRows = preprocessBankRows(rawBank, fpRows);
+  assert.strictEqual(bankRows.filter(b => b.bankRowType === 'FASTPAY_DEBIT_FALLBACK_CANDIDATE').length, 4);
+  const results = reconcileBniTransactions(fpRows, bankRows, { expectedFee: 0 }, jkt('2026-07-22T18:00:00'));
+  assert.strictEqual(results.length, 4, `harus 4 result (bukan 8 -- FP_ONLY+NEED_REVIEW terpisah), got ${results.length}`);
+  assert.ok(results.every(r => r.reconStatus === 'MATCHED'), `seluruh 4 harus MATCHED, got ${JSON.stringify(results.map(r => r.reconStatus))}`);
+  assert.ok(results.every(r => r.matchingMethod === 'UNIQUE_TIME_AMOUNT_FALLBACK'));
+  assert.strictEqual(results.fallbackDiagnostics.fallback_candidate_count, 4);
+  assert.strictEqual(results.fallbackDiagnostics.fallback_matched_count, 4);
+  assert.strictEqual(results.fallbackDiagnostics.fallback_ambiguous_count, 0);
+  assert.strictEqual(results.fallbackDiagnostics.orphan_unconsumed_fastpay_count, 0);
+});
+
+// Item spec #12 (hasil akhir skala penuh 1 batch: Total FP=316, Matched=316,
+// FP Only=0, Bank Only=0, Need Review=0, Actionable Exception=0, Funding
+// Credit=4, Total Funding=Rp350.000.000) TIDAK disintesis di sini --
+// mereplikasi 316 baris asli dari 1 batch produksi ke fixture unit test
+// tidak proporsional & rawan drift dari data sungguhan. Diverifikasi
+// end-to-end via REPROCESS batch 2026-07-22 yang sudah ada di server +
+// hit endpoint analytics sungguhan (lihat bagian verifikasi live di commit
+// message / dijalankan manual pasca-deploy) -- pola SAMA dgn TEST 23/24
+// (idempotensi resync) yang juga tidak bisa di-unit-test murni tanpa DB.
 
 // TEST 30 (frontend build) & 31 (test BNI ini sendiri lulus) diverifikasi
 // di luar file ini (npm run build di frontend/, dan exit code runner di

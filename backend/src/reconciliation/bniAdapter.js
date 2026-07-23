@@ -67,7 +67,7 @@ const HASH_PATTERN_PRIMARY = /BMS_SNAP\s+API\s*#\s*(\d{10})\b/i;
 const HASH_PATTERN_FALLBACK = /#\s*(\d{10})\b/;
 const REFERENCE_ANCHORED_PATTERN = /FASTPAY\s+(\d{6,20})\/(\d{10,20})\b/i;
 const REFERENCE_BARE_PATTERN = /\/(\d{10,20})\b/;
-const FUNDING_PATTERNS = ['PB KE BNI MULTIBILLER', 'BIMASAKTI MULTI SINERGI'];
+const FUNDING_PATTERNS = ['PB KE BNI MULTIBILLER', 'PB BNI OPS BMS KE BNI MULTIBILLER', 'BIMASAKTI MULTI SINERGI'];
 
 function extractHashId(description) {
   const s = String(description || '');
@@ -146,9 +146,10 @@ function extractBniIdentifiers(description) {
 // extraction: hasil extractBniIdentifiers(row.description) — dihitung
 //   caller SEKALI per baris (dipakai jg utk field lain), bukan di sini.
 // coverageStatus: hasil classifyBniCoverageStatus() utk baris ini — HANYA
-//   dipakai utk rule 5 (fastpay-like tapi ID invalid/conflict): dalam
-//   coverage -> NEED_REVIEW (actionable), luar coverage -> OUT_OF_SCOPE
-//   (tetap tersimpan di Raw Data, TIDAK PERNAH jadi actionable exception).
+//   dipakai utk rule 5/6 (fastpay-like tapi ID invalid/conflict): dalam
+//   coverage -> NEED_REVIEW/FASTPAY_DEBIT_FALLBACK_CANDIDATE (actionable),
+//   luar coverage -> OUT_OF_SCOPE (tetap tersimpan di Raw Data, TIDAK
+//   PERNAH jadi actionable exception).
 // ─────────────────────────────────────────────────────────────────────────
 function classifyBniBankRow(row, extraction, coverageStatus) {
   const description = String(row.description || '').trim();
@@ -165,6 +166,15 @@ function classifyBniBankRow(row, extraction, coverageStatus) {
 
   if (debit !== null && debit > 0 && looksFastpay && idValid) return 'FASTPAY_DEBIT';
   if (credit !== null && credit > 0 && looksFastpay && idValid) return 'CREDIT_REVERSAL';
+  // Debit FASTPAY tapi transaction ID TIDAK lengkap/conflict (mis. Description
+  // "BMS_SNAP API #3562" terpotong 4 digit, bukan 10) -- JANGAN langsung
+  // difinalkan NEED_REVIEW. Beri kesempatan TIER3 UNIQUE_TIME_AMOUNT_FALLBACK
+  // (reconcileBniTransactions) mencocokkan via nominal+waktu unik SEBELUM
+  // jatuh ke NEED_REVIEW (spec eksplisit -- lihat insiden 4 transaksi
+  // 2026-07-22 yg salah dihitung dobel sbg FP_ONLY + NEED_REVIEW).
+  if (debit !== null && debit > 0 && looksFastpay && !idValid) {
+    return coverageStatus === 'INSIDE_FP_COVERAGE' ? 'FASTPAY_DEBIT_FALLBACK_CANDIDATE' : 'OUT_OF_SCOPE';
+  }
   if (looksFastpay) {
     return coverageStatus === 'INSIDE_FP_COVERAGE' ? 'NEED_REVIEW' : 'OUT_OF_SCOPE';
   }
@@ -270,6 +280,81 @@ function computeBniTimeOrderStatus(diffSeconds, bankBeforeFpToleranceMinutes) {
   if (abs <= 300) return 'WARNING';
   if (abs <= 900) return 'DELAYED';
   return 'EXTREME';
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// TIER 3 — UNIQUE_TIME_AMOUNT_FALLBACK. PURE function, dipanggil HANYA
+// setelah TIER1/TIER2 (exact transaction ID) selesai & gagal. Cakupan
+// SANGAT SEMPIT by design (spec eksplisit "jangan memperlebar fallback
+// tanpa batas") -- fpCandidates HARUS sudah difilter caller ke FP yang
+// TIDAK ketemu grup ID exact, bankCandidates HARUS sudah difilter ke bank
+// row bankRowType='FASTPAY_DEBIT_FALLBACK_CANDIDATE' (debit FASTPAY tapi
+// transaction ID tidak lengkap/conflict, lihat classifyBniBankRow()).
+//
+// Syarat MUTLAK (semua harus terpenuhi, TIDAK ADA pengecualian):
+//   - business date FP & bank SAMA (Asia/Jakarta)
+//   - debit bank == nominal FP PERSIS (numEq, bukan toleransi rupiah longgar)
+//   - selisih waktu absolut <= 3 detik
+//   - HANYA ADA SATU kandidat bank utk FP itu, DAN HANYA ADA SATU kandidat
+//     FP utk bank itu (mutual uniqueness, dihitung dari SELURUH pasangan
+//     yang memenuhi syarat di atas -- bukan "yang terdekat menang"). Kalau
+//     salah satu sisi py >1 kandidat yang sama-sama valid, KEDUA sisi tetap
+//     TIDAK di-match (tidak menebak) -- FP tetap FP_ONLY/PENDING_BANK, bank
+//     tetap NEED_REVIEW.
+//
+// TIDAK PERNAH mencocokkan hanya berdasarkan nominal ATAU waktu saja, tidak
+// pernah pakai beneficiary_account/recipient_name/Journal No./angka
+// panjang pada Description (spec eksplisit larangan) -- HANYA
+// (business_date, nominal exact, |Δt|<=3s, kandidat unik dua arah).
+// ─────────────────────────────────────────────────────────────────────────
+const FALLBACK_MAX_DIFF_SECONDS = 3;
+
+function matchBniFallbackCandidates(fpCandidates, bankCandidates) {
+  const compatiblePairs = [];
+  for (const fp of fpCandidates || []) {
+    if (!(fp.fpTimeResponse instanceof Date) || Number.isNaN(fp.fpTimeResponse.getTime())) continue;
+    if (typeof fp.fpNominal !== 'number') continue;
+    const fpBusinessDate = formatDateJakartaBni(fp.fpTimeResponse);
+    for (const bank of bankCandidates || []) {
+      if (!(bank.transactionDateTime instanceof Date) || Number.isNaN(bank.transactionDateTime.getTime())) continue;
+      const bankBusinessDate = bank.businessDate || formatDateJakartaBni(bank.transactionDateTime);
+      if (fpBusinessDate && bankBusinessDate && fpBusinessDate !== bankBusinessDate) continue;
+      if (typeof bank.debit !== 'number' || !numEq(bank.debit, fp.fpNominal)) continue;
+      const diffSeconds = (bank.transactionDateTime.getTime() - fp.fpTimeResponse.getTime()) / 1000;
+      if (Math.abs(diffSeconds) > FALLBACK_MAX_DIFF_SECONDS) continue;
+      compatiblePairs.push({ fp, bank, diffSeconds });
+    }
+  }
+
+  const fpDegree = new Map();
+  const bankDegree = new Map();
+  for (const p of compatiblePairs) {
+    fpDegree.set(p.fp.idTransaksi, (fpDegree.get(p.fp.idTransaksi) || 0) + 1);
+    bankDegree.set(p.bank.bankFingerprint, (bankDegree.get(p.bank.bankFingerprint) || 0) + 1);
+  }
+
+  const matchedPairs = [];
+  const matchedBankFingerprints = new Set();
+  const ambiguousBankFingerprints = new Set();
+  for (const p of compatiblePairs) {
+    const fpUnique = fpDegree.get(p.fp.idTransaksi) === 1;
+    const bankUnique = bankDegree.get(p.bank.bankFingerprint) === 1;
+    if (fpUnique && bankUnique) {
+      matchedPairs.push(p);
+      matchedBankFingerprints.add(p.bank.bankFingerprint);
+    } else {
+      ambiguousBankFingerprints.add(p.bank.bankFingerprint);
+    }
+  }
+  for (const bf of matchedBankFingerprints) ambiguousBankFingerprints.delete(bf);
+
+  return {
+    matchedPairs,
+    fallbackCandidateCount: (bankCandidates || []).length,
+    fallbackMatchedCount: matchedPairs.length,
+    fallbackAmbiguousCount: ambiguousBankFingerprints.size,
+    orphanUnconsumedFastpayCount: (bankCandidates || []).length - matchedPairs.length,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -410,6 +495,16 @@ function reconcileBniTransactions(fpRows, bankRows, config = {}, now = new Date(
 
   const results = [];
   const processedIds = new Set();
+  // FP yang tidak ketemu grup ID exact -- BELUM difinalkan FP_ONLY/
+  // PENDING_BANK di sini, ditunda ke TIER3 UNIQUE_TIME_AMOUNT_FALLBACK
+  // SETELAH loop exact-ID selesai (spec eksplisit: "Jangan membuat FP_ONLY
+  // sebelum seluruh fallback selesai dijalankan"). `result` object itu
+  // sendiri yang di-defer (bukan salinan field terpisah) supaya field yang
+  // sudah dihitung (fpNominal/fpTimeResponse/agingMinutes/idOutlet/dst)
+  // tidak perlu diduplikasi -- fallback pass tinggal MENGISI field yang
+  // masih null kalau berhasil match, atau finalize FP_ONLY/PENDING_BANK
+  // seperti semula kalau tidak.
+  const deferredResults = [];
 
   for (const fp of fpRows) {
     const idTransaksi = normalizeKey(fp.idTransaksi);
@@ -442,8 +537,7 @@ function reconcileBniTransactions(fpRows, bankRows, config = {}, now = new Date(
 
     const candidateGroups = (groupsById.get(idTransaksi) || []).filter(g => !consumedGroupKeys.has(g.groupKey));
     if (candidateGroups.length === 0) {
-      result.reconStatus = (agingMinutes !== null && agingMinutes < graceMinutes) ? 'PENDING_BANK' : 'FP_ONLY';
-      results.push(result);
+      deferredResults.push(result); // TIER3 fallback pass memutuskan status-nya, lihat bawah
       continue;
     }
 
@@ -548,6 +642,52 @@ function reconcileBniTransactions(fpRows, bankRows, config = {}, now = new Date(
     results.push(result);
   }
 
+  // ── TIER3 UNIQUE_TIME_AMOUNT_FALLBACK -- HANYA utk FP yang gagal exact-ID
+  // (deferredResults) dipasangkan ke bank row FASTPAY_DEBIT_FALLBACK_CANDIDATE
+  // yang masih unconsumed. Dijalankan SETELAH seluruh exact-ID matching
+  // selesai (tidak pernah mendahului/menggantikan TIER1/TIER2). ──
+  const fallbackBankCandidates = bankRows.filter(b => b.bankRowType === 'FASTPAY_DEBIT_FALLBACK_CANDIDATE');
+  const fallback = matchBniFallbackCandidates(
+    deferredResults.map(r => ({ idTransaksi: r.idTransaksi, fpNominal: r.fpNominal, fpTimeResponse: r.fpTimeResponse })),
+    fallbackBankCandidates
+  );
+  const fallbackMatchedBankFingerprints = new Set(fallback.matchedPairs.map(p => p.bank.bankFingerprint));
+  const fallbackPairByFpId = new Map(fallback.matchedPairs.map(p => [p.fp.idTransaksi, p]));
+
+  for (const result of deferredResults) {
+    const pair = fallbackPairByFpId.get(result.idTransaksi);
+    if (pair) {
+      const bank = pair.bank;
+      const diffSeconds = Math.round(pair.diffSeconds);
+      result.bankTransactionDate = bank.transactionDateTime || null;
+      result.bankGrossDebit = bank.debit;
+      result.bankPrincipal = bank.debit;
+      result.bankFee = 0;
+      result.bankTotalDebit = bank.debit;
+      result.variancePrincipal = 0;
+      result.varianceFee = 0;
+      result.timeDifferenceSeconds = diffSeconds;
+      result.timeOrderStatus = computeBniTimeOrderStatus(diffSeconds, bankBeforeFpToleranceMinutes);
+      result.beneficiaryAccount = bank.beneficiaryAccount;
+      result.recipientName = bank.recipientName;
+      result.branch = bank.branch;
+      result.journalNo = bank.journalNo;
+      result.transactionIdFromHash = bank.transactionIdFromHash;
+      result.transactionIdFromReference = bank.transactionIdFromReference;
+      result.extractedTransactionId = null; // TIDAK PERNAH menganggap ekstraksi ID valid lewat jalur fallback
+      result.extractionConfidence = bank.extractionConfidence;
+      result.idConflict = bank.idConflict;
+      result.coverageStatus = bank.coverageStatus;
+      result.bankFingerprint = bank.bankFingerprint;
+      result.matchingMethod = 'UNIQUE_TIME_AMOUNT_FALLBACK';
+      result.reconStatus = 'MATCHED';
+      result.notes = `Dicocokkan via TIER3 fallback nominal+waktu (selisih ${diffSeconds} detik) -- transaction ID tidak lengkap pada Description bank ("BMS_SNAP API #" terpotong).`;
+    } else {
+      result.reconStatus = (result.agingMinutes !== null && result.agingMinutes < graceMinutes) ? 'PENDING_BANK' : 'FP_ONLY';
+    }
+    results.push(result);
+  }
+
   // ── BANK_ONLY / REVERSAL / NEED_REVIEW tanpa FP -- HANYA grup/baris yang
   // belum consumed DAN berada INSIDE_FP_COVERAGE. Di luar coverage TETAP
   // tersimpan di Raw Data (recon_bank_transactions) tapi TIDAK PERNAH
@@ -590,9 +730,14 @@ function reconcileBniTransactions(fpRows, bankRows, config = {}, now = new Date(
   // bukan FASTPAY_DEBIT/CREDIT_REVERSAL). classifyBniBankRow() SUDAH
   // memastikan hanya baris INSIDE_FP_COVERAGE yang diberi type NEED_REVIEW
   // (di luar coverage -> OUT_OF_SCOPE), jadi tidak perlu filter ulang di
-  // sini -- tetap dicek eksplisit sbg defense-in-depth.
+  // sini -- tetap dicek eksplisit sbg defense-in-depth. Baris
+  // FASTPAY_DEBIT_FALLBACK_CANDIDATE yang GAGAL TIER3 (tidak ada kandidat
+  // FP cocok, atau ambigu) IKUT jatuh ke sini juga -- HANYA kalau belum
+  // consumed lewat fallback (fallbackMatchedBankFingerprints).
   for (const b of bankRows) {
-    if (b.bankRowType !== 'NEED_REVIEW') continue;
+    const isPlainNeedReview = b.bankRowType === 'NEED_REVIEW';
+    const isUnresolvedFallbackCandidate = b.bankRowType === 'FASTPAY_DEBIT_FALLBACK_CANDIDATE' && !fallbackMatchedBankFingerprints.has(b.bankFingerprint);
+    if (!isPlainNeedReview && !isUnresolvedFallbackCandidate) continue;
     if (b.coverageStatus !== 'INSIDE_FP_COVERAGE') continue;
     results.push({
       ...baseSyntheticResult({
@@ -604,11 +749,24 @@ function reconcileBniTransactions(fpRows, bankRows, config = {}, now = new Date(
       }),
       reconStatus: 'NEED_REVIEW',
       matchingMethod: 'UNKNOWN',
-      notes: b.idConflict
-        ? 'Deskripsi FASTPAY tapi hash ID dan reference ID BERBEDA (conflict) -- tidak bisa dipilih otomatis.'
-        : 'Deskripsi FASTPAY tapi transaction ID tidak dapat diekstrak (malformed).',
+      notes: isUnresolvedFallbackCandidate
+        ? 'Deskripsi FASTPAY tapi transaction ID tidak lengkap pada Description, dan TIER3 fallback nominal+waktu tidak menemukan pasangan unik (tidak ada kandidat FP cocok, atau ambigu >1 kandidat).'
+        : (b.idConflict
+          ? 'Deskripsi FASTPAY tapi hash ID dan reference ID BERBEDA (conflict) -- tidak bisa dipilih otomatis.'
+          : 'Deskripsi FASTPAY tapi transaction ID tidak dapat diekstrak (malformed).'),
     });
   }
+
+  // Diagnostic TIER3 (spec eksplisit) -- ditempel sbg properti non-index di
+  // array `results` (BUKAN mengubah return jadi object) supaya SELURUH
+  // caller existing yang memperlakukan hasil sbg array biasa (.filter/.map/
+  // for..of/.length, termasuk test lama) tetap jalan tanpa perubahan.
+  results.fallbackDiagnostics = {
+    fallback_candidate_count: fallback.fallbackCandidateCount,
+    fallback_matched_count: fallback.fallbackMatchedCount,
+    fallback_ambiguous_count: fallback.fallbackAmbiguousCount,
+    orphan_unconsumed_fastpay_count: fallback.orphanUnconsumedFastpayCount,
+  };
 
   return results;
 }
@@ -657,11 +815,13 @@ module.exports = {
   computeBniTimeOrderStatus,
   computeBniBankGroupKey,
   buildBniBankGroups,
+  matchBniFallbackCandidates,
   reconcileBniTransactions,
   applyBniReversalCrossDateLookup,
   buildBniBankFingerprint,
   numEq,
   normalizeKey,
+  FALLBACK_MAX_DIFF_SECONDS,
   DEFAULT_FEE_BNI,
   DEFAULT_GRACE_MINUTES,
   DEFAULT_COVERAGE_TOLERANCE_BEFORE_MINUTES,
