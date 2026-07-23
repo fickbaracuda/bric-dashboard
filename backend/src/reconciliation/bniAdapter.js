@@ -317,7 +317,16 @@ function matchBniFallbackCandidates(fpCandidates, bankCandidates) {
     const fpBusinessDate = formatDateJakartaBni(fp.fpTimeResponse);
     for (const bank of bankCandidates || []) {
       if (!(bank.transactionDateTime instanceof Date) || Number.isNaN(bank.transactionDateTime.getTime())) continue;
-      const bankBusinessDate = bank.businessDate || formatDateJakartaBni(bank.transactionDateTime);
+      // SENGAJA TIDAK memakai bank.businessDate mentah -- field itu di
+      // route handler/reprocess script dibangun dari `SELECT *` TANPA cast
+      // `::text` pada kolom DATE, jadi berisi JS Date object yang di-
+      // String()-kan (mis. "Wed Jul 22 2026 ...".slice(0,10) -> "Wed Jul 22",
+      // BUKAN "2026-07-22"). Insiden nyata: ini membuat SELURUH TIER3
+      // fallback gagal (business date "cocok" tidak pernah true) saat
+      // reprocess batch produksi 2026-07-22. formatDateJakartaBni() di sini
+      // SELALU menghitung ulang dari transactionDateTime (Date object asli,
+      // bukan string turunan yang berpotensi salah format).
+      const bankBusinessDate = formatDateJakartaBni(bank.transactionDateTime);
       if (fpBusinessDate && bankBusinessDate && fpBusinessDate !== bankBusinessDate) continue;
       if (typeof bank.debit !== 'number' || !numEq(bank.debit, fp.fpNominal)) continue;
       const diffSeconds = (bank.transactionDateTime.getTime() - fp.fpTimeResponse.getTime()) / 1000;

@@ -516,6 +516,26 @@ test('TEST 38: FP yang berhasil matched via fallback TIDAK menghasilkan hasil FP
   assert.strictEqual(target.reconStatus, 'MATCHED');
 });
 
+// ── TEST 38b: REGRESI -- matchBniFallbackCandidates TIDAK boleh
+// bergantung pada bank.businessDate mentah (field itu di route
+// handler/reprocess script dibangun dari SELECT * TANPA cast ::text pada
+// kolom DATE, sehingga bisa berisi String(Date object) yang GARBLED, mis.
+// "Wed Jul 22 2026 ...".slice(0,10) -> "Wed Jul 22", BUKAN "2026-07-22".
+// Insiden nyata: ini membuat SELURUH TIER3 fallback gagal total (0 dari 4
+// matched) saat reprocess batch produksi 2026-07-22, walau data FP & bank
+// nominal/waktu-nya sudah persis cocok) -────────────────────────────────
+test('TEST 38b: fallback tetap MATCHED walau bank.businessDate berupa string garbled (bukti fix TIDAK bergantung pada field itu)', () => {
+  const fpCandidates = [{ idTransaksi: '3562461864', fpNominal: 165203, fpTimeResponse: jkt('2026-07-22T09:51:48') }];
+  const bankCandidates = [{
+    bankFingerprint: 'fp1',
+    debit: 165203,
+    transactionDateTime: jkt('2026-07-22T09:51:48'),
+    businessDate: 'Wed Jul 22', // pola GARBLED persis insiden nyata -- HARUS tetap match
+  }];
+  const result = matchBniFallbackCandidates(fpCandidates, bankCandidates);
+  assert.strictEqual(result.matchedPairs.length, 1, 'businessDate garbled TIDAK boleh menggagalkan fallback -- harus dihitung ulang dari transactionDateTime');
+});
+
 // ── TEST 39: funding credit TIDAK masuk Actionable Exception ────────────
 test('TEST 39: FUNDING_CREDIT tidak pernah dihitung sbg Actionable Exception (row DB-shape, snake_case)', () => {
   const dbRows = [
