@@ -361,6 +361,34 @@ async function syncHandler(req, res) {
       client.query('SELECT * FROM recon_bank_transactions WHERE batch_id = $1', [batchId]),
     ]);
 
+    // Sync BNI bersifat REAKTIF (bukan jadwal tetap, lihat header Apps
+    // Script) & business_date SELALU = tanggal kalender saat sync jalan --
+    // kalau "Data Bank BNI" belum sempat di-refresh sumbernya saat sync
+    // ini terpicu, bank_row_count bisa 0 padahal "Data FP" masih berisi
+    // baris LAMA (dari hari sebelumnya yg belum diganti). Kalau tetap
+    // difinalize, SELURUH baris FP itu otomatis muncul sbg FP_ONLY/
+    // actionable exception palsu (padahal cuma menunggu data bank, bukan
+    // benar2 gagal rekon) -- insiden nyata: batch 2026-07-23 tampil 316 FP
+    // Only/316 Actionable Exception, padahal itu 316 transaksi tanggal
+    // 2026-07-22 yg SUDAH matched, muncul lagi krn sheet FP belum di-reset.
+    // Fix: batch dgn bank_row_count=0 TIDAK PERNAH difinalize -- dihapus
+    // total ("batch tidak dibuat"), supaya fallback "batch terakhir" di
+    // analyticsHandler/dailyReportHandler tetap mengarah ke batch valid
+    // sebelumnya, bukan batch kosong yg menyesatkan.
+    if (bankAllRes.rows.length === 0) {
+      await client.query('DELETE FROM recon_results WHERE batch_id = $1', [batchId]);
+      await client.query('DELETE FROM recon_fp_transactions WHERE batch_id = $1', [batchId]);
+      await client.query('DELETE FROM recon_bank_transactions WHERE batch_id = $1', [batchId]);
+      await client.query('DELETE FROM recon_sync_batches WHERE id = $1', [batchId]);
+      await client.query('COMMIT');
+      const msg = `Sync dilewati utk business_date ${businessDate}: Data Bank BNI masih kosong (0 baris) -- batch TIDAK dibuat, dashboard tetap menampilkan batch terakhir yang valid.`;
+      console.warn(`reconciliation-bni sync: ${msg}`);
+      return res.json({
+        success: true, skipped: true, business_date: businessDate, bank_code: BANK_CODE,
+        fp_row_count: fpAllRes.rows.length, bank_row_count: 0, engine_run: false, message: msg,
+      });
+    }
+
     const fpForEngineAll = fpAllRes.rows.map(r => ({
       idTransaksi: r.id_transaksi, nominal: r.nominal !== null ? Number(r.nominal) : null,
       idProduk: r.id_produk, timeResponse: r.time_response ? new Date(r.time_response) : null,
