@@ -7,7 +7,8 @@
 
 const assert = require('assert');
 const {
-  isBniFpCandidate, extractBniIdentifiers, classifyBniBankRow, parseBniDateTime, formatDateJakartaBni,
+  isBniFpCandidate, extractBniIdentifiers, extractBniReferenceTransactionId, classifyBniBankRow,
+  parseBniDateTime, formatDateJakartaBni, isBniBankTimeUnavailable,
   computeBniCoverage, classifyBniCoverageStatus, reconcileBniTransactions, buildBniBankFingerprint,
   matchBniFallbackCandidates,
 } = require('../src/reconciliation/bniAdapter');
@@ -40,7 +41,7 @@ function rawBankRow(opts = {}) {
 function preprocessBankRows(rawRows, fpRows, toleranceBefore = 5, toleranceAfter = 5) {
   const coverage = computeBniCoverage(fpRows, toleranceBefore, toleranceAfter);
   return rawRows.map(row => {
-    const extraction = extractBniIdentifiers(row.description);
+    const extraction = extractBniIdentifiers(row.description, row.journalNo);
     const coverageStatus = classifyBniCoverageStatus(row.transactionDateTime, coverage);
     const bankRowType = classifyBniBankRow(row, extraction, coverageStatus);
     const bankFingerprint = buildBniBankFingerprint(row);
@@ -80,12 +81,14 @@ test('TEST 2: ID setelah BMS_SNAP API # berhasil diekstrak', () => {
   assert.strictEqual(info.transactionIdFromHash, '3562421092');
 });
 
-// ── TEST 3: Reference slash menghasilkan 10 digit terakhir ──────────────
-test('TEST 3: reference slash 353562421092 -> 10 digit terakhir 3562421092', () => {
+// ── TEST 3: Reference slash -- prefix "35" dilepas, BUKAN selalu ambil N
+// digit terakhir (insiden 961064411: token 11 digit "35961064411" kalau
+// diambil 10 digit terakhir jadi "5961064411" -- SALAH, seharusnya "961064411") ──
+test('TEST 3: reference slash "35"+ID dilepas prefix-nya, bukan selalu ambil digit terakhir', () => {
   const info1 = extractBniIdentifiers('FASTPAY 0246405258/353562421092');
-  assert.strictEqual(info1.transactionIdFromReference, '3562421092');
-  const info2 = extractBniIdentifiers('FASTPAY 846948293/3563562425311');
-  assert.strictEqual(info2.transactionIdFromReference, '3562425311');
+  assert.strictEqual(info1.transactionIdFromReference, '3562421092'); // "35"+10 digit
+  const info2 = extractBniIdentifiers('FASTPAY 846948293/35961064411');
+  assert.strictEqual(info2.transactionIdFromReference, '961064411'); // "35"+9 digit
 });
 
 // ── TEST 4: dua sumber sama -> HIGH ──────────────────────────────────────
@@ -390,7 +393,7 @@ test('TEST 31: exact ID tetap menjadi MATCHED, TIER3 tidak pernah dipanggil utk 
   const results = reconcileBniTransactions(fpRows, bankRows, { expectedFee: 0 }, jkt('2026-07-22T10:00:00'));
   assert.strictEqual(results.length, 1);
   assert.strictEqual(results[0].reconStatus, 'MATCHED');
-  assert.strictEqual(results[0].matchingMethod, 'TIER1_EXACT');
+  assert.strictEqual(results[0].matchingMethod, 'EXACT_TRANSACTION_ID');
   assert.strictEqual(results.fallbackDiagnostics.fallback_candidate_count, 0, 'bank row dgn ID valid TIDAK boleh masuk kandidat fallback');
 });
 
@@ -579,6 +582,142 @@ test('TEST 41: empat sample malformed (data aktual insiden 2026-07-22) menghasil
   assert.strictEqual(results.fallbackDiagnostics.fallback_matched_count, 4);
   assert.strictEqual(results.fallbackDiagnostics.fallback_ambiguous_count, 0);
   assert.strictEqual(results.fallbackDiagnostics.orphan_unconsumed_fastpay_count, 0);
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// ID 9 & 10 DIGIT -- test fokus insiden 2026-07-29 (id_transaksi 961064411,
+// 9 digit, salah gagal diekstrak krn regex lama mewajibkan tepat 10 digit;
+// reference "35961064411" salah diambil 10 digit terakhir jadi
+// "5961064411" bukan "961064411"; bank tanpa jam salah turun NEED_REVIEW)
+// ═══════════════════════════════════════════════════════════════════════
+
+// ── TEST 42 (spec item 1): ID 10 digit berhasil diekstrak ───────────────
+test('TEST 42: ID 10 digit ("BMS_SNAP API #3562421092") berhasil diekstrak', () => {
+  const info = extractBniIdentifiers('TRANSFER KE | BMS_SNAP API #3562421092 FASTPAY 0246405258/353562421092 | PENERIMA');
+  assert.strictEqual(info.transactionIdFromHash, '3562421092');
+  assert.strictEqual(typeof info.transactionIdFromHash, 'string');
+});
+
+// ── TEST 43 (spec item 2): ID 9 digit berhasil diekstrak ─────────────────
+test('TEST 43: ID 9 digit ("BMS_SNAP API #961064411") berhasil diekstrak, TIDAK ditolak krn "kurang dari 10 digit"', () => {
+  const info = extractBniIdentifiers('TRANSFER KE | BMS_SNAP API #961064411 FASTPAY 0246405258/35961064411 | PENERIMA');
+  assert.strictEqual(info.transactionIdFromHash, '961064411');
+  assert.strictEqual(typeof info.transactionIdFromHash, 'string');
+});
+
+// ── TEST 44 (spec item 3): reference "35 + ID 10 digit" ─────────────────
+test('TEST 44: extractBniReferenceTransactionId("353565772219") -> "3565772219" (35 + 10 digit)', () => {
+  assert.strictEqual(extractBniReferenceTransactionId('353565772219'), '3565772219');
+});
+
+// ── TEST 45 (spec item 4): reference "35 + ID 9 digit" ───────────────────
+test('TEST 45: extractBniReferenceTransactionId("35961064411") -> "961064411" (35 + 9 digit, BUKAN "5961064411")', () => {
+  assert.strictEqual(extractBniReferenceTransactionId('35961064411'), '961064411');
+});
+
+// ── TEST 46 (spec item 5): ID 9 digit TIDAK diberi leading zero ─────────
+test('TEST 46: ID 9 digit tidak dipaksa jadi 10 digit dgn leading zero (panjang string tetap 9)', () => {
+  const info = extractBniIdentifiers('TRANSFER KE | BMS_SNAP API #961064411 FASTPAY 0246405258/35961064411 | PENERIMA');
+  assert.strictEqual(info.extractedTransactionId, '961064411');
+  assert.strictEqual(info.extractedTransactionId.length, 9);
+  assert.notStrictEqual(info.extractedTransactionId, '0961064411', 'TIDAK boleh ada leading zero yg dipaksakan');
+});
+
+// ── TEST 47 (spec item 6): ID harus disimpan sbg string, bukan Number ───
+test('TEST 47: id_transaksi/extractedTransactionId disimpan sbg string, TIDAK PERNAH di-Number()-kan', () => {
+  const fpRows = [fp('961064411', 283050, { timeResponse: jkt('2026-07-29T10:00:00') })];
+  const rawBank = [rawBankRow({ description: 'TRANSFER KE | BMS_SNAP API #961064411 FASTPAY 0246405258/35961064411 | PENERIMA', debit: 283050, transactionDateTime: jkt('2026-07-29T10:00:00'), journalNo: '961064411' })];
+  const bankRows = preprocessBankRows(rawBank, fpRows);
+  assert.strictEqual(typeof bankRows[0].extractedTransactionId, 'string');
+  const results = reconcileBniTransactions(fpRows, bankRows, { expectedFee: 0 }, jkt('2026-07-29T12:00:00'));
+  assert.strictEqual(typeof results[0].idTransaksi, 'string');
+  assert.strictEqual(results[0].idTransaksi, '961064411');
+});
+
+// ── TEST 48 (spec item 7 & 8): exact ID + nominal tanpa jam bank tetap
+// MATCHED -- missing bank time TIDAK PERNAH menghasilkan NEED_REVIEW ────
+test('TEST 48: exact ID + nominal sama, bank HANYA punya tanggal (tanpa jam) -> tetap MATCHED, bukan NEED_REVIEW', () => {
+  const fpRows = [fp('961064411', 283050, { timeResponse: jkt('2026-07-29T10:15:33') })];
+  // transactionDateTime = tengah malam PERSIS -- pola yg dihasilkan
+  // parseBniDateTime() saat input mentah "29/07/26" (tanpa komponen jam).
+  const rawBank = [rawBankRow({ description: 'TRANSFER KE | BMS_SNAP API #961064411 FASTPAY 0246405258/35961064411 | PENERIMA', debit: 283050, transactionDateTime: jkt('2026-07-29T00:00:00'), journalNo: '961064411' })];
+  const bankRows = preprocessBankRows(rawBank, fpRows);
+  const results = reconcileBniTransactions(fpRows, bankRows, { expectedFee: 0 }, jkt('2026-07-29T12:00:00'));
+  assert.strictEqual(results.length, 1);
+  assert.strictEqual(results[0].reconStatus, 'MATCHED', `harus tetap MATCHED walau bank tanpa jam, got ${results[0].reconStatus}`);
+  assert.strictEqual(results[0].timeOrderStatus, 'TIME_NOT_AVAILABLE');
+  assert.strictEqual(results[0].timeDifferenceSeconds, null);
+});
+
+// ── Reproduksi PERSIS insiden 2026-07-29: transaksi 961064411 ───────────
+test('TEST 49: reproduksi persis transaksi 961064411 (hash+reference+journal semua cocok, bank tanpa jam) -> MATCHED, EXACT_TRANSACTION_ID, HIGH, TIME_NOT_AVAILABLE', () => {
+  const fpRows = [fp('961064411', 283050, { timeResponse: jkt('2026-07-29T10:15:33') })];
+  const rawBank = [rawBankRow({
+    description: 'TRANSFER KE | BMS_SNAP API #961064411 FASTPAY 0246405258/35961064411 | PENERIMA CONTOH',
+    debit: 283050,
+    transactionDateTime: jkt('2026-07-29T00:00:00'), // Post Date/Value Date = 29/07/26, tanpa jam
+    journalNo: '961064411',
+  })];
+  const bankRows = preprocessBankRows(rawBank, fpRows);
+  const results = reconcileBniTransactions(fpRows, bankRows, { expectedFee: 0 }, jkt('2026-07-29T12:00:00'));
+  assert.strictEqual(results.length, 1);
+  const r = results[0];
+  assert.strictEqual(r.reconStatus, 'MATCHED');
+  assert.strictEqual(r.matchingMethod, 'EXACT_TRANSACTION_ID');
+  assert.strictEqual(r.idTransaksi, '961064411');
+  assert.strictEqual(r.extractedTransactionId, '961064411');
+  assert.strictEqual(r.transactionIdFromReference, '961064411');
+  assert.strictEqual(r.transactionIdFromJournal, '961064411');
+  assert.strictEqual(r.extractionConfidence, 'HIGH');
+  assert.strictEqual(r.timeOrderStatus, 'TIME_NOT_AVAILABLE');
+  assert.strictEqual(r.bankPrincipal, 283050);
+});
+
+// ── TEST 50: dataset 66 transaksi (spec EXPECTED RESULT 2026-07-29) --
+// ID 9 & 10 digit campuran, bank SELURUHNYA tanpa jam -> 66 MATCHED, 0
+// FP_ONLY, 0 BANK_ONLY, 0 NEED_REVIEW (spec item 9-12) ────────────────────
+function buildSample66() {
+  const fpRows = [];
+  const rawBank = [];
+  let totalNominal = 0;
+  const baseNominal = 662354;
+  for (let i = 1; i <= 66; i++) {
+    const use9Digit = i % 2 === 0;
+    const id = use9Digit ? String(900000000 + i) : String(3562900000 + i); // 9 vs 10 digit, campuran
+    const nominal = i < 66 ? baseNominal : (43715372 - 65 * baseNominal); // total persis Rp43.715.372
+    totalNominal += nominal;
+    const t = jkt(`2026-07-29T${String(8 + Math.floor(i / 10)).padStart(2, '0')}:${String((i * 7) % 60).padStart(2, '0')}:00`);
+    fpRows.push(fp(id, nominal, { timeResponse: t }));
+    const midnightWib = jkt('2026-07-29T00:00:00'); // seluruh bank data hari itu HANYA punya tanggal (spec)
+    rawBank.push(rawBankRow({ description: fastpayDesc(id), debit: nominal, transactionDateTime: midnightWib, journalNo: id }));
+  }
+  return { fpRows, rawBank, totalNominal };
+}
+
+test('TEST 50: dataset 66 transaksi (spec 2026-07-29) -> 66 MATCHED, FP Only=0, Bank Only=0, Need Review=0', () => {
+  const { fpRows, rawBank, totalNominal } = buildSample66();
+  assert.strictEqual(totalNominal, 43715372, 'fixture generator harus menghasilkan total persis Rp43.715.372');
+  const bankRows = preprocessBankRows(rawBank, fpRows);
+  const results = reconcileBniTransactions(fpRows, bankRows, { expectedFee: 0 }, jkt('2026-07-29T23:00:00'));
+  const byStatus = {};
+  for (const r of results) byStatus[r.reconStatus] = (byStatus[r.reconStatus] || 0) + 1;
+  assert.strictEqual(results.length, 66, `harus 66 result total, got ${results.length}. byStatus=${JSON.stringify(byStatus)}`);
+  assert.strictEqual(byStatus.MATCHED || 0, 66, `harus 66 MATCHED, got ${JSON.stringify(byStatus)}`);
+  assert.strictEqual(byStatus.FP_ONLY || 0, 0);
+  assert.strictEqual(byStatus.BANK_ONLY || 0, 0);
+  assert.strictEqual(byStatus.NEED_REVIEW || 0, 0);
+  assert.ok(results.every(r => r.timeOrderStatus === 'TIME_NOT_AVAILABLE'), 'seluruh 66 harus TIME_NOT_AVAILABLE (bank tanpa jam)');
+  const matchedNominal = results.reduce((s, r) => s + (r.fpNominal || 0), 0);
+  assert.strictEqual(matchedNominal, 43715372);
+  // Actionable Exception (spec item 12) = SEMUA status EXCEPTION_STATUSES
+  // (PENDING_BANK/FP_ONLY/BANK_ONLY/NOMINAL_MISMATCH/FEE_MISMATCH/
+  // DUPLICATE_FP/DUPLICATE_BANK/REVERSAL/NEED_REVIEW) -- dataset ini HANYA
+  // berisi MATCHED, jadi actionable exception count PASTI 0 tanpa perlu
+  // konversi ke DB-shape snake_case (sudah dibuktikan TEST 39/40 terpisah
+  // utk computeBniActionableException() sendiri).
+  const exceptionStatuses = ['PENDING_BANK', 'FP_ONLY', 'BANK_ONLY', 'NOMINAL_MISMATCH', 'FEE_MISMATCH', 'DUPLICATE_FP', 'DUPLICATE_BANK', 'REVERSAL', 'NEED_REVIEW'];
+  const actionableCount = results.filter(r => exceptionStatuses.includes(r.reconStatus)).length;
+  assert.strictEqual(actionableCount, 0, 'Actionable Exception harus 0');
 });
 
 // Item spec #12 (hasil akhir skala penuh 1 batch: Total FP=316, Matched=316,

@@ -55,18 +55,26 @@ function isBniFpCandidate(row) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// Ekstraksi transaction ID — 2 SUMBER INDEPENDEN dari Description:
-//   1. Hash ID    — pola "BMS_SNAP API #<10 digit>" (fallback "#<10 digit>")
-//   2. Reference  — 10 digit TERAKHIR dari token angka setelah "/"
-//      (anchored ke pola "FASTPAY <akun>/<referensi>" kalau ada, supaya
-//      beneficiary_account & reference ID digali dari konstruksi yang SAMA
-//      — bukan slash pertama yang kebetulan ditemukan di teks manapun).
-// TIDAK PERNAH diam-diam memilih salah satu kalau dua sumber KONFLIK.
+// Ekstraksi transaction ID — 3 SUMBER INDEPENDEN:
+//   1. Hash ID    — pola "BMS_SNAP API #<9-10 digit>" (fallback "#<9-10 digit>")
+//   2. Reference  — token angka setelah "/" (anchored ke pola
+//      "FASTPAY <akun>/<referensi>" kalau ada, supaya beneficiary_account &
+//      reference ID digali dari konstruksi yang SAMA — bukan slash pertama
+//      yang kebetulan ditemukan di teks manapun), lalu prefix "35" (kode
+//      skema BNI Fastpay, BUKAN bagian dari id_transaksi) dilepas kalau ada
+//      -- lihat extractBniReferenceTransactionId().
+//   3. Journal No — kolom TERPISAH (bukan dari Description), dipakai sbg
+//      validasi sekunder (lihat extractBniIdentifiers()).
+// id_transaksi BNI historisnya SELALU 10 digit, tapi ditemukan varian 9
+// digit di produksi (mis. 961064411) -- KEDUANYA valid, TIDAK PERNAH
+// dipaksa jadi 10 digit dgn leading zero (ID disimpan APA ADANYA sbg
+// string). TIDAK PERNAH diam-diam memilih salah satu kalau sumber-sumber
+// yang tersedia KONFLIK.
 // ─────────────────────────────────────────────────────────────────────────
-const HASH_PATTERN_PRIMARY = /BMS_SNAP\s+API\s*#\s*(\d{10})\b/i;
-const HASH_PATTERN_FALLBACK = /#\s*(\d{10})\b/;
-const REFERENCE_ANCHORED_PATTERN = /FASTPAY\s+(\d{6,20})\/(\d{10,20})\b/i;
-const REFERENCE_BARE_PATTERN = /\/(\d{10,20})\b/;
+const HASH_PATTERN_PRIMARY = /BMS_SNAP\s+API\s*#\s*(\d{9,10})\b/i;
+const HASH_PATTERN_FALLBACK = /#\s*(\d{9,10})\b/;
+const REFERENCE_ANCHORED_PATTERN = /FASTPAY\s+(\d{6,20})\/(\d{9,20})\b/i;
+const REFERENCE_BARE_PATTERN = /\/(\d{9,20})\b/;
 const FUNDING_PATTERNS = ['PB KE BNI MULTIBILLER', 'PB BNI OPS BMS KE BNI MULTIBILLER', 'BIMASAKTI MULTI SINERGI'];
 
 function extractHashId(description) {
@@ -77,19 +85,41 @@ function extractHashId(description) {
   return m ? m[1] : null;
 }
 
+/**
+ * Reference BNI selalu berpola "35" + id_transaksi (9 ATAU 10 digit) --
+ * "35" adalah kode skema Fastpay BNI yang KONSTAN, BUKAN bagian dari
+ * id_transaksi. JANGAN SELALU ambil N digit terakhir (insiden lama: ambil
+ * 10 digit terakhir dari token 11-digit "35961064411" akan salah
+ * menghasilkan "5961064411", bukan "961064411" yang benar).
+ *
+ * Contoh:
+ *   extractBniReferenceTransactionId('353565772219') -> '3565772219' (10 digit)
+ *   extractBniReferenceTransactionId('35961064411')  -> '961064411'  (9 digit)
+ *
+ * Kalau token TIDAK diawali "35" tapi kebetulan sudah persis 9/10 digit
+ * (tanpa prefix apa pun), tetap diterima apa adanya -- generik, tidak
+ * mengasumsikan SEMUA reference BNI selalu berprefix "35" selamanya.
+ */
+function extractBniReferenceTransactionId(referenceDigits) {
+  if (referenceDigits === null || referenceDigits === undefined) return null;
+  let s = String(referenceDigits).trim();
+  if (!/^\d+$/.test(s)) return null;
+  if (s.startsWith('35')) s = s.slice(2);
+  if (s.length === 9 || s.length === 10) return s;
+  return null;
+}
+
 function extractReferenceIdAndBeneficiary(description) {
   const s = String(description || '');
   const anchored = REFERENCE_ANCHORED_PATTERN.exec(s);
   if (anchored) {
     const beneficiaryAccount = anchored[1]; // TETAP string — leading zero dipertahankan
-    const token = anchored[2];
-    const referenceId = token.length >= 10 ? token.slice(-10) : null;
+    const referenceId = extractBniReferenceTransactionId(anchored[2]);
     return { referenceId, beneficiaryAccount };
   }
   const bare = REFERENCE_BARE_PATTERN.exec(s);
   if (bare) {
-    const token = bare[1];
-    const referenceId = token.length >= 10 ? token.slice(-10) : null;
+    const referenceId = extractBniReferenceTransactionId(bare[1]);
     return { referenceId, beneficiaryAccount: null };
   }
   return { referenceId: null, beneficiaryAccount: null };
@@ -106,37 +136,97 @@ function extractRecipientName(description) {
 
 /**
  * description: teks mentah Description mutasi bank.
+ * journalNo: nilai kolom "Journal No." baris ini (opsional -- sumber
+ *   VALIDASI SEKUNDER, TERPISAH dari Description). HANYA dipakai sbg
+ *   sumber ID kalau: berisi digit murni DAN Description mengandung
+ *   "BMS_SNAP API" & "FASTPAY" (spec eksplisit).
+ *
+ * 3 sumber independen (hash/reference/journal) dibandingkan silang:
+ *   HIGH    — hash & reference SAMA-SAMA valid & sama, DAN (kalau journal
+ *             tersedia) journal juga sama dgn keduanya.
+ *   MEDIUM  — HANYA SATU sumber valid (di antara hash/reference/journal),
+ *             tidak ada sumber lain yang bertentangan.
+ *   CONFLICT— ADA sumber-sumber yang tersedia tapi menghasilkan nilai
+ *             BERBEDA (hash vs reference, atau salah satu vs journal).
+ *   NONE    — tidak ada sumber yang menghasilkan ID sama sekali.
+ * TIDAK PERNAH diam-diam memilih salah satu kalau sumber-sumber yang
+ * tersedia KONFLIK -- extractedTransactionId jadi null, idConflict=true.
+ *
  * Mengembalikan:
- *   { transactionIdFromHash, transactionIdFromReference, extractedTransactionId,
- *     extractionConfidence: HIGH|MEDIUM|CONFLICT|NONE, idConflict,
- *     beneficiaryAccount, recipientName }
+ *   { transactionIdFromHash, transactionIdFromReference, transactionIdFromJournal,
+ *     extractedTransactionId, extractionConfidence: HIGH|MEDIUM|CONFLICT|NONE,
+ *     idConflict, journalIdMatches: true|false|null, beneficiaryAccount, recipientName }
  */
-function extractBniIdentifiers(description) {
+function extractBniIdentifiers(description, journalNo) {
   const transactionIdFromHash = extractHashId(description);
   const { referenceId: transactionIdFromReference, beneficiaryAccount } = extractReferenceIdAndBeneficiary(description);
   const recipientName = extractRecipientName(description);
 
+  const upper = String(description || '').toUpperCase();
+  const looksFastpay = upper.includes('BMS_SNAP API') && upper.includes('FASTPAY');
+  let transactionIdFromJournal = null;
+  if (looksFastpay && journalNo !== null && journalNo !== undefined) {
+    const journalStr = String(journalNo).trim();
+    if (/^\d+$/.test(journalStr)) transactionIdFromJournal = journalStr;
+  }
+
   let extractionConfidence = 'NONE';
   let idConflict = false;
   let extractedTransactionId = null;
+  let journalIdMatches = null; // null = journal tidak tersedia/tidak berlaku
 
-  if (transactionIdFromHash && transactionIdFromReference) {
+  const hasHash = !!transactionIdFromHash;
+  const hasRef = !!transactionIdFromReference;
+  const hasJournal = !!transactionIdFromJournal;
+
+  if (hasHash && hasRef) {
     if (transactionIdFromHash === transactionIdFromReference) {
-      extractionConfidence = 'HIGH';
-      extractedTransactionId = transactionIdFromHash;
+      if (hasJournal) {
+        if (transactionIdFromJournal === transactionIdFromHash) {
+          extractionConfidence = 'HIGH';
+          extractedTransactionId = transactionIdFromHash;
+          journalIdMatches = true;
+        } else {
+          extractionConfidence = 'CONFLICT';
+          idConflict = true;
+          extractedTransactionId = null;
+          journalIdMatches = false;
+        }
+      } else {
+        extractionConfidence = 'HIGH';
+        extractedTransactionId = transactionIdFromHash;
+      }
     } else {
       extractionConfidence = 'CONFLICT';
       idConflict = true;
       extractedTransactionId = null; // TIDAK PERNAH diam-diam memilih salah satu
+      if (hasJournal) journalIdMatches = (transactionIdFromJournal === transactionIdFromHash || transactionIdFromJournal === transactionIdFromReference);
     }
-  } else if (transactionIdFromHash || transactionIdFromReference) {
+  } else if (hasHash || hasRef) {
+    const soleId = transactionIdFromHash || transactionIdFromReference;
+    if (hasJournal && transactionIdFromJournal !== soleId) {
+      extractionConfidence = 'CONFLICT';
+      idConflict = true;
+      extractedTransactionId = null;
+      journalIdMatches = false;
+    } else {
+      extractionConfidence = 'MEDIUM';
+      extractedTransactionId = soleId;
+      if (hasJournal) journalIdMatches = true;
+    }
+  } else if (hasJournal) {
+    // Hash & reference sama-sama gagal diekstrak dari Description -- Journal
+    // No jadi satu-satunya sumber ("secondary validation" berperan sbg
+    // primary krn tidak ada sumber lain), tetap MEDIUM (bukan HIGH, krn
+    // HIGH spec eksplisit mensyaratkan hash DAN reference sama-sama valid).
     extractionConfidence = 'MEDIUM';
-    extractedTransactionId = transactionIdFromHash || transactionIdFromReference;
+    extractedTransactionId = transactionIdFromJournal;
   }
 
   return {
-    transactionIdFromHash, transactionIdFromReference, extractedTransactionId,
-    extractionConfidence, idConflict, beneficiaryAccount, recipientName,
+    transactionIdFromHash, transactionIdFromReference, transactionIdFromJournal,
+    extractedTransactionId, extractionConfidence, idConflict, journalIdMatches,
+    beneficiaryAccount, recipientName,
   };
 }
 
@@ -232,6 +322,30 @@ function parseBniDateTime(value) {
 function formatDateJakartaBni(date) {
   if (!(date instanceof Date) || Number.isNaN(date.getTime())) return null;
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
+}
+
+/**
+ * Deteksi "data bank hanya berisi tanggal, tanpa jam" -- parseBniDateTime()
+ * men-default-kan waktu ke 00:00:00 WIB persis kalau input mentahnya
+ * "DD/MM/YY[YY]" tanpa komponen jam (lihat cabang fallback di
+ * parseBniDateTime). Transaksi BNI SUNGGUHAN pada pukul 00:00:00.000 WIB
+ * persis ke milidetik scr praktis mustahil, jadi heuristik ini aman:
+ * exact-midnight = "jam tidak tersedia", BUKAN "transaksi terjadi tengah
+ * malam". Dipakai utk skip validasi selisih waktu (spec eksplisit --
+ * insiden nyata 2026-07-29: Post Date/Value Date hanya "29/07/26" tanpa
+ * jam, transaksi MATCHED via ID+nominal exact SALAH turun jadi NEED_REVIEW
+ * krn diff waktu dihitung dari jam 00:00 palsu vs jam asli FP).
+ */
+function isBniBankTimeUnavailable(date) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return false;
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  }).formatToParts(date).reduce((a, p) => { a[p.type] = p.value; return a; }, {});
+  // hour12:false pada beberapa versi ICU/Node mengembalikan "24" utk tengah
+  // malam persis, BUKAN "00" (insiden serupa sudah pernah terjadi & di-fix
+  // di briBifastAdapter.js) -- normalisasi dulu sebelum dibandingkan.
+  const hourFixed = parts.hour === '24' ? '00' : parts.hour;
+  return hourFixed === '00' && parts.minute === '00' && parts.second === '00';
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -420,8 +534,8 @@ function buildBniBankGroups(bankRows) {
         totalDebit: 0, totalCredit: 0, debitCount: 0, creditCount: 0,
         firstTransactionTime: null, extractedTransactionId: null,
         beneficiaryAccount: null, recipientName: null, branch: null, journalNo: null,
-        transactionIdFromHash: null, transactionIdFromReference: null,
-        extractionConfidence: null, idConflict: false, coverageStatus: null, bankFingerprint: null,
+        transactionIdFromHash: null, transactionIdFromReference: null, transactionIdFromJournal: null,
+        extractionConfidence: null, idConflict: false, journalIdMatches: null, coverageStatus: null, bankFingerprint: null,
       });
     }
     const g = groups.get(key);
@@ -435,8 +549,10 @@ function buildBniBankGroups(bankRows) {
     if (!g.journalNo && b.journalNo) g.journalNo = b.journalNo;
     if (!g.transactionIdFromHash && b.transactionIdFromHash) g.transactionIdFromHash = b.transactionIdFromHash;
     if (!g.transactionIdFromReference && b.transactionIdFromReference) g.transactionIdFromReference = b.transactionIdFromReference;
+    if (!g.transactionIdFromJournal && b.transactionIdFromJournal) g.transactionIdFromJournal = b.transactionIdFromJournal;
     if (b.extractionConfidence) g.extractionConfidence = b.extractionConfidence;
     if (b.idConflict) g.idConflict = true;
+    if (g.journalIdMatches === null && b.journalIdMatches !== null && b.journalIdMatches !== undefined) g.journalIdMatches = b.journalIdMatches;
     if (!g.coverageStatus) g.coverageStatus = b.coverageStatus;
     if (!g.bankFingerprint) g.bankFingerprint = b.bankFingerprint;
     const t = b.transactionDateTime;
@@ -456,6 +572,7 @@ function baseSyntheticResult(g) {
     variancePrincipal: null, varianceFee: null, timeDifferenceSeconds: null, timeOrderStatus: null,
     beneficiaryAccount: g.beneficiaryAccount, recipientName: g.recipientName, branch: g.branch, journalNo: g.journalNo,
     transactionIdFromHash: g.transactionIdFromHash, transactionIdFromReference: g.transactionIdFromReference,
+    transactionIdFromJournal: g.transactionIdFromJournal, journalIdMatches: g.journalIdMatches,
     extractedTransactionId: g.extractedTransactionId, extractionConfidence: g.extractionConfidence, idConflict: g.idConflict,
     coverageStatus: g.coverageStatus, bankFingerprint: g.bankFingerprint,
     matchingMethod: 'UNKNOWN', reconStatus: 'NEED_REVIEW', agingMinutes: null, notes: null,
@@ -531,7 +648,8 @@ function reconcileBniTransactions(fpRows, bankRows, config = {}, now = new Date(
       bankGrossDebit: null, bankPrincipal: null, bankFee: null, bankCredit: null, bankTotalDebit: null,
       variancePrincipal: null, varianceFee: null, timeDifferenceSeconds: null, timeOrderStatus: null,
       beneficiaryAccount: null, recipientName: null, branch: null, journalNo: null,
-      transactionIdFromHash: null, transactionIdFromReference: null, extractedTransactionId: null,
+      transactionIdFromHash: null, transactionIdFromReference: null, transactionIdFromJournal: null,
+      extractedTransactionId: null, journalIdMatches: null,
       extractionConfidence: null, idConflict: false, coverageStatus: null, bankFingerprint: null,
       matchingMethod: 'UNMATCHED', reconStatus: 'NEED_REVIEW', agingMinutes, notes: null,
       reversalDate: null, reversalAmount: null, reversalLookupSource: null,
@@ -572,6 +690,8 @@ function reconcileBniTransactions(fpRows, bankRows, config = {}, now = new Date(
     result.journalNo = g.journalNo;
     result.transactionIdFromHash = g.transactionIdFromHash;
     result.transactionIdFromReference = g.transactionIdFromReference;
+    result.transactionIdFromJournal = g.transactionIdFromJournal;
+    result.journalIdMatches = g.journalIdMatches;
     result.extractedTransactionId = g.extractedTransactionId;
     result.extractionConfidence = g.extractionConfidence;
     result.idConflict = g.idConflict;
@@ -579,14 +699,30 @@ function reconcileBniTransactions(fpRows, bankRows, config = {}, now = new Date(
     result.bankFingerprint = g.bankFingerprint;
     result.bankCredit = g.creditCount ? g.totalCredit : null;
     result.bankTotalDebit = g.debitCount ? g.totalDebit : null;
-    result.matchingMethod = g.extractionConfidence === 'HIGH' ? 'TIER1_EXACT'
-      : (g.transactionIdFromReference && !g.transactionIdFromHash ? 'REFERENCE_ONLY'
-        : (g.transactionIdFromHash && !g.transactionIdFromReference ? 'HASH_ONLY' : 'TIER1_EXACT'));
+    // TIER 1 (EXACT_TRANSACTION_ID) = ID datang dari hash "BMS_SNAP API #"
+    // (baik sendirian/MEDIUM maupun dikonfirmasi silang/HIGH). TIER 2
+    // (REFERENCE_TRANSACTION_ID) = hash absen, ID datang dari reference
+    // slash. JOURNAL_TRANSACTION_ID = hash & reference sama2 gagal, ID
+    // HANYA datang dari kolom Journal No terpisah (spec: "secondary
+    // validation" jadi satu-satunya sumber kalau Description tidak
+    // menghasilkan ID sama sekali).
+    result.matchingMethod = g.transactionIdFromHash ? 'EXACT_TRANSACTION_ID'
+      : (g.transactionIdFromReference ? 'REFERENCE_TRANSACTION_ID'
+        : (g.transactionIdFromJournal ? 'JOURNAL_TRANSACTION_ID' : 'EXACT_TRANSACTION_ID'));
 
     if (fpTimeResponse && result.bankTransactionDate) {
-      const diffSeconds = Math.round((result.bankTransactionDate.getTime() - fpTimeResponse.getTime()) / 1000);
-      result.timeDifferenceSeconds = diffSeconds;
-      result.timeOrderStatus = computeBniTimeOrderStatus(diffSeconds, bankBeforeFpToleranceMinutes);
+      if (isBniBankTimeUnavailable(result.bankTransactionDate)) {
+        // Data bank hanya berisi tanggal (Post Date/Value Date tanpa jam) --
+        // JANGAN menjalankan validasi selisih waktu sama sekali (spec
+        // eksplisit): exact ID + nominal tetap boleh MATCHED walau jam bank
+        // tidak tersedia.
+        result.timeDifferenceSeconds = null;
+        result.timeOrderStatus = 'TIME_NOT_AVAILABLE';
+      } else {
+        const diffSeconds = Math.round((result.bankTransactionDate.getTime() - fpTimeResponse.getTime()) / 1000);
+        result.timeDifferenceSeconds = diffSeconds;
+        result.timeOrderStatus = computeBniTimeOrderStatus(diffSeconds, bankBeforeFpToleranceMinutes);
+      }
     }
 
     if (g.debitCount > 1) {
@@ -721,7 +857,9 @@ function reconcileBniTransactions(fpRows, bankRows, config = {}, now = new Date(
     results.push({
       ...baseSyntheticResult(g),
       bankPrincipal: principalRow ? principalRow.debit : null,
-      matchingMethod: g.extractionConfidence === 'HIGH' ? 'TIER1_EXACT' : (g.extractionConfidence === 'MEDIUM' ? (g.transactionIdFromReference ? 'REFERENCE_ONLY' : 'HASH_ONLY') : 'UNKNOWN'),
+      matchingMethod: g.transactionIdFromHash ? 'EXACT_TRANSACTION_ID'
+        : (g.transactionIdFromReference ? 'REFERENCE_TRANSACTION_ID'
+          : (g.transactionIdFromJournal ? 'JOURNAL_TRANSACTION_ID' : 'UNKNOWN')),
       reconStatus,
       reversalDate: isReversalNoFp ? (g.creditRows[0]?.transactionDateTime || null) : null,
       reversalAmount: isReversalNoFp ? g.totalCredit : null,
@@ -753,6 +891,7 @@ function reconcileBniTransactions(fpRows, bankRows, config = {}, now = new Date(
         firstTransactionTime: b.transactionDateTime, creditCount: 0, totalCredit: 0, debitCount: 0, totalDebit: 0,
         beneficiaryAccount: b.beneficiaryAccount, recipientName: b.recipientName, branch: b.branch, journalNo: b.journalNo,
         transactionIdFromHash: b.transactionIdFromHash, transactionIdFromReference: b.transactionIdFromReference,
+        transactionIdFromJournal: b.transactionIdFromJournal, journalIdMatches: b.journalIdMatches,
         extractedTransactionId: b.extractedTransactionId, extractionConfidence: b.extractionConfidence, idConflict: b.idConflict,
         coverageStatus: b.coverageStatus, bankFingerprint: b.bankFingerprint,
       }),
@@ -816,9 +955,11 @@ module.exports = {
   BNI_ID_BILLER,
   isBniFpCandidate,
   extractBniIdentifiers,
+  extractBniReferenceTransactionId,
   classifyBniBankRow,
   parseBniDateTime,
   formatDateJakartaBni,
+  isBniBankTimeUnavailable,
   computeBniCoverage,
   classifyBniCoverageStatus,
   computeBniTimeOrderStatus,

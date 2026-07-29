@@ -404,7 +404,7 @@ async function syncHandler(req, res) {
       const transactionDateTime = r.transaction_date_time ? new Date(r.transaction_date_time) : null;
       const debit = r.debit !== null ? Number(r.debit) : null;
       const credit = r.credit !== null ? Number(r.credit) : null;
-      const extraction = extractBniIdentifiers(description);
+      const extraction = extractBniIdentifiers(description, r.sequence_no);
       const coverageStatus = classifyBniCoverageStatus(transactionDateTime, coverage);
       const bankRowType = classifyBniBankRow({ description, debit, credit }, extraction, coverageStatus);
 
@@ -428,6 +428,7 @@ async function syncHandler(req, res) {
         branch: r.branch, journalNo: r.sequence_no,
         beneficiaryAccount: extraction.beneficiaryAccount, recipientName: extraction.recipientName,
         transactionIdFromHash: extraction.transactionIdFromHash, transactionIdFromReference: extraction.transactionIdFromReference,
+        transactionIdFromJournal: extraction.transactionIdFromJournal, journalIdMatches: extraction.journalIdMatches,
         extractedTransactionId: extraction.extractedTransactionId, extractionConfidence: extraction.extractionConfidence,
         idConflict: extraction.idConflict, bankRowType, coverageStatus, bankFingerprint: r.row_fingerprint,
       });
