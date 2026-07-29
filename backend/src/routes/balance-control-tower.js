@@ -22,6 +22,7 @@ const pool = require('../db');
 const {
   computeEffectiveBalance,
   classifyBankStatus,
+  resolveReserveBalance,
   alertTypeForStatus,
   canTransitionTopup,
   isSelfApproval,
@@ -74,12 +75,15 @@ async function fetchBanksWithStatus(client, { onlyActive = true } = {}) {
   if (!banks.length) return [];
 
   const ids = banks.map(b => b.id);
-  const [policiesRes, snapshotsRes, topupTodayRes] = await Promise.all([
+  const [policiesRes, snapshotsRankedRes, topupTodayRes] = await Promise.all([
     client.query(`SELECT * FROM bct_balance_policies WHERE bank_account_id = ANY($1)`, [ids]),
+    // Ambil 2 snapshot terbaru per bank (bukan cuma 1) -- snapshot ke-2
+    // dipakai sbg previousSnapshot utk deteksi sudden-drop.
     client.query(
-      `SELECT DISTINCT ON (bank_account_id) *
-       FROM bct_balance_snapshots WHERE bank_account_id = ANY($1)
-       ORDER BY bank_account_id, captured_at DESC`,
+      `SELECT * FROM (
+         SELECT *, ROW_NUMBER() OVER (PARTITION BY bank_account_id ORDER BY captured_at DESC) AS rn
+         FROM bct_balance_snapshots WHERE bank_account_id = ANY($1)
+       ) t WHERE rn <= 2 ORDER BY bank_account_id, rn`,
       [ids]
     ),
     client.query(
@@ -94,18 +98,26 @@ async function fetchBanksWithStatus(client, { onlyActive = true } = {}) {
   ]);
 
   const policyByBank = new Map(policiesRes.rows.map(p => [String(p.bank_account_id), p]));
-  const snapshotByBank = new Map(snapshotsRes.rows.map(s => [String(s.bank_account_id), s]));
+  const snapshotByBank = new Map();
+  const previousSnapshotByBank = new Map();
+  for (const row of snapshotsRankedRes.rows) {
+    const key = String(row.bank_account_id);
+    if (row.rn === 1 || row.rn === '1') snapshotByBank.set(key, row);
+    else previousSnapshotByBank.set(key, row);
+  }
   const topupTodayByBank = new Map(topupTodayRes.rows.map(t => [String(t.bank_account_id), Number(t.total)]));
 
   const now = new Date();
   return banks.map(bank => {
     const policy = policyByBank.get(String(bank.id)) || null;
     const snapshot = snapshotByBank.get(String(bank.id)) || null;
-    const status = classifyBankStatus({ snapshot, policy, now });
+    const previousSnapshot = previousSnapshotByBank.get(String(bank.id)) || null;
+    const status = classifyBankStatus({ snapshot, policy, previousSnapshot, now });
     return {
       bank,
       policy,
       snapshot,
+      previousSnapshot,
       status,
       topup_today: topupTodayByBank.get(String(bank.id)) || 0,
     };
@@ -215,26 +227,37 @@ router.get('/banks', async (req, res) => {
 // POST /banks — buat bank/account baru (admin only)
 // ─────────────────────────────────────────────────────────────────────────
 router.post('/banks', requireAdmin, async (req, res) => {
+  const client = await pool.connect();
   try {
     const bankCode = String(req.body?.bank_code || '').trim().toUpperCase();
     const bankName = String(req.body?.bank_name || '').trim();
     const accountNumber = String(req.body?.account_number || '').trim();
     const accountName = req.body?.account_name ? String(req.body.account_name).trim() : null;
+    const reason = req.body?.reason ? String(req.body.reason).trim() : null;
 
     if (!bankCode || !bankName || !accountNumber) {
       return res.status(400).json({ error: 'bank_code, bank_name, account_number wajib diisi.' });
     }
 
-    const r = await pool.query(
+    await client.query('BEGIN');
+    const r = await client.query(
       `INSERT INTO bct_bank_accounts (bank_code, bank_name, account_number, account_name, created_by)
        VALUES ($1,$2,$3,$4,$5) RETURNING *`,
       [bankCode, bankName, accountNumber, accountName, req.user?.username || null]
     );
+    await logAudit(client, {
+      entityType: 'BANK_ACCOUNT', entityId: r.rows[0].id, action: 'CREATE_BANK_ACCOUNT',
+      actorUserId: req.user?.id, actorUsername: req.user?.username, before: null, after: r.rows[0], notes: reason,
+    });
+    await client.query('COMMIT');
     res.json({ success: true, bank: r.rows[0] });
   } catch (e) {
+    await client.query('ROLLBACK');
     if (e.code === '23505') return res.status(409).json({ error: 'Bank/rekening ini sudah terdaftar.' });
     console.error('balance-control-tower create bank error:', e.message);
     res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
   }
 });
 
@@ -242,6 +265,7 @@ router.post('/banks', requireAdmin, async (req, res) => {
 // PUT /banks/:id — update master bank/account (admin only)
 // ─────────────────────────────────────────────────────────────────────────
 router.put('/banks/:id', requireAdmin, async (req, res) => {
+  const client = await pool.connect();
   try {
     const id = parseInt(req.params.id, 10);
     if (!Number.isFinite(id)) return res.status(400).json({ error: 'id tidak valid.' });
@@ -255,17 +279,32 @@ router.put('/banks/:id', requireAdmin, async (req, res) => {
       }
     }
     if (!fields.length) return res.status(400).json({ error: 'Tidak ada field untuk diupdate.' });
+    const reason = req.body?.reason ? String(req.body.reason).trim() : null;
     params.push(id);
 
-    const r = await pool.query(
+    await client.query('BEGIN');
+    const beforeRes = await client.query(`SELECT * FROM bct_bank_accounts WHERE id = $1 FOR UPDATE`, [id]);
+    if (!beforeRes.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Bank tidak ditemukan.' });
+    }
+
+    const r = await client.query(
       `UPDATE bct_bank_accounts SET ${fields.join(', ')}, updated_at = NOW() WHERE id = $${params.length} RETURNING *`,
       params
     );
-    if (!r.rows.length) return res.status(404).json({ error: 'Bank tidak ditemukan.' });
+    await logAudit(client, {
+      entityType: 'BANK_ACCOUNT', entityId: id, action: 'UPDATE_BANK_ACCOUNT',
+      actorUserId: req.user?.id, actorUsername: req.user?.username, before: beforeRes.rows[0], after: r.rows[0], notes: reason,
+    });
+    await client.query('COMMIT');
     res.json({ success: true, bank: r.rows[0] });
   } catch (e) {
+    await client.query('ROLLBACK');
     console.error('balance-control-tower update bank error:', e.message);
     res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
   }
 });
 
@@ -281,9 +320,9 @@ router.get('/banks/:id', async (req, res) => {
     if (!bankRes.rows.length) return res.status(404).json({ error: 'Bank tidak ditemukan.' });
     const bank = bankRes.rows[0];
 
-    const [policyRes, latestSnapshotRes, historyRes, topupHistoryRes, lastTopupRes, todayUsageRes, alertsRes] = await Promise.all([
+    const [policyRes, latestSnapshotsRes, historyRes, topupHistoryRes, lastTopupRes, todayUsageRes, alertsRes] = await Promise.all([
       pool.query(`SELECT * FROM bct_balance_policies WHERE bank_account_id = $1`, [id]),
-      pool.query(`SELECT * FROM bct_balance_snapshots WHERE bank_account_id = $1 ORDER BY captured_at DESC LIMIT 1`, [id]),
+      pool.query(`SELECT * FROM bct_balance_snapshots WHERE bank_account_id = $1 ORDER BY captured_at DESC LIMIT 2`, [id]),
       pool.query(`SELECT * FROM bct_balance_snapshots WHERE bank_account_id = $1 ORDER BY captured_at DESC LIMIT 100`, [id]),
       pool.query(`SELECT * FROM bct_topup_requests WHERE bank_account_id = $1 ORDER BY created_at DESC LIMIT 50`, [id]),
       pool.query(
@@ -300,8 +339,9 @@ router.get('/banks/:id', async (req, res) => {
     ]);
 
     const policy = policyRes.rows[0] || null;
-    const snapshot = latestSnapshotRes.rows[0] || null;
-    const status = classifyBankStatus({ snapshot, policy, now: new Date() });
+    const snapshot = latestSnapshotsRes.rows[0] || null;
+    const previousSnapshot = latestSnapshotsRes.rows[1] || null;
+    const status = classifyBankStatus({ snapshot, policy, previousSnapshot, now: new Date() });
 
     // Penggunaan saldo hari ini = selisih saldo tersedia snapshot terakhir kemarin vs sekarang (proxy sederhana, tanpa buku besar transaksi).
     let usageToday = null;
@@ -328,6 +368,7 @@ router.get('/banks/:id', async (req, res) => {
         held_balance: Number(snapshot.held_balance),
         pending_amount: Number(snapshot.pending_amount),
         reserve_balance: Number(snapshot.reserve_balance),
+        reserve_source: snapshot.reserve_source || null,
         effective_balance: Number(snapshot.effective_balance),
         captured_at: snapshot.captured_at,
         source: snapshot.source,
@@ -350,14 +391,19 @@ router.get('/banks/:id', async (req, res) => {
 // POST /banks/:id/snapshots — input snapshot saldo (Ops/Finance/admin)
 // ─────────────────────────────────────────────────────────────────────────
 router.post('/banks/:id/snapshots', requireOpsOrFinance, async (req, res) => {
+  const client = await pool.connect();
   try {
     const bankId = parseInt(req.params.id, 10);
     if (!Number.isFinite(bankId)) return res.status(400).json({ error: 'id tidak valid.' });
 
-    const bankRes = await pool.query(`SELECT id FROM bct_bank_accounts WHERE id = $1`, [bankId]);
+    const bankRes = await client.query(`SELECT id FROM bct_bank_accounts WHERE id = $1`, [bankId]);
     if (!bankRes.rows.length) return res.status(404).json({ error: 'Bank tidak ditemukan.' });
 
-    const { available_balance, held_balance = 0, pending_amount = 0, reserve_balance = 0 } = req.body || {};
+    const { available_balance, held_balance = 0, pending_amount = 0 } = req.body || {};
+    // reserve_balance SENGAJA tidak di-default 0 di destructuring -- undefined
+    // harus tetap kebaca sbg "tidak dikirim" supaya resolveReserveBalance bisa
+    // membedakan dari "dikirim eksplisit 0" (lihat catatan double-subtract).
+    const providedReserveBalance = req.body?.reserve_balance;
     const source = req.body?.source ? String(req.body.source).toUpperCase() : 'MANUAL';
     const syncStatus = req.body?.sync_status ? String(req.body.sync_status).toUpperCase() : 'OK';
 
@@ -370,30 +416,46 @@ router.post('/banks/:id/snapshots', requireOpsOrFinance, async (req, res) => {
     if (!VALID_SYNC_STATUS.includes(syncStatus)) {
       return res.status(400).json({ error: `sync_status wajib salah satu: ${VALID_SYNC_STATUS.join(', ')}` });
     }
-    for (const [label, v] of [['available_balance', available_balance], ['held_balance', held_balance], ['pending_amount', pending_amount], ['reserve_balance', reserve_balance]]) {
-      if (v !== null && v !== undefined && Number.isNaN(Number(v))) {
+    for (const [label, v] of [['available_balance', available_balance], ['held_balance', held_balance], ['pending_amount', pending_amount], ['reserve_balance', providedReserveBalance]]) {
+      if (v !== null && v !== undefined && v !== '' && Number.isNaN(Number(v))) {
         return res.status(400).json({ error: `${label} harus berupa angka.` });
       }
     }
 
+    const policyRes = await client.query(`SELECT reserve_balance FROM bct_balance_policies WHERE bank_account_id = $1`, [bankId]);
+    const policyReserveBalance = policyRes.rows[0] ? policyRes.rows[0].reserve_balance : null;
+    const { value: reserveBalance, source: reserveSource } = resolveReserveBalance({
+      providedReserveBalance, policyReserveBalance,
+    });
+
     let effectiveBalance;
     try {
-      effectiveBalance = computeEffectiveBalance({ available_balance, held_balance, pending_amount, reserve_balance });
+      effectiveBalance = computeEffectiveBalance({ available_balance, held_balance, pending_amount, reserve_balance: reserveBalance });
     } catch (calcErr) {
       return res.status(400).json({ error: calcErr.message });
     }
 
-    const r = await pool.query(
+    await client.query('BEGIN');
+    const r = await client.query(
       `INSERT INTO bct_balance_snapshots
-        (bank_account_id, available_balance, held_balance, pending_amount, reserve_balance, effective_balance, source, sync_status, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
-      [bankId, available_balance, held_balance, pending_amount, reserve_balance, effectiveBalance, source, syncStatus, req.user?.username || null]
+        (bank_account_id, available_balance, held_balance, pending_amount, reserve_balance, reserve_source, effective_balance, source, sync_status, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+      [bankId, available_balance, held_balance, pending_amount, reserveBalance, reserveSource, effectiveBalance, source, syncStatus, req.user?.username || null]
     );
+    await logAudit(client, {
+      entityType: 'BALANCE_SNAPSHOT', entityId: r.rows[0].id, action: 'CREATE_BALANCE_SNAPSHOT',
+      actorUserId: req.user?.id, actorUsername: req.user?.username, before: null, after: r.rows[0],
+      notes: `reserve_source=${reserveSource}`,
+    });
+    await client.query('COMMIT');
 
     res.json({ success: true, snapshot: r.rows[0] });
   } catch (e) {
+    await client.query('ROLLBACK');
     console.error('balance-control-tower create snapshot error:', e.message);
     res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
   }
 });
 
@@ -443,13 +505,20 @@ router.put('/banks/:id/policy', requireAdmin, async (req, res) => {
     const {
       absolute_minimum_balance = null, watch_threshold = null, excess_balance_threshold = null,
       stale_after_minutes = null, safety_buffer_percentage = null, topup_rounding_amount = null,
+      critical_threshold = null, emergency_threshold = null, reserve_balance = null,
+      sudden_drop_window_minutes = null, sudden_drop_amount_threshold = null, sudden_drop_percentage_threshold = null,
       is_active = true,
     } = req.body || {};
+    const reason = req.body?.reason ? String(req.body.reason).trim() : null;
 
+    // Nominal & percentage & minute -- format check dulu (semua boleh null).
     for (const [label, v] of [
       ['absolute_minimum_balance', absolute_minimum_balance], ['watch_threshold', watch_threshold],
       ['excess_balance_threshold', excess_balance_threshold], ['safety_buffer_percentage', safety_buffer_percentage],
-      ['topup_rounding_amount', topup_rounding_amount],
+      ['topup_rounding_amount', topup_rounding_amount], ['critical_threshold', critical_threshold],
+      ['emergency_threshold', emergency_threshold], ['reserve_balance', reserve_balance],
+      ['sudden_drop_amount_threshold', sudden_drop_amount_threshold],
+      ['sudden_drop_percentage_threshold', sudden_drop_percentage_threshold],
     ]) {
       if (v !== null && v !== undefined && Number.isNaN(Number(v))) {
         return res.status(400).json({ error: `${label} harus berupa angka.` });
@@ -458,6 +527,40 @@ router.put('/banks/:id/policy', requireAdmin, async (req, res) => {
     if (stale_after_minutes !== null && stale_after_minutes !== undefined && !Number.isInteger(Number(stale_after_minutes))) {
       return res.status(400).json({ error: 'stale_after_minutes harus bilangan bulat (menit).' });
     }
+    if (sudden_drop_window_minutes !== null && sudden_drop_window_minutes !== undefined && !Number.isInteger(Number(sudden_drop_window_minutes))) {
+      return res.status(400).json({ error: 'sudden_drop_window_minutes harus bilangan bulat (menit).' });
+    }
+
+    // Nominal tidak boleh negatif -- pesan jelas per field (bukan cuma DB constraint generik).
+    for (const [label, v] of [
+      ['absolute_minimum_balance', absolute_minimum_balance], ['watch_threshold', watch_threshold],
+      ['excess_balance_threshold', excess_balance_threshold], ['topup_rounding_amount', topup_rounding_amount],
+      ['critical_threshold', critical_threshold], ['emergency_threshold', emergency_threshold],
+      ['reserve_balance', reserve_balance], ['sudden_drop_amount_threshold', sudden_drop_amount_threshold],
+    ]) {
+      if (v !== null && v !== undefined && Number(v) < 0) {
+        return res.status(400).json({ error: `${label} tidak boleh negatif.` });
+      }
+    }
+    // Percentage 0..100.
+    for (const [label, v] of [['safety_buffer_percentage', safety_buffer_percentage], ['sudden_drop_percentage_threshold', sudden_drop_percentage_threshold]]) {
+      if (v !== null && v !== undefined && (Number(v) < 0 || Number(v) > 100)) {
+        return res.status(400).json({ error: `${label} harus di antara 0 dan 100.` });
+      }
+    }
+    // Minute values positif.
+    for (const [label, v] of [['stale_after_minutes', stale_after_minutes], ['sudden_drop_window_minutes', sudden_drop_window_minutes]]) {
+      if (v !== null && v !== undefined && Number(v) <= 0) {
+        return res.status(400).json({ error: `${label} harus lebih besar dari 0.` });
+      }
+    }
+    // Urutan tingkat keparahan -- hanya dicek kalau SEMUA nilai terkait terisi.
+    if (emergency_threshold !== null && critical_threshold !== null && Number(emergency_threshold) > Number(critical_threshold)) {
+      return res.status(400).json({ error: 'emergency_threshold harus <= critical_threshold.' });
+    }
+    if (critical_threshold !== null && watch_threshold !== null && Number(critical_threshold) > Number(watch_threshold)) {
+      return res.status(400).json({ error: 'critical_threshold harus <= watch_threshold.' });
+    }
 
     await client.query('BEGIN');
     const existingRes = await client.query(`SELECT * FROM bct_balance_policies WHERE bank_account_id = $1 FOR UPDATE`, [bankId]);
@@ -465,8 +568,10 @@ router.put('/banks/:id/policy', requireAdmin, async (req, res) => {
 
     const r = await client.query(
       `INSERT INTO bct_balance_policies
-        (bank_account_id, absolute_minimum_balance, watch_threshold, excess_balance_threshold, stale_after_minutes, safety_buffer_percentage, topup_rounding_amount, is_active, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        (bank_account_id, absolute_minimum_balance, watch_threshold, excess_balance_threshold, stale_after_minutes,
+         safety_buffer_percentage, topup_rounding_amount, critical_threshold, emergency_threshold, reserve_balance,
+         sudden_drop_window_minutes, sudden_drop_amount_threshold, sudden_drop_percentage_threshold, is_active, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
        ON CONFLICT (bank_account_id) DO UPDATE SET
          absolute_minimum_balance = EXCLUDED.absolute_minimum_balance,
          watch_threshold = EXCLUDED.watch_threshold,
@@ -474,16 +579,24 @@ router.put('/banks/:id/policy', requireAdmin, async (req, res) => {
          stale_after_minutes = EXCLUDED.stale_after_minutes,
          safety_buffer_percentage = EXCLUDED.safety_buffer_percentage,
          topup_rounding_amount = EXCLUDED.topup_rounding_amount,
+         critical_threshold = EXCLUDED.critical_threshold,
+         emergency_threshold = EXCLUDED.emergency_threshold,
+         reserve_balance = EXCLUDED.reserve_balance,
+         sudden_drop_window_minutes = EXCLUDED.sudden_drop_window_minutes,
+         sudden_drop_amount_threshold = EXCLUDED.sudden_drop_amount_threshold,
+         sudden_drop_percentage_threshold = EXCLUDED.sudden_drop_percentage_threshold,
          is_active = EXCLUDED.is_active,
          updated_at = NOW()
        RETURNING *`,
       [bankId, absolute_minimum_balance, watch_threshold, excess_balance_threshold, stale_after_minutes,
-        safety_buffer_percentage, topup_rounding_amount, !!is_active, req.user?.username || null]
+        safety_buffer_percentage, topup_rounding_amount, critical_threshold, emergency_threshold, reserve_balance,
+        sudden_drop_window_minutes, sudden_drop_amount_threshold, sudden_drop_percentage_threshold,
+        !!is_active, req.user?.username || null]
     );
 
     await logAudit(client, {
       entityType: 'BANK_POLICY', entityId: bankId, action: before ? 'UPDATE_POLICY' : 'CREATE_POLICY',
-      actorUserId: req.user?.id, actorUsername: req.user?.username, before, after: r.rows[0],
+      actorUserId: req.user?.id, actorUsername: req.user?.username, before, after: r.rows[0], notes: reason,
     });
     await client.query('COMMIT');
 

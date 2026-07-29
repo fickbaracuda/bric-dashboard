@@ -22,6 +22,8 @@ const STATUS_META = {
   WATCH:                   { label: 'Waspada',           color: '#B45309', bg: '#FEF3C7' },
   TOP_UP_RECOMMENDED:      { label: 'Perlu Top Up',       color: '#D97706', bg: '#FFEDD5' },
   CRITICAL:                { label: 'Kritis',             color: '#DC2626', bg: '#FEE2E2' },
+  EMERGENCY:               { label: 'Darurat',            color: '#FFFFFF', bg: '#991B1B' },
+  SUDDEN_DROP:             { label: 'Penurunan Mendadak', color: '#FFFFFF', bg: '#B91C1C' },
   EXCESS_BALANCE:          { label: 'Saldo Berlebih',     color: '#2563EB', bg: '#DBEAFE' },
   DATA_STALE:              { label: 'Data Kedaluwarsa',   color: '#7C3AED', bg: '#EDE9FE' },
   SYNC_ERROR:              { label: 'Gagal Sync',         color: '#991B1B', bg: '#FEE2E2' },
@@ -540,8 +542,47 @@ function AlertsTab({ alerts, isOps, onAcknowledge, onSnooze, onResolve }) {
 // ─────────────────────────────────────────────────────────────────────────
 // Modal generik utk semua aksi finansial — SELALU minta konfirmasi eksplisit.
 // ─────────────────────────────────────────────────────────────────────────
+/**
+ * Validasi policy sebelum submit — pesan mudah dipahami, mencegah kombinasi
+ * threshold yang tidak logis TERKIRIM (bukan hanya diblokir server, supaya
+ * user langsung tahu field mana yang salah). Backend tetap validasi ulang
+ * (sumber kebenaran, mode di sini cuma UX).
+ */
+function validatePolicyForm(form) {
+  const num = (v) => (v === '' || v === null || v === undefined ? null : Number(v));
+  const nonNegFields = [
+    ['absolute_minimum_balance', 'Batas Minimum Absolut'], ['critical_threshold', 'Critical Threshold'],
+    ['emergency_threshold', 'Emergency Threshold'], ['watch_threshold', 'Watch Threshold'],
+    ['excess_balance_threshold', 'Excess Balance Threshold'], ['reserve_balance', 'Reserve Balance'],
+    ['topup_rounding_amount', 'Pembulatan Top Up'], ['sudden_drop_amount_threshold', 'Sudden Drop Nominal'],
+  ];
+  for (const [key, label] of nonNegFields) {
+    const v = num(form[key]);
+    if (v !== null && (Number.isNaN(v) || v < 0)) return `${label} tidak boleh negatif.`;
+  }
+  for (const [key, label] of [['safety_buffer_percentage', 'Safety Buffer'], ['sudden_drop_percentage_threshold', 'Sudden Drop Percentage']]) {
+    const v = num(form[key]);
+    if (v !== null && (Number.isNaN(v) || v < 0 || v > 100)) return `${label} harus di antara 0 dan 100.`;
+  }
+  for (const [key, label] of [['stale_after_minutes', 'Stale After'], ['sudden_drop_window_minutes', 'Sudden Drop Window']]) {
+    const v = num(form[key]);
+    if (v !== null && (Number.isNaN(v) || v <= 0)) return `${label} harus lebih besar dari 0 menit.`;
+  }
+  const emergency = num(form.emergency_threshold);
+  const critical = num(form.critical_threshold);
+  const watch = num(form.watch_threshold);
+  if (emergency !== null && critical !== null && emergency > critical) {
+    return 'Emergency Threshold harus lebih kecil atau sama dengan Critical Threshold.';
+  }
+  if (critical !== null && watch !== null && critical > watch) {
+    return 'Critical Threshold harus lebih kecil atau sama dengan Watch Threshold.';
+  }
+  return null;
+}
+
 function Modal({ modal, banks, bankDetail, onClose, loading, error, run }) {
   const [form, setForm] = useState({});
+  const [localError, setLocalError] = useState(null);
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
   // Prefill form policy dari data existing — hook TIDAK boleh dipanggil
@@ -551,9 +592,15 @@ function Modal({ modal, banks, bankDetail, onClose, loading, error, run }) {
     if (bankDetail?.policy) {
       setForm({
         absolute_minimum_balance: bankDetail.policy.absolute_minimum_balance ?? '',
+        critical_threshold: bankDetail.policy.critical_threshold ?? '',
+        emergency_threshold: bankDetail.policy.emergency_threshold ?? '',
         watch_threshold: bankDetail.policy.watch_threshold ?? '',
         excess_balance_threshold: bankDetail.policy.excess_balance_threshold ?? '',
+        reserve_balance: bankDetail.policy.reserve_balance ?? '',
         stale_after_minutes: bankDetail.policy.stale_after_minutes ?? '',
+        sudden_drop_window_minutes: bankDetail.policy.sudden_drop_window_minutes ?? '',
+        sudden_drop_amount_threshold: bankDetail.policy.sudden_drop_amount_threshold ?? '',
+        sudden_drop_percentage_threshold: bankDetail.policy.sudden_drop_percentage_threshold ?? '',
         safety_buffer_percentage: bankDetail.policy.safety_buffer_percentage ?? '',
         topup_rounding_amount: bankDetail.policy.topup_rounding_amount ?? '',
         is_active: bankDetail.policy.is_active ?? true,
@@ -591,7 +638,9 @@ function Modal({ modal, banks, bankDetail, onClose, loading, error, run }) {
         <Field label="Saldo Tersedia (available_balance)"><input className="fbr-input" type="number" value={form.available_balance || ''} onChange={e => set('available_balance', e.target.value)} /></Field>
         <Field label="Saldo Tertahan (held_balance)"><input className="fbr-input" type="number" value={form.held_balance || ''} onChange={e => set('held_balance', e.target.value)} /></Field>
         <Field label="Transaksi Pending (pending_amount)"><input className="fbr-input" type="number" value={form.pending_amount || ''} onChange={e => set('pending_amount', e.target.value)} /></Field>
-        <Field label="Saldo Cadangan (reserve_balance)"><input className="fbr-input" type="number" value={form.reserve_balance || ''} onChange={e => set('reserve_balance', e.target.value)} /></Field>
+        <Field label="Saldo Cadangan (reserve_balance) — kosongkan untuk pakai default dari policy">
+          <input className="fbr-input" type="number" value={form.reserve_balance ?? ''} onChange={e => set('reserve_balance', e.target.value)} />
+        </Field>
       </>
     );
     onConfirm = () => run(() => createBctSnapshot(modal.bankId, form));
@@ -601,10 +650,16 @@ function Modal({ modal, banks, bankDetail, onClose, loading, error, run }) {
     title = `Atur Policy — ${bankName(modal.bankId)}`;
     body = (
       <>
-        <Field label="Batas Minimum Absolut"><input className="fbr-input" type="number" value={form.absolute_minimum_balance || ''} onChange={e => set('absolute_minimum_balance', e.target.value)} /></Field>
+        <Field label="Batas Minimum Absolut (legacy)"><input className="fbr-input" type="number" value={form.absolute_minimum_balance || ''} onChange={e => set('absolute_minimum_balance', e.target.value)} /></Field>
+        <Field label="Emergency Threshold"><input className="fbr-input" type="number" value={form.emergency_threshold || ''} onChange={e => set('emergency_threshold', e.target.value)} /></Field>
+        <Field label="Critical Threshold"><input className="fbr-input" type="number" value={form.critical_threshold || ''} onChange={e => set('critical_threshold', e.target.value)} /></Field>
         <Field label="Watch Threshold"><input className="fbr-input" type="number" value={form.watch_threshold || ''} onChange={e => set('watch_threshold', e.target.value)} /></Field>
         <Field label="Excess Balance Threshold"><input className="fbr-input" type="number" value={form.excess_balance_threshold || ''} onChange={e => set('excess_balance_threshold', e.target.value)} /></Field>
+        <Field label="Reserve Balance (default saat snapshot tidak isi reserve)"><input className="fbr-input" type="number" value={form.reserve_balance || ''} onChange={e => set('reserve_balance', e.target.value)} /></Field>
         <Field label="Stale After (menit)"><input className="fbr-input" type="number" value={form.stale_after_minutes || ''} onChange={e => set('stale_after_minutes', e.target.value)} /></Field>
+        <Field label="Sudden Drop Window (menit)"><input className="fbr-input" type="number" value={form.sudden_drop_window_minutes || ''} onChange={e => set('sudden_drop_window_minutes', e.target.value)} /></Field>
+        <Field label="Sudden Drop Nominal"><input className="fbr-input" type="number" value={form.sudden_drop_amount_threshold || ''} onChange={e => set('sudden_drop_amount_threshold', e.target.value)} /></Field>
+        <Field label="Sudden Drop Percentage (%)"><input className="fbr-input" type="number" value={form.sudden_drop_percentage_threshold || ''} onChange={e => set('sudden_drop_percentage_threshold', e.target.value)} /></Field>
         <Field label="Safety Buffer (%)"><input className="fbr-input" type="number" value={form.safety_buffer_percentage || ''} onChange={e => set('safety_buffer_percentage', e.target.value)} /></Field>
         <Field label="Pembulatan Top Up"><input className="fbr-input" type="number" value={form.topup_rounding_amount || ''} onChange={e => set('topup_rounding_amount', e.target.value)} /></Field>
         <Field label="Aktifkan Policy">
@@ -614,7 +669,12 @@ function Modal({ modal, banks, bankDetail, onClose, loading, error, run }) {
         </Field>
       </>
     );
-    onConfirm = () => run(() => updateBctPolicy(modal.bankId, form));
+    onConfirm = () => {
+      const msg = validatePolicyForm(form);
+      if (msg) { setLocalError(msg); return; }
+      setLocalError(null);
+      run(() => updateBctPolicy(modal.bankId, form));
+    };
   }
 
   if (modal.type === 'create-topup') {
@@ -694,7 +754,7 @@ function Modal({ modal, banks, bankDetail, onClose, loading, error, run }) {
     <div className="fbr-modal-overlay" onClick={onClose}>
       <div className="fbr-modal" onClick={e => e.stopPropagation()}>
         <div className="fbr-modal-title">{title}</div>
-        {error && <div className="fbr-error">{error}</div>}
+        {(localError || error) && <div className="fbr-error">{localError || error}</div>}
         {body}
         <div className="fbr-modal-actions">
           <button className="fbr-btn fbr-btn-secondary" onClick={onClose} disabled={loading}>Batal</button>

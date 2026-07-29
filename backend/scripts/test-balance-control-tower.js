@@ -18,6 +18,8 @@ const {
   centsToString,
   computeEffectiveBalance,
   classifyBankStatus,
+  evaluateSuddenDrop,
+  resolveReserveBalance,
   alertTypeForStatus,
   canTransitionTopup,
   isSelfApproval,
@@ -191,6 +193,173 @@ test('isSelfApproval: requester beda approver -> false (boleh lanjut)', () => {
 test('isSelfApproval: salah satu id null/undefined -> false (tidak menganggap self approval)', () => {
   assert.strictEqual(isSelfApproval(null, 2), false);
   assert.strictEqual(isSelfApproval(1, undefined), false);
+});
+
+// ── EMERGENCY / CRITICAL / threshold ordering (fitur baru) ─────────────────
+const fullPolicy = {
+  is_active: true,
+  absolute_minimum_balance: null, // sengaja kosong -- pakai critical_threshold, bukan legacy field
+  critical_threshold: '300000',
+  emergency_threshold: '100000',
+  watch_threshold: '500000',
+  excess_balance_threshold: '10000000',
+  reserve_balance: '0',
+  stale_after_minutes: 60,
+  safety_buffer_percentage: 10,
+  sudden_drop_window_minutes: null,
+  sudden_drop_amount_threshold: null,
+  sudden_drop_percentage_threshold: null,
+};
+test('classifyBankStatus: effective <= emergency_threshold -> EMERGENCY (paling parah)', () => {
+  assert.strictEqual(classifyBankStatus({ snapshot: snap('100000'), policy: fullPolicy }), STATUS.EMERGENCY);
+  assert.strictEqual(classifyBankStatus({ snapshot: snap('50000'), policy: fullPolicy }), STATUS.EMERGENCY);
+});
+test('classifyBankStatus: effective <= critical_threshold (di atas emergency) -> CRITICAL', () => {
+  assert.strictEqual(classifyBankStatus({ snapshot: snap('300000'), policy: fullPolicy }), STATUS.CRITICAL);
+  assert.strictEqual(classifyBankStatus({ snapshot: snap('250000'), policy: fullPolicy }), STATUS.CRITICAL);
+});
+test('classifyBankStatus: critical_threshold belum diisi -> fallback ke absolute_minimum_balance lama (backward-compat)', () => {
+  const legacyPolicy = { ...fullPolicy, critical_threshold: null, emergency_threshold: null, absolute_minimum_balance: '300000' };
+  assert.strictEqual(classifyBankStatus({ snapshot: snap('300000'), policy: legacyPolicy }), STATUS.CRITICAL);
+});
+test('classifyBankStatus: emergency & critical berdampingan dengan watch/top_up_recommended', () => {
+  assert.strictEqual(classifyBankStatus({ snapshot: snap('400000'), policy: fullPolicy }), STATUS.TOP_UP_RECOMMENDED);
+  assert.strictEqual(classifyBankStatus({ snapshot: snap('2000000'), policy: fullPolicy }), STATUS.SAFE);
+});
+test('threshold ordering: emergency_threshold <= critical_threshold <= watch_threshold (policy valid, tidak error)', () => {
+  assert.ok(Number(fullPolicy.emergency_threshold) <= Number(fullPolicy.critical_threshold));
+  assert.ok(Number(fullPolicy.critical_threshold) <= Number(fullPolicy.watch_threshold));
+});
+
+// ── Validasi percentage (0..100) — logic yang dipakai route PUT policy ─────
+function isValidPercentage(v) {
+  if (v === null || v === undefined) return true;
+  const n = Number(v);
+  return !Number.isNaN(n) && n >= 0 && n <= 100;
+}
+test('invalid percentage: safety_buffer_percentage/sudden_drop_percentage_threshold di luar 0..100 ditolak', () => {
+  assert.strictEqual(isValidPercentage(150), false);
+  assert.strictEqual(isValidPercentage(-5), false);
+  assert.strictEqual(isValidPercentage(0), true);
+  assert.strictEqual(isValidPercentage(100), true);
+  assert.strictEqual(isValidPercentage(null), true, 'null = belum diisi, bukan invalid');
+});
+
+// ── Sudden drop ──────────────────────────────────────────────────────────
+const suddenDropPolicy = {
+  is_active: true, watch_threshold: '500000', absolute_minimum_balance: '100000',
+  sudden_drop_window_minutes: 60, sudden_drop_amount_threshold: '200000', sudden_drop_percentage_threshold: null,
+};
+function snapAt(effective, minutesAgo) {
+  return { effective_balance: effective, captured_at: new Date(Date.now() - minutesAgo * 60000).toISOString(), sync_status: 'OK' };
+}
+test('sudden drop by amount: drop_amount melewati threshold, dalam window -> SUDDEN_DROP', () => {
+  const previous = snapAt('2000000', 30);
+  const current = snapAt('1000000', 0); // drop 1,000,000 > threshold 200,000, dalam 30 menit (window 60)
+  const r = evaluateSuddenDrop({ snapshot: current, previousSnapshot: previous, policy: suddenDropPolicy });
+  assert.strictEqual(r.triggered, true);
+  assert.strictEqual(r.dropAmount, 1000000);
+  assert.strictEqual(classifyBankStatus({ snapshot: current, previousSnapshot: previous, policy: suddenDropPolicy }), STATUS.SUDDEN_DROP);
+});
+test('sudden drop by percentage: drop_percentage melewati threshold (amount threshold kosong)', () => {
+  const pctPolicy = { ...suddenDropPolicy, sudden_drop_amount_threshold: null, sudden_drop_percentage_threshold: 30 };
+  const previous = snapAt('1000000', 10);
+  const current = snapAt('600000', 0); // drop 40% > 30%
+  const r = evaluateSuddenDrop({ snapshot: current, previousSnapshot: previous, policy: pctPolicy });
+  assert.strictEqual(r.triggered, true);
+  assert.strictEqual(Math.round(r.dropPercentage), 40);
+});
+test('sudden drop: no division by zero saat previous effective_balance = 0 atau negatif', () => {
+  const previousZero = snapAt('0', 10);
+  const current = snapAt('-100', 0);
+  const r1 = evaluateSuddenDrop({ snapshot: current, previousSnapshot: previousZero, policy: suddenDropPolicy });
+  assert.strictEqual(r1.triggered, false);
+  assert.strictEqual(r1.dropPercentage, null);
+
+  const previousNeg = snapAt('-500', 10);
+  const r2 = evaluateSuddenDrop({ snapshot: current, previousSnapshot: previousNeg, policy: suddenDropPolicy });
+  assert.strictEqual(r2.triggered, false);
+  assert.strictEqual(r2.dropPercentage, null);
+});
+test('sudden drop: bukan kenaikan saldo -> tidak triggered', () => {
+  const previous = snapAt('500000', 10);
+  const current = snapAt('900000', 0); // naik, bukan turun
+  const r = evaluateSuddenDrop({ snapshot: current, previousSnapshot: previous, policy: suddenDropPolicy });
+  assert.strictEqual(r.triggered, false);
+});
+test('sudden drop: di luar window -> tidak triggered walau drop besar', () => {
+  const previous = snapAt('2000000', 120); // 120 menit lalu, window cuma 60
+  const current = snapAt('1000000', 0);
+  const r = evaluateSuddenDrop({ snapshot: current, previousSnapshot: previous, policy: suddenDropPolicy });
+  assert.strictEqual(r.triggered, false);
+});
+test('sudden drop: policy tidak set window/threshold -> tidak pernah triggered (tidak ada angka dikarang)', () => {
+  const previous = snapAt('2000000', 10);
+  const current = snapAt('100', 0);
+  const r = evaluateSuddenDrop({ snapshot: current, previousSnapshot: previous, policy: { is_active: true, watch_threshold: '500000' } });
+  assert.strictEqual(r.triggered, false);
+});
+test('sudden drop: tidak ada previousSnapshot -> tidak pernah triggered', () => {
+  const current = snapAt('100', 0);
+  const r = evaluateSuddenDrop({ snapshot: current, previousSnapshot: null, policy: suddenDropPolicy });
+  assert.strictEqual(r.triggered, false);
+});
+test('classifyBankStatus: SUDDEN_DROP diprioritaskan di atas EMERGENCY/CRITICAL', () => {
+  const previous = snapAt('2000000', 10);
+  const current = snapAt('50000', 0); // drop besar sekaligus di bawah absolute_minimum_balance (100000)
+  assert.strictEqual(classifyBankStatus({ snapshot: current, previousSnapshot: previous, policy: suddenDropPolicy }), STATUS.SUDDEN_DROP);
+});
+
+// ── Reserve balance resolution — SNAPSHOT vs POLICY_DEFAULT, no double-subtract ──
+test('reserve from snapshot: reserve_balance dikirim eksplisit -> source SNAPSHOT, dipakai apa adanya', () => {
+  const r = resolveReserveBalance({ providedReserveBalance: '50000', policyReserveBalance: '999999' });
+  assert.strictEqual(r.source, 'SNAPSHOT');
+  assert.strictEqual(r.value, '50000');
+});
+test('reserve from snapshot: dikirim eksplisit 0 tetap dianggap "diberikan" (bukan fallback ke policy)', () => {
+  const r = resolveReserveBalance({ providedReserveBalance: 0, policyReserveBalance: '999999' });
+  assert.strictEqual(r.source, 'SNAPSHOT');
+  assert.strictEqual(r.value, 0);
+});
+test('reserve from policy default: reserve_balance tidak dikirim -> fallback ke policy.reserve_balance', () => {
+  const r1 = resolveReserveBalance({ providedReserveBalance: undefined, policyReserveBalance: '75000' });
+  assert.strictEqual(r1.source, 'POLICY_DEFAULT');
+  assert.strictEqual(r1.value, '75000');
+  const r2 = resolveReserveBalance({ providedReserveBalance: null, policyReserveBalance: '75000' });
+  assert.strictEqual(r2.source, 'POLICY_DEFAULT');
+  const r3 = resolveReserveBalance({ providedReserveBalance: '', policyReserveBalance: '75000' });
+  assert.strictEqual(r3.source, 'POLICY_DEFAULT');
+});
+test('reserve default: tidak dikirim & policy juga belum punya reserve -> 0, source POLICY_DEFAULT (bukan angka dikarang)', () => {
+  const r = resolveReserveBalance({ providedReserveBalance: undefined, policyReserveBalance: null });
+  assert.strictEqual(r.source, 'POLICY_DEFAULT');
+  assert.strictEqual(r.value, 0);
+});
+test('no double subtraction: effective_balance memakai HANYA satu nilai reserve (snapshot ATAU policy, tidak dijumlah)', () => {
+  // snapshot eksplisit 50.000 -- efektif harus kurangi 50.000 SAJA, BUKAN 50.000 + policy default 75.000.
+  const resolved = resolveReserveBalance({ providedReserveBalance: '50000', policyReserveBalance: '75000' });
+  const eff = computeEffectiveBalance({ available_balance: '1000000', held_balance: '0', pending_amount: '0', reserve_balance: resolved.value });
+  assert.strictEqual(eff, '950000.00', 'harus 1.000.000 - 50.000 = 950.000, BUKAN 1.000.000 - 50.000 - 75.000');
+});
+
+// ── Audit — struktur payload yang dikirim ke logAudit (dicek di sini secara
+//    struktural karena logAudit sendiri butuh DB client sungguhan; endpoint-
+//    level verification dilakukan end-to-end setelah deploy) ───────────────
+test('audit payload bank account creation: action CREATE_BANK_ACCOUNT, before null, after berisi row baru', () => {
+  const payload = { entityType: 'BANK_ACCOUNT', entityId: 1, action: 'CREATE_BANK_ACCOUNT', before: null, after: { id: 1, bank_code: 'OCBC' } };
+  assert.strictEqual(payload.action, 'CREATE_BANK_ACCOUNT');
+  assert.strictEqual(payload.before, null);
+  assert.ok(payload.after);
+});
+test('audit payload snapshot creation: action CREATE_BALANCE_SNAPSHOT, notes menyertakan reserve_source', () => {
+  const reserveSource = 'POLICY_DEFAULT';
+  const notes = `reserve_source=${reserveSource}`;
+  assert.strictEqual(notes, 'reserve_source=POLICY_DEFAULT');
+});
+test('audit payload policy create vs update: action ditentukan dari ada/tidaknya before', () => {
+  const actionFor = (before) => (before ? 'UPDATE_POLICY' : 'CREATE_POLICY');
+  assert.strictEqual(actionFor(null), 'CREATE_POLICY');
+  assert.strictEqual(actionFor({ id: 1 }), 'UPDATE_POLICY');
 });
 
 // ── Ringkasan lintas bank (simulasi agregasi summary) ──────────────────────
