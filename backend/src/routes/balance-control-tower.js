@@ -83,7 +83,7 @@ async function refreshBankPositionIfNeeded(bank) {
       `INSERT INTO bct_balance_snapshots
         (bank_account_id, available_balance, held_balance, pending_amount, reserve_balance, reserve_source, effective_balance, source, sync_status, source_synced_at, created_by)
        VALUES ($1,$2,0,0,$3,$4,$5,'RECONCILIATION','OK',$6,'system')
-       ON CONFLICT (bank_account_id, source_synced_at) WHERE source = 'RECONCILIATION' DO NOTHING
+       ON CONFLICT (bank_account_id, source_synced_at) WHERE source = 'RECONCILIATION' AND source_synced_at IS NOT NULL DO NOTHING
        RETURNING *`,
       [bank.id, position.available_balance, reserveBalance, reserveSource, effectiveBalance, position.synced_at]
     );
