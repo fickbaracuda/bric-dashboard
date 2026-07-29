@@ -31,6 +31,80 @@ const {
   STATUS,
 } = require('../utils/balanceControlTower');
 const { computeBurnRateStats, buildForecastOutput } = require('../reconciliation/balanceForecast');
+const { getLatestVerifiedBankPosition, getConfirmedFundingMutations, isSupportedBank } = require('../reconciliation/bankPosition');
+
+function isoDateJakarta(date) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(date);
+}
+
+/**
+ * Refresh-on-read: kalau bank ini punya adapter rekonsiliasi (lihat
+ * backend/src/reconciliation/bankPosition) DAN ada batch sukses lebih baru
+ * dari snapshot RECONCILIATION terakhir, buat snapshot baru otomatis.
+ * available_balance dipakai APA ADANYA dari recon_sync_batches.raw_summary
+ * (angka resmi bank) -- TIDAK di-re-derive dari mutasi manapun. Dedup
+ * FINAL dijamin di level DB (partial unique index bank_account_id +
+ * source_synced_at), INSERT di sini pakai ON CONFLICT DO NOTHING sbg lapis
+ * kedua thd race condition saat banyak user buka dashboard bersamaan.
+ * TIDAK PERNAH menyentuh/mengubah snapshot lama.
+ */
+async function refreshBankPositionIfNeeded(bank) {
+  if (!isSupportedBank(bank.bank_code)) return null;
+
+  const result = await getLatestVerifiedBankPosition({ pool, bankCode: bank.bank_code, bankAccountId: bank.id });
+  if (!result.available || !result.position) return null;
+  const position = result.position;
+  if (position.available_balance === null || position.available_balance === undefined) return null;
+  if (!position.synced_at) return null;
+
+  const lastReconRes = await pool.query(
+    `SELECT * FROM bct_balance_snapshots WHERE bank_account_id = $1 AND source = 'RECONCILIATION'
+     ORDER BY source_synced_at DESC NULLS LAST, captured_at DESC LIMIT 1`,
+    [bank.id]
+  );
+  const lastRecon = lastReconRes.rows[0] || null;
+  if (lastRecon && lastRecon.source_synced_at && new Date(lastRecon.source_synced_at).getTime() >= new Date(position.synced_at).getTime()) {
+    return null; // sudah up to date -- tidak perlu snapshot baru
+  }
+
+  const policyRes = await pool.query(`SELECT reserve_balance FROM bct_balance_policies WHERE bank_account_id = $1`, [bank.id]);
+  const policyReserveBalance = policyRes.rows[0] ? policyRes.rows[0].reserve_balance : null;
+  const { value: reserveBalance, source: reserveSource } = resolveReserveBalance({
+    providedReserveBalance: undefined, policyReserveBalance,
+  });
+  const effectiveBalance = computeEffectiveBalance({
+    available_balance: position.available_balance, held_balance: 0, pending_amount: 0, reserve_balance: reserveBalance,
+  });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const insertRes = await client.query(
+      `INSERT INTO bct_balance_snapshots
+        (bank_account_id, available_balance, held_balance, pending_amount, reserve_balance, reserve_source, effective_balance, source, sync_status, source_synced_at, created_by)
+       VALUES ($1,$2,0,0,$3,$4,$5,'RECONCILIATION','OK',$6,'system')
+       ON CONFLICT (bank_account_id, source_synced_at) WHERE source = 'RECONCILIATION' DO NOTHING
+       RETURNING *`,
+      [bank.id, position.available_balance, reserveBalance, reserveSource, effectiveBalance, position.synced_at]
+    );
+    if (insertRes.rows.length) {
+      await logAudit(client, {
+        entityType: 'BALANCE_SNAPSHOT', entityId: insertRes.rows[0].id, action: 'CREATE_BALANCE_SNAPSHOT',
+        actorUserId: null, actorUsername: 'system',
+        before: null, after: insertRes.rows[0],
+        notes: `auto-refresh dari rekonsiliasi ${bank.bank_code} (${position.source_table}), synced_at=${position.synced_at}`,
+      });
+    }
+    await client.query('COMMIT');
+    return insertRes.rows[0] || null;
+  } catch (e) {
+    await client.query('ROLLBACK');
+    console.error(`refreshBankPositionIfNeeded(${bank.bank_code}) error:`, e.message);
+    return null;
+  } finally {
+    client.release();
+  }
+}
 
 /**
  * Bangun forecast lengkap utk satu bank (REUSE evaluateSuddenDrop yang sama
@@ -89,6 +163,15 @@ async function fetchBanksWithStatus(client, { onlyActive = true } = {}) {
   );
   const banks = banksRes.rows;
   if (!banks.length) return [];
+
+  // Refresh-on-read: bank yang punya adapter rekonsiliasi (lihat
+  // isSupportedBank) di-cek dulu -- auto-buat snapshot baru kalau ada
+  // batch sukses lebih baru dari snapshot RECONCILIATION terakhir, SEBELUM
+  // query snapshot di bawah supaya hasilnya langsung terlihat di response ini.
+  await Promise.all(banks.map(async bank => {
+    try { await refreshBankPositionIfNeeded(bank); }
+    catch (e) { console.error(`refresh position (${bank.bank_code}) error:`, e.message); }
+  }));
 
   const ids = banks.map(b => b.id);
   const [policiesRes, snapshotsRankedRes, topupTodayRes] = await Promise.all([
@@ -348,6 +431,9 @@ router.get('/banks/:id', async (req, res) => {
     if (!bankRes.rows.length) return res.status(404).json({ error: 'Bank tidak ditemukan.' });
     const bank = bankRes.rows[0];
 
+    try { await refreshBankPositionIfNeeded(bank); }
+    catch (e) { console.error(`refresh position (${bank.bank_code}) error:`, e.message); }
+
     const [policyRes, latestSnapshotsRes, historyRes, topupHistoryRes, lastTopupRes, todayUsageRes, alertsRes] = await Promise.all([
       pool.query(`SELECT * FROM bct_balance_policies WHERE bank_account_id = $1`, [id]),
       pool.query(`SELECT * FROM bct_balance_snapshots WHERE bank_account_id = $1 ORDER BY captured_at DESC LIMIT 2`, [id]),
@@ -389,6 +475,19 @@ router.get('/banks/:id', async (req, res) => {
       }
     }
 
+    // Mutasi kredit rekonsiliasi -- VISIBILITAS/AUDIT SAJA (lihat
+    // fundingDetectionService.js: is_already_reflected_in_balance selalu
+    // true di rilis ini, TIDAK PERNAH dijumlahkan ke saldo/forecast mana pun).
+    let fundingMutations = [];
+    if (isSupportedBank(bank.bank_code)) {
+      try {
+        const to = isoDateJakarta(now);
+        const from = isoDateJakarta(new Date(now.getTime() - 3 * 86400000));
+        const fundingRes = await getConfirmedFundingMutations({ pool, bankCode: bank.bank_code, bankAccountId: bank.id, from, to });
+        if (fundingRes.available) fundingMutations = fundingRes.mutations;
+      } catch (e) { console.error(`funding mutations (${bank.bank_code}) error:`, e.message); }
+    }
+
     res.set('Cache-Control', 'no-store');
     res.json({
       success: true,
@@ -397,6 +496,7 @@ router.get('/banks/:id', async (req, res) => {
       status,
       status_reason: statusReason,
       forecast,
+      funding_mutations: fundingMutations,
       posisi_saldo_terbaru: snapshot ? {
         available_balance: Number(snapshot.available_balance),
         held_balance: Number(snapshot.held_balance),
