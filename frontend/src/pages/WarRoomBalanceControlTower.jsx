@@ -6,6 +6,7 @@ import {
   createBctTopup, getBctTopups, requestBctTopup, approveBctTopup, rejectBctTopup,
   transferBctTopup, confirmBctTopupBalance, completeBctTopup, cancelBctTopup,
   getBctAlerts, acknowledgeBctAlert, snoozeBctAlert, resolveBctAlert, createBctBank,
+  refreshBctForecast,
 } from '../services/api';
 
 const COLOR = '#0D9488';
@@ -217,6 +218,7 @@ export default function WarRoomBalanceControlTower() {
               onInputSnapshot={() => setModal({ type: 'snapshot', bankId: selectedBankId })}
               onEditPolicy={() => setModal({ type: 'policy', bankId: selectedBankId })}
               onCreateTopup={() => setModal({ type: 'create-topup', bankId: selectedBankId })}
+              onForecastRefreshed={() => loadDetail(selectedBankId)}
             />
           )}
 
@@ -317,7 +319,7 @@ function DashboardTab({ summary, onSelectBank, isAdmin, onAddBank }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-function DetailTab({ banks, selectedBankId, onSelectBank, detail, loading, isOps, isAdmin, onInputSnapshot, onEditPolicy, onCreateTopup }) {
+function DetailTab({ banks, selectedBankId, onSelectBank, detail, loading, isOps, isAdmin, onInputSnapshot, onEditPolicy, onCreateTopup, onForecastRefreshed }) {
   return (
     <>
       <div className="header-controls" style={{ marginBottom: 16 }}>
@@ -348,6 +350,8 @@ function DetailTab({ banks, selectedBankId, onSelectBank, detail, loading, isOps
               Bank ini belum punya policy aktif — status akan selalu <b>CONFIGURATION_REQUIRED</b> sampai admin mengatur threshold.
             </div>
           )}
+
+          <ForecastPanel bankId={selectedBankId} detail={detail} isOps={isOps} onRefreshed={onForecastRefreshed} />
 
           <div className="wr-table-section" style={{ marginBottom: 16 }}>
             <div className="wr-table-controls"><div className="wr-table-left"><b>Top Up Terakhir</b></div></div>
@@ -430,6 +434,131 @@ function DetailTab({ banks, selectedBankId, onSelectBank, detail, loading, isOps
         </>
       )}
     </>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Forecast — OCBC Rekonsiliasi sbg source (burn rate/kebutuhan dana/runway),
+// Balance Control Tower sbg control room (status/rekomendasi/audit).
+// Label wajib beda: Finance Policy (manual, selalu ada) / System Forecast
+// (dihitung dari data) / Manual Override (Finance menimpa nilai dinamis) /
+// Actual Balance (angka riil dari snapshot).
+// ─────────────────────────────────────────────────────────────────────────
+const THRESHOLD_SOURCE_LABEL = {
+  MANUAL_OVERRIDE: { label: 'Manual Override', color: '#7C3AED', bg: '#EDE9FE' },
+  SYSTEM_FORECAST: { label: 'System Forecast', color: '#0891B2', bg: '#CFFAFE' },
+};
+function SourceTag({ source }) {
+  if (!source) return <span style={{ color: 'var(--text-4)' }}>—</span>;
+  const m = THRESHOLD_SOURCE_LABEL[source] || { label: source, color: '#6B7280', bg: '#F3F4F6' };
+  return <span className="bct-badge" style={{ color: m.color, background: m.bg }}>{m.label}</span>;
+}
+function fmtMinutes(v) {
+  if (v === null || v === undefined || !Number.isFinite(Number(v))) return '-';
+  const n = Number(v);
+  if (n < 60) return `${Math.round(n)} menit`;
+  if (n < 1440) return `${(n / 60).toFixed(1)} jam`;
+  return `${(n / 1440).toFixed(1)} hari`;
+}
+
+function ForecastPanel({ bankId, detail, isOps, onRefreshed }) {
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState(null);
+  const [showDetail, setShowDetail] = useState(false);
+
+  const forecast = detail?.forecast;
+  const statusReason = detail?.status_reason;
+
+  function handleRefresh() {
+    setRefreshing(true);
+    setRefreshError(null);
+    refreshBctForecast(bankId)
+      .then(() => onRefreshed && onRefreshed())
+      .catch(e => setRefreshError(e.response?.data?.error || 'Gagal refresh forecast.'))
+      .finally(() => setRefreshing(false));
+  }
+
+  return (
+    <div className="wr-table-section" style={{ marginBottom: 16 }}>
+      <div className="wr-table-controls">
+        <div className="wr-table-left">
+          <b>Forecast</b> <span className="bct-badge" style={{ color: '#0891B2', background: '#CFFAFE' }}>Sumber: OCBC Rekonsiliasi</span>
+        </div>
+        {isOps && (
+          <button className="fbr-btn" onClick={handleRefresh} disabled={refreshing}>
+            <i className="ti ti-refresh" /> {refreshing ? 'Memproses…' : 'Refresh Forecast'}
+          </button>
+        )}
+      </div>
+
+      <div style={{ padding: 16 }}>
+        {refreshError && <div className="fbr-error" style={{ marginBottom: 12 }}>{refreshError}</div>}
+
+        {statusReason && (
+          <div style={{ marginBottom: 14, fontSize: 13, color: 'var(--text-2)' }}>
+            <b>Alasan status:</b> {statusReason}
+          </div>
+        )}
+
+        {!forecast || !forecast.forecast_available ? (
+          <div style={{ color: 'var(--text-3)', fontSize: 13 }}>
+            Forecast belum tersedia — {forecast?.forecast_unavailable_reason || 'belum ada data rekonsiliasi OCBC pada window terakhir.'}
+            {' '}Threshold status memakai Finance Policy manual saja (kalau sudah diisi).
+          </div>
+        ) : (
+          <>
+            <div className="bct-kpi-grid">
+              <Kpi label="Saldo Saat Ini (Actual Balance)" value={fmtRp(forecast.available_balance)} />
+              <Kpi label="Saldo Efektif" value={fmtRp(forecast.effective_balance)} />
+              <Kpi label="Proyeksi Saldo (Funding Window Berikutnya)" value={fmtRp(forecast.projected_balance_at_next_funding)} />
+              <Kpi label="Estimasi Runway" value={fmtMinutes(forecast.estimated_runway_minutes)} sub={forecast.estimated_runway_minutes === null ? 'burn rate 0 / tidak ada data' : null} />
+              <Kpi label="Burn Rate Rata-rata" value={fmtRp(forecast.average_burn_rate) + '/hari'} />
+              <Kpi label="Burn Rate Puncak" value={fmtRp(forecast.peak_burn_rate) + '/hari'} />
+              <Kpi label="Kebutuhan Forecast" value={fmtRp(forecast.forecast_required_balance)} sub={`window ${forecast.funding_window_hours} jam${forecast.funding_window_is_default ? ' (default)' : ''}`} />
+              <Kpi label="Reserve Dinamis" value={fmtRp(forecast.dynamic_reserve_balance)} />
+              <Kpi label="Rekomendasi Top Up" value={fmtRp(forecast.recommended_topup_amount)} alert={forecast.recommended_topup_amount > 0}
+                sub={forecast.recommended_topup_deadline ? `sebelum ${fmtDateTime(forecast.recommended_topup_deadline)}` : null} />
+            </div>
+
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, fontSize: 12.5, color: 'var(--text-3)', marginBottom: 14 }}>
+              <span>Dibuat: {fmtDateTime(forecast.forecast_generated_at)}</span>
+              <span>Confidence: <b style={{ color: 'var(--text-1)' }}>{forecast.forecast_confidence}%</b></span>
+              <span>Sudden Drop: {forecast.sudden_drop_amount !== null ? `${fmtRp(forecast.sudden_drop_amount)} (${forecast.sudden_drop_percentage?.toFixed(1)}%)` : 'tidak terdeteksi'}</span>
+            </div>
+
+            <div className="wr-table-wrap" style={{ marginBottom: 14 }}>
+              <table className="wr-table">
+                <thead><tr><th>Threshold</th><th>Nilai Dipakai</th><th>Sumber</th></tr></thead>
+                <tbody>
+                  <tr><td>Watch</td><td>{fmtRp(forecast.dynamic_watch_threshold)}</td><td><SourceTag source={forecast.thresholds_source?.watch} /></td></tr>
+                  <tr><td>Critical</td><td>{fmtRp(forecast.dynamic_critical_threshold)}</td><td><SourceTag source={forecast.thresholds_source?.critical} /></td></tr>
+                  <tr><td>Emergency</td><td>{fmtRp(forecast.dynamic_emergency_threshold)}</td><td><SourceTag source={forecast.thresholds_source?.emergency} /></td></tr>
+                  <tr><td>Reserve</td><td>{fmtRp(forecast.dynamic_reserve_balance)}</td><td><SourceTag source={forecast.thresholds_source?.reserve} /></td></tr>
+                  <tr>
+                    <td>Excess Balance / Stale After / Safety Buffer / Top-up Rounding</td>
+                    <td colSpan={2}><span className="bct-badge" style={{ color: '#B45309', background: '#FEF3C7' }}>Finance Policy (manual)</span></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <details open={showDetail} onToggle={e => setShowDetail(e.target.open)}>
+              <summary style={{ cursor: 'pointer', fontWeight: 600, fontSize: 13, color: 'var(--text-2)' }}>Detail Perhitungan (expand)</summary>
+              <div style={{ marginTop: 10, fontSize: 12.5, color: 'var(--text-3)', lineHeight: 1.7 }}>
+                <div>Window burn-rate: {forecast.calculation?.window_days} hari (coverage {forecast.calculation?.coverage?.included_days}/{forecast.calculation?.coverage?.selected_days} hari ada data)</div>
+                <div>average_burn_rate = {forecast.calculation?.average_burn_rate_formula}</div>
+                <div>forecast_required_balance = {forecast.calculation?.forecast_required_balance_formula}</div>
+                <div>dynamic_reserve_balance = {forecast.calculation?.dynamic_reserve_balance_formula}</div>
+                <div>dynamic_critical_threshold = {forecast.calculation?.dynamic_critical_threshold_formula}</div>
+                <div>dynamic_emergency_threshold = {forecast.calculation?.dynamic_emergency_threshold_formula}</div>
+                <div>dynamic_watch_threshold = {forecast.calculation?.dynamic_watch_threshold_formula}</div>
+                <div>recommended_topup_amount = {forecast.calculation?.recommended_topup_formula}</div>
+              </div>
+            </details>
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 

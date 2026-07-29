@@ -556,6 +556,14 @@ export const getBctPolicy = (bankId) =>
 export const updateBctPolicy = (bankId, payload) =>
   axios.put(`${BCT_BASE}/banks/${bankId}/policy`, payload, { headers: authHeaders() }).then(r => r.data);
 
+/* Forecast — OCBC Rekonsiliasi sbg source, Balance Control Tower sbg control room */
+export const getBctForecast = (bankId) =>
+  axios.get(`${BCT_BASE}/banks/${bankId}/forecast`, { params: { t: Date.now() }, headers: authHeaders() }).then(r => r.data);
+export const refreshBctForecast = (bankId) =>
+  axios.post(`${BCT_BASE}/banks/${bankId}/forecast/refresh`, {}, { headers: authHeaders() }).then(r => r.data);
+export const getBctForecastHistory = (bankId, params = {}) =>
+  axios.get(`${BCT_BASE}/banks/${bankId}/forecast/history`, { params: { ...params, t: Date.now() }, headers: authHeaders() }).then(r => r.data);
+
 export const createBctTopup = (payload) =>
   axios.post(`${BCT_BASE}/topup`, payload, { headers: authHeaders() }).then(r => r.data);
 export const getBctTopups = (params = {}) =>

@@ -114,33 +114,89 @@ function evaluateSuddenDrop({ snapshot, previousSnapshot, policy, now = new Date
  *   1. Tidak ada snapshot sama sekali          -> CONFIGURATION_REQUIRED
  *   2. sync_status snapshot terakhir = ERROR   -> SYNC_ERROR
  *   3. Policy belum ada / belum aktif          -> CONFIGURATION_REQUIRED
- *   4. Snapshot lebih tua dari stale_after_minutes -> DATA_STALE
+ *   4. Snapshot (atau data rekonsiliasi, kalau forecast tersedia) lebih tua
+ *      dari stale_after_minutes                -> DATA_STALE
  *   5. Sudden-drop terdeteksi (lihat evaluateSuddenDrop) -> SUDDEN_DROP
- *   6. effective_balance <= emergency_threshold -> EMERGENCY
+ *   6. effective_balance <= emergency_threshold, ATAU (kalau forecast
+ *      tersedia) runway lebih pendek dari funding window -> EMERGENCY
  *   7. effective_balance <= critical_threshold ATAU <= absolute_minimum_balance
  *      (backward-compat: absolute_minimum_balance tetap dipakai kalau
- *      critical_threshold belum diisi)          -> CRITICAL
+ *      critical_threshold belum diisi), ATAU (kalau forecast tersedia)
+ *      proyeksi saldo di funding window berikutnya < critical -> CRITICAL
  *   8. effective_balance <= watch_threshold     -> TOP_UP_RECOMMENDED
  *   9. effective_balance <= watch_threshold * (1 + safety_buffer_percentage/100)
  *                                                -> WATCH (zona buffer, mendekati watch_threshold)
- *  10. excess_balance_threshold terisi & effective_balance >= itu -> EXCESS_BALANCE
+ *  10. excess_balance_threshold terisi & effective_balance (dikurangi
+ *      kebutuhan forecast & reserve kalau forecast tersedia) >= itu -> EXCESS_BALANCE
  *  11. selain itu                               -> SAFE
+ *
+ * `forecast` (opsional, dari backend/src/reconciliation/balanceForecast.js
+ * buildForecastOutput()) HANYA dipakai kalau forecast_available !== false
+ * DAN minimal satu dynamic threshold terisi -- threshold di dalam forecast
+ * SUDAH menerapkan precedence manual-override > dynamic (lihat
+ * resolveThresholdField), classify TIDAK menduplikasi precedence itu.
+ * Kalau forecast tidak diberikan/tidak tersedia, cascade PERSIS sama dgn
+ * versi sebelum fitur forecast ada (backward-compatible, byte-identical).
  */
-function classifyBankStatus({ snapshot, policy, previousSnapshot = null, now = new Date() }) {
-  if (!snapshot) return STATUS.CONFIGURATION_REQUIRED;
-  if (snapshot.sync_status === 'ERROR') return STATUS.SYNC_ERROR;
-  if (!policy || policy.is_active === false) return STATUS.CONFIGURATION_REQUIRED;
+function computeStatusDecision({ snapshot, policy, previousSnapshot = null, forecast = null, now = new Date() }) {
+  if (!snapshot) return { status: STATUS.CONFIGURATION_REQUIRED, reason: 'Belum ada snapshot saldo untuk bank ini.' };
+  if (snapshot.sync_status === 'ERROR') return { status: STATUS.SYNC_ERROR, reason: 'Snapshot saldo terakhir berstatus sync ERROR.' };
+  if (!policy || policy.is_active === false) return { status: STATUS.CONFIGURATION_REQUIRED, reason: 'Policy saldo belum dikonfigurasi atau nonaktif.' };
 
   if (policy.stale_after_minutes !== null && policy.stale_after_minutes !== undefined) {
+    const staleLimit = Number(policy.stale_after_minutes);
     const capturedAt = new Date(snapshot.captured_at);
     const ageMinutes = (now.getTime() - capturedAt.getTime()) / 60000;
-    if (ageMinutes > Number(policy.stale_after_minutes)) return STATUS.DATA_STALE;
+    if (ageMinutes > staleLimit) {
+      return { status: STATUS.DATA_STALE, reason: `Snapshot saldo berumur ${Math.round(ageMinutes)} menit, melebihi batas ${staleLimit} menit.` };
+    }
+    if (forecast && forecast.forecast_available && forecast.latest_reconciliation_age_minutes !== null && forecast.latest_reconciliation_age_minutes > staleLimit) {
+      return { status: STATUS.DATA_STALE, reason: `Data rekonsiliasi terakhir berumur ${forecast.latest_reconciliation_age_minutes} menit, melebihi batas ${staleLimit} menit.` };
+    }
   }
 
   const suddenDrop = evaluateSuddenDrop({ snapshot, previousSnapshot, policy, now });
-  if (suddenDrop.triggered) return STATUS.SUDDEN_DROP;
+  if (suddenDrop.triggered) {
+    return { status: STATUS.SUDDEN_DROP, reason: `Penurunan saldo Rp${Math.round(suddenDrop.dropAmount).toLocaleString('id-ID')} (${suddenDrop.dropPercentage.toFixed(1)}%) terdeteksi dalam window sudden-drop.` };
+  }
 
   const eff = Number(snapshot.effective_balance);
+  const forecastUsable = !!(forecast && forecast.forecast_available &&
+    (forecast.dynamic_emergency_threshold !== null || forecast.dynamic_critical_threshold !== null || forecast.dynamic_watch_threshold !== null));
+
+  if (forecastUsable) {
+    const { dynamic_emergency_threshold: emergency, dynamic_critical_threshold: critical, dynamic_watch_threshold: watch,
+      projected_balance_at_next_funding: projected, estimated_runway_minutes: runway, funding_window_hours: fundingHours } = forecast;
+    const fundingWindowMinutes = fundingHours !== null && fundingHours !== undefined ? fundingHours * 60 : null;
+
+    if (emergency !== null && eff <= emergency) {
+      return { status: STATUS.EMERGENCY, reason: `Saldo efektif Rp${Math.round(eff).toLocaleString('id-ID')} <= emergency threshold dinamis Rp${Math.round(emergency).toLocaleString('id-ID')}.` };
+    }
+    if (runway !== null && fundingWindowMinutes !== null && runway <= fundingWindowMinutes) {
+      return { status: STATUS.EMERGENCY, reason: `Estimasi runway ${Math.round(runway)} menit lebih pendek dari funding window ${Math.round(fundingWindowMinutes)} menit.` };
+    }
+    if (critical !== null && eff <= critical) {
+      return { status: STATUS.CRITICAL, reason: `Saldo efektif Rp${Math.round(eff).toLocaleString('id-ID')} <= critical threshold dinamis Rp${Math.round(critical).toLocaleString('id-ID')}.` };
+    }
+    if (projected !== null && critical !== null && projected < critical) {
+      return { status: STATUS.CRITICAL, reason: `Proyeksi saldo di funding window berikutnya Rp${Math.round(projected).toLocaleString('id-ID')} di bawah critical threshold dinamis.` };
+    }
+    if (watch !== null) {
+      if (eff <= watch) return { status: STATUS.TOP_UP_RECOMMENDED, reason: `Saldo efektif <= watch threshold dinamis Rp${Math.round(watch).toLocaleString('id-ID')}.` };
+      const bufferPct = policy.safety_buffer_percentage !== null && policy.safety_buffer_percentage !== undefined ? Number(policy.safety_buffer_percentage) : 0;
+      const watchBufferUpper = watch * (1 + bufferPct / 100);
+      if (eff <= watchBufferUpper) return { status: STATUS.WATCH, reason: 'Mendekati watch threshold dinamis (zona buffer safety_buffer_percentage).' };
+    }
+    const excess = policy.excess_balance_threshold !== null && policy.excess_balance_threshold !== undefined ? Number(policy.excess_balance_threshold) : null;
+    if (excess !== null) {
+      const excessBasis = (forecast.forecast_required_balance !== null && forecast.dynamic_reserve_balance !== null)
+        ? eff - forecast.forecast_required_balance - forecast.dynamic_reserve_balance : eff;
+      if (excessBasis >= excess) return { status: STATUS.EXCESS_BALANCE, reason: 'Saldo efektif (setelah kebutuhan forecast & reserve) melebihi excess threshold.' };
+    }
+    return { status: STATUS.SAFE, reason: 'Proyeksi saldo mencukupi kebutuhan sampai funding window berikutnya.' };
+  }
+
+  // ── Fallback: forecast tidak tersedia/tidak dipakai -- cascade lama, tidak berubah ──
   const absMin = policy.absolute_minimum_balance !== null && policy.absolute_minimum_balance !== undefined
     ? Number(policy.absolute_minimum_balance) : null;
   const critical = policy.critical_threshold !== null && policy.critical_threshold !== undefined
@@ -154,19 +210,29 @@ function classifyBankStatus({ snapshot, policy, previousSnapshot = null, now = n
   const bufferPct = policy.safety_buffer_percentage !== null && policy.safety_buffer_percentage !== undefined
     ? Number(policy.safety_buffer_percentage) : 0;
 
-  if (emergency !== null && eff <= emergency) return STATUS.EMERGENCY;
-  if (critical !== null && eff <= critical) return STATUS.CRITICAL;
-  if (absMin !== null && eff <= absMin) return STATUS.CRITICAL;
+  if (emergency !== null && eff <= emergency) return { status: STATUS.EMERGENCY, reason: `Saldo efektif <= emergency_threshold Rp${Math.round(emergency).toLocaleString('id-ID')}.` };
+  if (critical !== null && eff <= critical) return { status: STATUS.CRITICAL, reason: `Saldo efektif <= critical_threshold Rp${Math.round(critical).toLocaleString('id-ID')}.` };
+  if (absMin !== null && eff <= absMin) return { status: STATUS.CRITICAL, reason: `Saldo efektif <= absolute_minimum_balance Rp${Math.round(absMin).toLocaleString('id-ID')}.` };
 
   if (watch !== null) {
-    if (eff <= watch) return STATUS.TOP_UP_RECOMMENDED;
+    if (eff <= watch) return { status: STATUS.TOP_UP_RECOMMENDED, reason: `Saldo efektif <= watch_threshold Rp${Math.round(watch).toLocaleString('id-ID')}.` };
     const watchBufferUpper = watch * (1 + bufferPct / 100);
-    if (eff <= watchBufferUpper) return STATUS.WATCH;
+    if (eff <= watchBufferUpper) return { status: STATUS.WATCH, reason: 'Mendekati watch_threshold (zona buffer safety_buffer_percentage).' };
   }
 
-  if (excess !== null && eff >= excess) return STATUS.EXCESS_BALANCE;
+  if (excess !== null && eff >= excess) return { status: STATUS.EXCESS_BALANCE, reason: `Saldo efektif >= excess_balance_threshold Rp${Math.round(excess).toLocaleString('id-ID')}.` };
 
-  return STATUS.SAFE;
+  return { status: STATUS.SAFE, reason: 'Saldo efektif berada dalam rentang aman.' };
+}
+
+/** Wrapper backward-compatible -- return HANYA string status, kontrak & perilaku SAMA PERSIS dgn sebelum fitur forecast ada saat dipanggil tanpa `forecast`. */
+function classifyBankStatus(params) {
+  return computeStatusDecision(params).status;
+}
+
+/** Versi lengkap (status + alasan human-readable) -- dipakai route utk field status_reason. */
+function classifyBankStatusDetailed(params) {
+  return computeStatusDecision(params);
 }
 
 /**
@@ -236,6 +302,7 @@ module.exports = {
   centsToString,
   computeEffectiveBalance,
   classifyBankStatus,
+  classifyBankStatusDetailed,
   evaluateSuddenDrop,
   resolveReserveBalance,
   alertTypeForStatus,

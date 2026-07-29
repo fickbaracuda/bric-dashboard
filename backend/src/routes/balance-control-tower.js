@@ -22,12 +22,28 @@ const pool = require('../db');
 const {
   computeEffectiveBalance,
   classifyBankStatus,
+  classifyBankStatusDetailed,
+  evaluateSuddenDrop,
   resolveReserveBalance,
   alertTypeForStatus,
   canTransitionTopup,
   isSelfApproval,
   STATUS,
 } = require('../utils/balanceControlTower');
+const { computeBurnRateStats, buildForecastOutput } = require('../reconciliation/balanceForecast');
+
+/**
+ * Bangun forecast lengkap utk satu bank (REUSE evaluateSuddenDrop yang sama
+ * dipakai classifier + computeBurnRateStats yang REUSE penuh mesin
+ * "Kebutuhan Saldo" Rekonsiliasi). null kalau belum ada snapshot sama sekali
+ * (belum ada apa pun utk diforecast).
+ */
+async function computeForecastForBank(dbPool, bank, snapshot, previousSnapshot, policy, now) {
+  if (!snapshot) return null;
+  const suddenDrop = evaluateSuddenDrop({ snapshot, previousSnapshot, policy: policy || {}, now });
+  const burnStats = await computeBurnRateStats({ pool: dbPool, bankCode: bank.bank_code, now });
+  return buildForecastOutput({ snapshot, previousSnapshot, policy: policy || {}, burnStats, bankCode: bank.bank_code, suddenDrop, now });
+}
 
 const VALID_SOURCES = ['MANUAL', 'API', 'RECONCILIATION'];
 const VALID_SYNC_STATUS = ['OK', 'STALE', 'ERROR'];
@@ -108,20 +124,25 @@ async function fetchBanksWithStatus(client, { onlyActive = true } = {}) {
   const topupTodayByBank = new Map(topupTodayRes.rows.map(t => [String(t.bank_account_id), Number(t.total)]));
 
   const now = new Date();
-  return banks.map(bank => {
+  return Promise.all(banks.map(async bank => {
     const policy = policyByBank.get(String(bank.id)) || null;
     const snapshot = snapshotByBank.get(String(bank.id)) || null;
     const previousSnapshot = previousSnapshotByBank.get(String(bank.id)) || null;
-    const status = classifyBankStatus({ snapshot, policy, previousSnapshot, now });
+    let forecast = null;
+    try { forecast = await computeForecastForBank(pool, bank, snapshot, previousSnapshot, policy, now); }
+    catch (e) { console.error(`computeForecastForBank(${bank.bank_code}) error:`, e.message); }
+    const { status, reason } = classifyBankStatusDetailed({ snapshot, policy, previousSnapshot, forecast, now });
     return {
       bank,
       policy,
       snapshot,
       previousSnapshot,
+      forecast,
       status,
+      status_reason: reason,
       topup_today: topupTodayByBank.get(String(bank.id)) || 0,
     };
-  });
+  }));
 }
 
 /** Sinkronkan alert OPEN sesuai status terkini — dedup via partial unique index, auto-resolve saat kondisi normal. */
@@ -145,7 +166,7 @@ async function syncAlertsForBank(client, bankId, status) {
   }
 }
 
-function mapBankRow({ bank, policy, snapshot, status, topup_today }) {
+function mapBankRow({ bank, policy, snapshot, status, status_reason, topup_today, forecast }) {
   return {
     id: bank.id,
     bank_code: bank.bank_code,
@@ -160,9 +181,16 @@ function mapBankRow({ bank, policy, snapshot, status, topup_today }) {
     effective_balance: snapshot ? Number(snapshot.effective_balance) : null,
     top_up_hari_ini: topup_today,
     status,
+    status_reason: status_reason || null,
     sync_status: snapshot ? snapshot.sync_status : null,
     last_captured_at: snapshot ? snapshot.captured_at : null,
     has_policy: !!(policy && policy.is_active),
+    forecast_available: !!(forecast && forecast.forecast_available),
+    forecast_source: forecast ? forecast.forecast_source : null,
+    forecast_confidence: forecast ? forecast.forecast_confidence : null,
+    estimated_runway_minutes: forecast ? forecast.estimated_runway_minutes : null,
+    recommended_topup_amount: forecast ? forecast.recommended_topup_amount : null,
+    recommended_topup_deadline: forecast ? forecast.recommended_topup_deadline : null,
   };
 }
 
@@ -341,7 +369,11 @@ router.get('/banks/:id', async (req, res) => {
     const policy = policyRes.rows[0] || null;
     const snapshot = latestSnapshotsRes.rows[0] || null;
     const previousSnapshot = latestSnapshotsRes.rows[1] || null;
-    const status = classifyBankStatus({ snapshot, policy, previousSnapshot, now: new Date() });
+    const now = new Date();
+    let forecast = null;
+    try { forecast = await computeForecastForBank(pool, bank, snapshot, previousSnapshot, policy, now); }
+    catch (e) { console.error(`bank detail forecast(${bank.bank_code}) error:`, e.message); }
+    const { status, reason: statusReason } = classifyBankStatusDetailed({ snapshot, policy, previousSnapshot, forecast, now });
 
     // Penggunaan saldo hari ini = selisih saldo tersedia snapshot terakhir kemarin vs sekarang (proxy sederhana, tanpa buku besar transaksi).
     let usageToday = null;
@@ -363,6 +395,8 @@ router.get('/banks/:id', async (req, res) => {
       bank,
       policy,
       status,
+      status_reason: statusReason,
+      forecast,
       posisi_saldo_terbaru: snapshot ? {
         available_balance: Number(snapshot.available_balance),
         held_balance: Number(snapshot.held_balance),
@@ -607,6 +641,140 @@ router.put('/banks/:id/policy', requireAdmin, async (req, res) => {
     res.status(500).json({ error: e.message });
   } finally {
     client.release();
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// FORECAST — OCBC Rekonsiliasi sbg source, Balance Control Tower sbg
+// control room. GET = live/read-only (dipanggil bebas, tidak nulis apa pun).
+// POST .../refresh = eksplisit generate + PERSIST 1 baris riwayat forecast,
+// + audit (generation, status change, recommendation change).
+// ─────────────────────────────────────────────────────────────────────────
+router.get('/banks/:id/forecast', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'id tidak valid.' });
+
+    const bankRes = await pool.query(`SELECT * FROM bct_bank_accounts WHERE id = $1`, [id]);
+    if (!bankRes.rows.length) return res.status(404).json({ error: 'Bank tidak ditemukan.' });
+    const bank = bankRes.rows[0];
+
+    const [policyRes, snapshotsRes] = await Promise.all([
+      pool.query(`SELECT * FROM bct_balance_policies WHERE bank_account_id = $1`, [id]),
+      pool.query(`SELECT * FROM bct_balance_snapshots WHERE bank_account_id = $1 ORDER BY captured_at DESC LIMIT 2`, [id]),
+    ]);
+    const policy = policyRes.rows[0] || null;
+    const snapshot = snapshotsRes.rows[0] || null;
+    const previousSnapshot = snapshotsRes.rows[1] || null;
+    const now = new Date();
+
+    const forecast = await computeForecastForBank(pool, bank, snapshot, previousSnapshot, policy, now);
+    const { status, reason } = classifyBankStatusDetailed({ snapshot, policy, previousSnapshot, forecast, now });
+
+    res.set('Cache-Control', 'no-store');
+    res.json({ success: true, bank_id: id, status, status_reason: reason, forecast });
+  } catch (e) {
+    console.error('balance-control-tower get forecast error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post('/banks/:id/forecast/refresh', requireOpsOrFinance, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'id tidak valid.' });
+
+    const bankRes = await client.query(`SELECT * FROM bct_bank_accounts WHERE id = $1`, [id]);
+    if (!bankRes.rows.length) return res.status(404).json({ error: 'Bank tidak ditemukan.' });
+    const bank = bankRes.rows[0];
+
+    const [policyRes, snapshotsRes, lastForecastRes] = await Promise.all([
+      client.query(`SELECT * FROM bct_balance_policies WHERE bank_account_id = $1`, [id]),
+      client.query(`SELECT * FROM bct_balance_snapshots WHERE bank_account_id = $1 ORDER BY captured_at DESC LIMIT 2`, [id]),
+      client.query(`SELECT * FROM bct_forecast_snapshots WHERE bank_account_id = $1 ORDER BY created_at DESC LIMIT 1`, [id]),
+    ]);
+    const policy = policyRes.rows[0] || null;
+    const snapshot = snapshotsRes.rows[0] || null;
+    const previousSnapshot = snapshotsRes.rows[1] || null;
+    const lastForecast = lastForecastRes.rows[0] || null;
+    const now = new Date();
+
+    const forecast = await computeForecastForBank(pool, bank, snapshot, previousSnapshot, policy, now);
+    const { status, reason } = classifyBankStatusDetailed({ snapshot, policy, previousSnapshot, forecast, now });
+
+    await client.query('BEGIN');
+    const insertRes = await client.query(
+      `INSERT INTO bct_forecast_snapshots
+        (bank_account_id, status, status_reason, effective_balance, forecast_required_balance, projected_balance_at_next_funding,
+         estimated_runway_minutes, average_burn_rate, peak_burn_rate, dynamic_reserve_balance, dynamic_watch_threshold,
+         dynamic_critical_threshold, dynamic_emergency_threshold, recommended_topup_amount, recommended_topup_deadline,
+         forecast_confidence, forecast_source, forecast_available, raw_output, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+       RETURNING *`,
+      [id, status, reason, snapshot ? snapshot.effective_balance : null,
+        forecast?.forecast_required_balance ?? null, forecast?.projected_balance_at_next_funding ?? null,
+        forecast?.estimated_runway_minutes ?? null, forecast?.average_burn_rate ?? null, forecast?.peak_burn_rate ?? null,
+        forecast?.dynamic_reserve_balance ?? null, forecast?.dynamic_watch_threshold ?? null,
+        forecast?.dynamic_critical_threshold ?? null, forecast?.dynamic_emergency_threshold ?? null,
+        forecast?.recommended_topup_amount ?? null, forecast?.recommended_topup_deadline ?? null,
+        forecast?.forecast_confidence ?? null, forecast?.forecast_source ?? null, !!forecast?.forecast_available,
+        forecast ? JSON.stringify(forecast) : null, req.user?.username || null]
+    );
+
+    await logAudit(client, {
+      entityType: 'FORECAST', entityId: id, action: 'REFRESH_FORECAST',
+      actorUserId: req.user?.id, actorUsername: req.user?.username,
+      before: lastForecast, after: insertRes.rows[0],
+      notes: `forecast_available=${!!forecast?.forecast_available}, source=${forecast?.forecast_source || 'null'}`,
+    });
+
+    if (lastForecast && lastForecast.status !== status) {
+      await logAudit(client, {
+        entityType: 'FORECAST', entityId: id, action: 'STATUS_CHANGE',
+        actorUserId: req.user?.id, actorUsername: req.user?.username,
+        before: { status: lastForecast.status, status_reason: lastForecast.status_reason },
+        after: { status, status_reason: reason },
+      });
+    }
+    const prevTopup = lastForecast ? Number(lastForecast.recommended_topup_amount || 0) : null;
+    const newTopup = forecast ? Number(forecast.recommended_topup_amount || 0) : null;
+    if (prevTopup !== null && newTopup !== null && Math.abs(prevTopup - newTopup) >= 1) {
+      await logAudit(client, {
+        entityType: 'FORECAST', entityId: id, action: 'RECOMMENDATION_CHANGE',
+        actorUserId: req.user?.id, actorUsername: req.user?.username,
+        before: { recommended_topup_amount: prevTopup }, after: { recommended_topup_amount: newTopup },
+      });
+    }
+
+    await client.query('COMMIT');
+    res.json({ success: true, forecast_snapshot: insertRes.rows[0], status, status_reason: reason, forecast });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    console.error('balance-control-tower refresh forecast error:', e.message);
+    res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+router.get('/banks/:id/forecast/history', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'id tidak valid.' });
+    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50));
+    const r = await pool.query(
+      `SELECT id, status, status_reason, effective_balance, forecast_required_balance, dynamic_reserve_balance,
+              dynamic_watch_threshold, dynamic_critical_threshold, dynamic_emergency_threshold,
+              recommended_topup_amount, recommended_topup_deadline, forecast_confidence, forecast_source,
+              forecast_available, created_by, created_at
+       FROM bct_forecast_snapshots WHERE bank_account_id = $1 ORDER BY created_at DESC LIMIT $2`,
+      [id, limit]
+    );
+    res.json({ success: true, forecast_history: r.rows });
+  } catch (e) {
+    console.error('balance-control-tower forecast history error:', e.message);
+    res.status(500).json({ error: e.message });
   }
 });
 

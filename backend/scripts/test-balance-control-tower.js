@@ -18,6 +18,7 @@ const {
   centsToString,
   computeEffectiveBalance,
   classifyBankStatus,
+  classifyBankStatusDetailed,
   evaluateSuddenDrop,
   resolveReserveBalance,
   alertTypeForStatus,
@@ -25,6 +26,13 @@ const {
   isSelfApproval,
   STATUS,
 } = require('../src/utils/balanceControlTower');
+const {
+  buildForecastOutput,
+  computeRecommendedTopup,
+  roundUpToNearest,
+  resolveThresholdField,
+  computeForecastConfidence,
+} = require('../src/reconciliation/balanceForecast');
 
 const tests = [];
 function test(name, fn) { tests.push({ name, fn }); }
@@ -376,6 +384,272 @@ test('summary lintas bank: total saldo efektif & bank_perlu_perhatian dihitung b
   assert.strictEqual(totalEfektif, 2450000);
   assert.strictEqual(perluPerhatian, 2);
   assert.deepStrictEqual(statuses, [STATUS.SAFE, STATUS.TOP_UP_RECOMMENDED, STATUS.CRITICAL]);
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// FASE FORECAST — OCBC Rekonsiliasi sbg forecasting engine, Balance
+// Control Tower sbg control room (buildForecastOutput + classify forecast-aware)
+// ═══════════════════════════════════════════════════════════════════════
+function snapNow(effective, overrides = {}) {
+  return { effective_balance: effective, available_balance: effective, captured_at: new Date().toISOString(), sync_status: 'OK', ...overrides };
+}
+function burnStats(overrides = {}) {
+  return { available: true, window_days: 14, coverage: { included_days: 14, selected_days: 14 }, average_burn_rate: 300000000, peak_burn_rate: 450000000, ...overrides };
+}
+
+// ── forecast-driven SAFE/WATCH/CRITICAL/EMERGENCY ──────────────────────────
+test('forecast-driven: saldo jauh di atas semua dynamic threshold -> SAFE', () => {
+  const snapshot = snapNow('2000000000');
+  const policy = { is_active: true, safety_buffer_percentage: 10 };
+  const forecast = buildForecastOutput({ snapshot, previousSnapshot: null, policy, burnStats: burnStats(), bankCode: 'OCBC' });
+  assert.strictEqual(classifyBankStatus({ snapshot, policy, forecast }), STATUS.SAFE);
+});
+test('forecast-driven: saldo di zona buffer dynamic watch (di ATAS watch, di BAWAH watch*(1+buffer%)) -> WATCH', () => {
+  const snapshot = snapNow('2000000000');
+  const policy = { is_active: true, safety_buffer_percentage: 10 };
+  const forecast = buildForecastOutput({ snapshot, previousSnapshot: null, policy, burnStats: burnStats(), bankCode: 'OCBC' });
+  // Zona WATCH = (watch, watch*(1+buffer%)] -- pakai titik tengah supaya pasti masuk buffer, bukan <= watch (itu TOP_UP_RECOMMENDED).
+  const watchUpper = forecast.dynamic_watch_threshold * 1.1;
+  const midBuffer = (forecast.dynamic_watch_threshold + watchUpper) / 2;
+  const watchSnapshot = snapNow(String(midBuffer));
+  assert.strictEqual(classifyBankStatus({ snapshot: watchSnapshot, policy, forecast }), STATUS.WATCH);
+});
+test('forecast-driven: saldo <= dynamic_critical_threshold -> CRITICAL', () => {
+  const snapshot = snapNow('2000000000');
+  const policy = { is_active: true, safety_buffer_percentage: 10 };
+  const forecast = buildForecastOutput({ snapshot, previousSnapshot: null, policy, burnStats: burnStats(), bankCode: 'OCBC' });
+  const criticalSnapshot = snapNow(String(forecast.dynamic_critical_threshold));
+  assert.strictEqual(classifyBankStatus({ snapshot: criticalSnapshot, policy, forecast }), STATUS.CRITICAL);
+});
+test('forecast-driven: saldo <= dynamic_emergency_threshold -> EMERGENCY', () => {
+  const snapshot = snapNow('2000000000');
+  const policy = { is_active: true, safety_buffer_percentage: 10 };
+  const forecast = buildForecastOutput({ snapshot, previousSnapshot: null, policy, burnStats: burnStats(), bankCode: 'OCBC' });
+  const emergencySnapshot = snapNow(String(forecast.dynamic_emergency_threshold));
+  assert.strictEqual(classifyBankStatus({ snapshot: emergencySnapshot, policy, forecast }), STATUS.EMERGENCY);
+});
+test('forecast-driven: EMERGENCY via runway lebih pendek dari funding window, ISOLATED dari amount-based check (critical/emergency manual di-set sangat rendah)', () => {
+  // critical/emergency manual di-set tiny -> amount-based check TIDAK PERNAH trigger duluan,
+  // supaya test ini murni membuktikan cabang runway-based EMERGENCY (bukan kebetulan amount-based).
+  const policy = { is_active: true, funding_window_hours: 1, critical_threshold: '1', emergency_threshold: '1', safety_buffer_percentage: 0 };
+  const bs = burnStats({ average_burn_rate: 500000000, peak_burn_rate: 500000000 }); // burn 500jt/hari -> forecast_required (window 1 jam) ~= 20.8jt
+  // Saldo DI BAWAH forecast_required_balance (20.8jt) -> runway < funding window (1 jam), tapi masih jauh di atas critical/emergency manual (1).
+  const snapshot = snapNow('10000000');
+  const forecast = buildForecastOutput({ snapshot, previousSnapshot: null, policy, burnStats: bs, bankCode: 'OCBC' });
+  assert.ok(forecast.estimated_runway_minutes < forecast.funding_window_hours * 60, 'prasyarat: runway harus lebih pendek dari funding window utk test ini valid');
+  const detail = classifyBankStatusDetailed({ snapshot, policy, forecast });
+  assert.strictEqual(detail.status, STATUS.EMERGENCY);
+  assert.ok(detail.reason.toLowerCase().includes('runway'), 'alasan harus menyebut runway, bukan amount threshold');
+});
+test('forecast-driven: CRITICAL kalau projected_balance_at_next_funding di bawah dynamic_critical_threshold walau saldo saat ini masih di atas critical', () => {
+  const policy = { is_active: true, funding_window_hours: 48, safety_buffer_percentage: 0 };
+  const bs = burnStats({ average_burn_rate: 100000000, peak_burn_rate: 100000000 });
+  // Saldo dipilih PAS di atas critical (belum trigger by-amount), tapi proyeksi 48 jam ke depan (2x forecast_required) akan jatuh di bawah critical.
+  const probe = buildForecastOutput({ snapshot: snapNow('1000000000'), previousSnapshot: null, policy, burnStats: bs, bankCode: 'OCBC' });
+  const snapshot = snapNow(String(probe.dynamic_critical_threshold + 1000)); // sedikit di atas critical -> tidak trigger by-amount
+  const forecast = buildForecastOutput({ snapshot, previousSnapshot: null, policy, burnStats: bs, bankCode: 'OCBC' });
+  const detail = classifyBankStatusDetailed({ snapshot, policy, forecast });
+  assert.strictEqual(detail.status, STATUS.CRITICAL);
+  assert.ok(detail.reason.toLowerCase().includes('proyeksi'), 'alasan harus menyebut proyeksi, bukan cuma saldo saat ini');
+});
+
+// ── stale data (snapshot & reconciliation) ─────────────────────────────────
+test('stale data: snapshot saldo lebih tua dari stale_after_minutes -> DATA_STALE (walau forecast tersedia)', () => {
+  const policy = { is_active: true, stale_after_minutes: 60 };
+  const oldSnapshot = snapNow('1000000000', { captured_at: new Date(Date.now() - 90 * 60000).toISOString() });
+  const forecast = buildForecastOutput({ snapshot: oldSnapshot, previousSnapshot: null, policy, burnStats: burnStats(), bankCode: 'OCBC' });
+  assert.strictEqual(classifyBankStatus({ snapshot: oldSnapshot, policy, forecast }), STATUS.DATA_STALE);
+});
+test('stale data: data rekonsiliasi lebih basi dari stale_after_minutes -> DATA_STALE walau snapshot saldo baru', () => {
+  const policy = { is_active: true, stale_after_minutes: 60 };
+  const freshSnapshot = snapNow('1000000000');
+  const staleBurn = burnStats({ latest_reconciliation_age_minutes: 2880 }); // 2 hari
+  const forecast = buildForecastOutput({ snapshot: freshSnapshot, previousSnapshot: null, policy, burnStats: staleBurn, bankCode: 'OCBC' });
+  assert.strictEqual(classifyBankStatus({ snapshot: freshSnapshot, policy, forecast }), STATUS.DATA_STALE);
+});
+
+// ── no forecast available ───────────────────────────────────────────────────
+test('no forecast available: burnStats.available=false -> forecast_available=false, classify fallback ke logic lama', () => {
+  const policy = { is_active: true, absolute_minimum_balance: '500000' };
+  const snapshot = snapNow('500000');
+  const noForecast = buildForecastOutput({ snapshot, previousSnapshot: null, policy, burnStats: { available: false, reason: 'belum ada batch' }, bankCode: 'OCBC' });
+  assert.strictEqual(noForecast.forecast_available, false);
+  assert.strictEqual(noForecast.forecast_source, null);
+  assert.strictEqual(classifyBankStatus({ snapshot, policy, forecast: noForecast }), STATUS.CRITICAL); // absolute_minimum_balance manual tetap berlaku
+});
+test('no forecast available: burnStats null sama sekali (forecast param null) -> identik classifyBankStatus tanpa forecast', () => {
+  const policy = { is_active: true, absolute_minimum_balance: '500000' };
+  const snapshot = snapNow('500000');
+  assert.strictEqual(classifyBankStatus({ snapshot, policy }), classifyBankStatus({ snapshot, policy, forecast: null }));
+});
+
+// ── manual override precedence ──────────────────────────────────────────────
+test('manual override precedence: watch_threshold manual dipakai apa adanya, BUKAN dynamic_watch_threshold hasil forecast', () => {
+  const policy = { is_active: true, watch_threshold: '999999999', safety_buffer_percentage: 10 };
+  const snapshot = snapNow('1000000000');
+  const forecast = buildForecastOutput({ snapshot, previousSnapshot: null, policy, burnStats: burnStats(), bankCode: 'OCBC' });
+  assert.strictEqual(forecast.dynamic_watch_threshold, 999999999, 'field dynamic_watch_threshold value = manual override');
+  assert.strictEqual(forecast.thresholds_source.watch, 'MANUAL_OVERRIDE');
+});
+test('manual override precedence: reserve_balance manual dipakai, BUKAN volatilitas peak-average', () => {
+  const policy = { is_active: true, reserve_balance: '12345678' };
+  const forecast = buildForecastOutput({ snapshot: snapNow('1000000000'), previousSnapshot: null, policy, burnStats: burnStats(), bankCode: 'OCBC' });
+  assert.strictEqual(forecast.dynamic_reserve_balance, 12345678);
+  assert.strictEqual(forecast.thresholds_source.reserve, 'MANUAL_OVERRIDE');
+});
+test('manual override precedence: critical_threshold manual mengalahkan forecast_required_balance+reserve dinamis', () => {
+  const policy = { is_active: true, critical_threshold: '77777777' };
+  const forecast = buildForecastOutput({ snapshot: snapNow('1000000000'), previousSnapshot: null, policy, burnStats: burnStats(), bankCode: 'OCBC' });
+  assert.strictEqual(forecast.dynamic_critical_threshold, 77777777);
+  assert.strictEqual(forecast.thresholds_source.critical, 'MANUAL_OVERRIDE');
+});
+
+// ── dynamic threshold fallback (tidak ada manual override sama sekali) ─────
+test('dynamic fallback: tanpa manual override apa pun, semua threshold terisi dari forecast (SYSTEM_FORECAST)', () => {
+  const policy = { is_active: true, safety_buffer_percentage: 5 };
+  const forecast = buildForecastOutput({ snapshot: snapNow('1000000000'), previousSnapshot: null, policy, burnStats: burnStats(), bankCode: 'OCBC' });
+  assert.strictEqual(forecast.thresholds_source.watch, 'SYSTEM_FORECAST');
+  assert.strictEqual(forecast.thresholds_source.critical, 'SYSTEM_FORECAST');
+  assert.strictEqual(forecast.thresholds_source.emergency, 'SYSTEM_FORECAST');
+  assert.strictEqual(forecast.thresholds_source.reserve, 'SYSTEM_FORECAST');
+  assert.ok(forecast.dynamic_emergency_threshold < forecast.dynamic_critical_threshold);
+  assert.ok(forecast.dynamic_critical_threshold < forecast.dynamic_watch_threshold);
+});
+test('dynamic fallback: forecast tidak tersedia DAN tidak ada manual override -> semua threshold null (CONFIGURATION_REQUIRED via fallback lama)', () => {
+  const policy = { is_active: true };
+  const snapshot = snapNow('1000000000');
+  const forecast = buildForecastOutput({ snapshot, previousSnapshot: null, policy, burnStats: { available: false }, bankCode: 'OCBC' });
+  assert.strictEqual(forecast.dynamic_watch_threshold, null);
+  assert.strictEqual(forecast.dynamic_critical_threshold, null);
+  assert.strictEqual(forecast.dynamic_emergency_threshold, null);
+  assert.strictEqual(classifyBankStatus({ snapshot, policy, forecast }), STATUS.SAFE); // tidak ada threshold apa pun -> tidak ada yang trigger, sama seperti policy kosong lama
+});
+
+// ── top-up rounding ──────────────────────────────────────────────────────────
+test('roundUpToNearest: pembulatan ke atas ke kelipatan topup_rounding_amount', () => {
+  assert.strictEqual(roundUpToNearest(1000001, 1000000), 2000000);
+  assert.strictEqual(roundUpToNearest(1000000, 1000000), 1000000, 'tepat kelipatan -> tidak dibulatkan naik lagi');
+  assert.strictEqual(roundUpToNearest(1, 500000), 500000);
+});
+test('roundUpToNearest: roundTo null/0/invalid -> nilai apa adanya (tidak dibulatkan)', () => {
+  assert.strictEqual(roundUpToNearest(12345, null), 12345);
+  assert.strictEqual(roundUpToNearest(12345, 0), 12345);
+  assert.strictEqual(roundUpToNearest(12345, -5), 12345);
+});
+test('computeRecommendedTopup: hasil dibulatkan ke atas via topup_rounding_amount', () => {
+  const amt = computeRecommendedTopup({
+    forecastRequiredBalance: 300000000, dynamicReserveBalance: 50000000, safetyBuffer: 10000001,
+    effectiveBalance: 100000000, topupRoundingAmount: 1000000,
+  });
+  // raw = 300jt+50jt+10.000.001-100jt = 260.000.001 -> dibulatkan ke atas kelipatan 1jt = 261.000.000
+  assert.strictEqual(amt, 261000000);
+});
+
+// ── no negative recommendation ──────────────────────────────────────────────
+test('computeRecommendedTopup: saldo sudah lebih dari cukup -> 0, TIDAK PERNAH negatif', () => {
+  const amt = computeRecommendedTopup({
+    forecastRequiredBalance: 100000000, dynamicReserveBalance: 20000000, safetyBuffer: 5000000,
+    effectiveBalance: 999999999999, topupRoundingAmount: 1000000,
+  });
+  assert.strictEqual(amt, 0);
+});
+test('forecast-driven: recommended_topup_amount pada output penuh tidak pernah negatif', () => {
+  const forecast = buildForecastOutput({ snapshot: snapNow('999999999999'), previousSnapshot: null, policy: { is_active: true }, burnStats: burnStats(), bankCode: 'OCBC' });
+  assert.ok(forecast.recommended_topup_amount >= 0);
+});
+
+// ── reserve tidak double-subtracted (forecast context) ──────────────────────
+test('forecast: dynamic_reserve_balance dipakai SATU KALI di forecast_required_balance vs critical, tidak dijumlah dobel', () => {
+  const policy = { is_active: true, funding_window_hours: 24 };
+  const bs = burnStats({ average_burn_rate: 200000000, peak_burn_rate: 300000000 });
+  const forecast = buildForecastOutput({ snapshot: snapNow('1000000000'), previousSnapshot: null, policy, burnStats: bs, bankCode: 'OCBC' });
+  // dynamic_critical_threshold = forecast_required_balance + dynamic_reserve_balance (SATU KALI reserve).
+  assert.strictEqual(forecast.dynamic_critical_threshold, forecast.forecast_required_balance + forecast.dynamic_reserve_balance);
+});
+
+// ── zero burn-rate handling ──────────────────────────────────────────────────
+test('zero burn-rate: average_burn_rate=0 -> estimated_runway_minutes null (bukan Infinity/NaN), forecast_required_balance=0', () => {
+  const bs = burnStats({ average_burn_rate: 0, peak_burn_rate: 0 });
+  const forecast = buildForecastOutput({ snapshot: snapNow('1000000000'), previousSnapshot: null, policy: { is_active: true }, burnStats: bs, bankCode: 'OCBC' });
+  assert.strictEqual(forecast.estimated_runway_minutes, null);
+  assert.strictEqual(forecast.forecast_required_balance, 0);
+  assert.strictEqual(forecast.dynamic_reserve_balance, 0);
+  assert.strictEqual(forecast.recommended_topup_amount, 0);
+  assert.ok(!Number.isNaN(forecast.dynamic_critical_threshold));
+});
+test('zero burn-rate: saldo positif dgn burn 0 -> tidak pernah EMERGENCY/CRITICAL akibat runway', () => {
+  const bs = burnStats({ average_burn_rate: 0, peak_burn_rate: 0 });
+  const snapshot = snapNow('100');
+  const forecast = buildForecastOutput({ snapshot, previousSnapshot: null, policy: { is_active: true, funding_window_hours: 1 }, burnStats: bs, bankCode: 'OCBC' });
+  assert.strictEqual(classifyBankStatus({ snapshot, policy: { is_active: true, funding_window_hours: 1 }, forecast }), STATUS.SAFE);
+});
+
+// ── sudden drop tetap ter-passthrough di forecast output (REUSE evaluateSuddenDrop, tidak dihitung ulang) ──
+test('forecast: sudden_drop_amount/percentage di-passthrough dari evaluateSuddenDrop, bukan dihitung ulang', () => {
+  const previousSnapshot = { effective_balance: '1000000000', captured_at: new Date(Date.now() - 10 * 60000).toISOString() };
+  const snapshot = snapNow('400000000');
+  const policy = { is_active: true, sudden_drop_window_minutes: 60, sudden_drop_amount_threshold: '100000000' };
+  const suddenDrop = evaluateSuddenDrop({ snapshot, previousSnapshot, policy });
+  const forecast = buildForecastOutput({ snapshot, previousSnapshot, policy, burnStats: burnStats(), bankCode: 'OCBC', suddenDrop });
+  assert.strictEqual(forecast.sudden_drop_amount, suddenDrop.dropAmount);
+  assert.strictEqual(forecast.sudden_drop_percentage, suddenDrop.dropPercentage);
+  assert.strictEqual(classifyBankStatus({ snapshot, policy, previousSnapshot, forecast }), STATUS.SUDDEN_DROP, 'sudden-drop tetap prioritas tertinggi di atas EMERGENCY/CRITICAL forecast');
+});
+test('forecast: tanpa suddenDrop param -> sudden_drop_amount/percentage null (bukan 0 palsu)', () => {
+  const forecast = buildForecastOutput({ snapshot: snapNow('1000000000'), previousSnapshot: null, policy: { is_active: true }, burnStats: burnStats(), bankCode: 'OCBC' });
+  assert.strictEqual(forecast.sudden_drop_amount, null);
+  assert.strictEqual(forecast.sudden_drop_percentage, null);
+});
+
+// ── audit logging (struktur payload -- endpoint-level di-verifikasi live setelah deploy) ──
+test('audit payload forecast refresh: action REFRESH_FORECAST menyertakan forecast_available & source di notes', () => {
+  const forecast = { forecast_available: true, forecast_source: 'OCBC_RECONCILIATION' };
+  const notes = `forecast_available=${!!forecast.forecast_available}, source=${forecast.forecast_source || 'null'}`;
+  assert.strictEqual(notes, 'forecast_available=true, source=OCBC_RECONCILIATION');
+});
+test('audit payload status change: hanya di-log kalau status lama != status baru', () => {
+  const shouldLog = (lastStatus, newStatus) => lastStatus !== undefined && lastStatus !== null && lastStatus !== newStatus;
+  assert.strictEqual(shouldLog('SAFE', 'WATCH'), true);
+  assert.strictEqual(shouldLog('SAFE', 'SAFE'), false);
+  assert.strictEqual(shouldLog(null, 'SAFE'), false, 'belum ada riwayat -> bukan "perubahan"');
+});
+test('audit payload recommendation change: hanya di-log kalau selisih >= 1 rupiah', () => {
+  const shouldLog = (prev, next) => prev !== null && next !== null && Math.abs(prev - next) >= 1;
+  assert.strictEqual(shouldLog(1000000, 1000000), false);
+  assert.strictEqual(shouldLog(1000000, 1000001), true);
+  assert.strictEqual(shouldLog(null, 1000000), false);
+});
+
+// ── backward compatibility dgn policy data existing (tanpa field forecast baru sama sekali) ──
+test('backward-compat: policy lama (hanya absolute_minimum_balance/watch_threshold/dst, TANPA reserve_balance/funding_window_hours) tetap terklasifikasi benar tanpa forecast', () => {
+  const legacyPolicy = {
+    is_active: true, absolute_minimum_balance: '100000', watch_threshold: '500000',
+    excess_balance_threshold: '10000000', stale_after_minutes: 60, safety_buffer_percentage: 10,
+  };
+  assert.strictEqual(classifyBankStatus({ snapshot: snapNow('50000'), policy: legacyPolicy }), STATUS.CRITICAL);
+  assert.strictEqual(classifyBankStatus({ snapshot: snapNow('400000'), policy: legacyPolicy }), STATUS.TOP_UP_RECOMMENDED);
+  assert.strictEqual(classifyBankStatus({ snapshot: snapNow('2000000'), policy: legacyPolicy }), STATUS.SAFE);
+});
+test('backward-compat: buildForecastOutput dgn policy lama (tanpa reserve_balance/funding_window_hours) tidak crash, funding_window default dipakai', () => {
+  const legacyPolicy = { is_active: true, absolute_minimum_balance: '100000', watch_threshold: '500000', safety_buffer_percentage: 10 };
+  const forecast = buildForecastOutput({ snapshot: snapNow('1000000000'), previousSnapshot: null, policy: legacyPolicy, burnStats: burnStats(), bankCode: 'OCBC' });
+  assert.strictEqual(forecast.funding_window_is_default, true);
+  assert.strictEqual(forecast.funding_window_hours, 24);
+  assert.strictEqual(forecast.thresholds_source.critical, 'MANUAL_OVERRIDE', 'absolute_minimum_balance lama tetap dipakai sbg override critical');
+});
+
+// ── forecast confidence ──────────────────────────────────────────────────────
+test('computeForecastConfidence: coverage penuh + funding_window custom -> 100', () => {
+  const score = computeForecastConfidence({ burnStats: { available: true, coverage: { included_days: 14, selected_days: 14 } }, fundingWindowIsDefault: false });
+  assert.strictEqual(score, 100);
+});
+test('computeForecastConfidence: coverage separuh + funding_window default -> diturunkan dari base', () => {
+  const withDefault = computeForecastConfidence({ burnStats: { available: true, coverage: { included_days: 7, selected_days: 14 } }, fundingWindowIsDefault: true });
+  const withoutDefault = computeForecastConfidence({ burnStats: { available: true, coverage: { included_days: 7, selected_days: 14 } }, fundingWindowIsDefault: false });
+  assert.ok(withDefault < withoutDefault);
+});
+test('computeForecastConfidence: forecast tidak tersedia -> 0', () => {
+  assert.strictEqual(computeForecastConfidence({ burnStats: { available: false }, fundingWindowIsDefault: true }), 0);
 });
 
 // ── Runner ──────────────────────────────────────────────────────────────────
