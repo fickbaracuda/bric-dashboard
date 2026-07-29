@@ -215,14 +215,30 @@ function classifyOperationalStatus({ STATUS, availableBalance, usableBalance, bu
   };
 }
 
-const CALCULATION_VERSION = 'intraday_fa_v1';
+const CALCULATION_VERSION = 'intraday_fa_v2_partial';
+
+// Pesan alasan standar dipakai FE utk field yang null KARENA policy belum
+// dikonfigurasi (BUKAN karena burn rate 0 / tidak ada outflow -- itu kondisi
+// valid berbeda, jangan dipakaikan pesan yang sama supaya FA tidak salah
+// paham "belum dikonfigurasi" padahal cuma "tidak ada transaksi").
+const REASON_BURN_WINDOW_MISSING = 'Belum ditentukan — burn window operasional belum dikonfigurasi.';
+const REASON_LEAD_TIME_MISSING = 'Belum dapat dihitung — top-up lead time belum dikonfigurasi.';
+const REASON_MIN_BALANCE_MISSING = 'Belum dapat dihitung — batas minimum absolut belum dikonfigurasi.';
 
 /**
  * Orkestrasi PURE penuh -- caller (operationalDataAccess.js) mengumpulkan
  * seluruh input dari DB lalu memanggil ini. Return payload lengkap sesuai
  * spec section 7 (field yang relevan utk MVP end-to-end ini).
+ *
+ * KALKULASI PARSIAL (revisi wajib) -- policy yang belum lengkap TIDAK BOLEH
+ * membuat field yang sebenarnya BISA dihitung ikut kosong. absolute_minimum_
+ * balance/usable_balance/4 window outflow SELALU dihitung independen kalau
+ * datanya ada. HANYA selected burn rate/runway/recommended_topup/topup_
+ * deadline yang tetap null sampai burn_window_minutes & topup_lead_time_
+ * minutes eksplisit dikonfigurasi -- TIDAK ADA fallback window/runway
+ * non-final di rilis ini (sengaja, per keputusan scope terakhir).
  */
-function buildOperationalCalculation({ STATUS, bank, policy, position, freshness, outflowRows, now = new Date() }) {
+function buildOperationalCalculation({ STATUS, bank, policy, position, freshness, outflowRows, todayUsage, now = new Date() }) {
   const missingPolicyFields = [];
   if (!policy) missingPolicyFields.push('policy belum dikonfigurasi');
   else {
@@ -239,33 +255,21 @@ function buildOperationalCalculation({ STATUS, bank, policy, position, freshness
     balance_source_timestamp: position ? position.synced_at : null,
     data_age_seconds: position && position.synced_at ? Math.round((now.getTime() - new Date(position.synced_at).getTime()) / 1000) : null,
     data_freshness_status: freshness,
+    refresh_mode: 'ON_READ',
   };
 
   if (!position || position.available_balance === null || position.available_balance === undefined) {
-    return { ...base, operational_status: STATUS.CONFIGURATION_REQUIRED, status_reason: 'Belum ada posisi saldo terverifikasi dari rekonsiliasi.', warnings: [], data_quality_flags: ['NO_POSITION'] };
-  }
-  if (freshness === 'STALE' || freshness === 'UNAVAILABLE') {
-    return {
-      ...base, available_balance: position.available_balance, ledger_balance: position.ledger_balance,
-      opening_balance: position.opening_balance, closing_balance: position.closing_balance,
-      total_credit: position.total_credit_amount, total_debit: position.total_debit_amount,
-      operational_status: STATUS.DATA_STALE,
-      status_reason: `Data saldo terakhir (${position.synced_at}) sudah melewati batas freshness. Rekomendasi top-up tidak dapat dianggap final sampai sinkronisasi terbaru tersedia.`,
-      warnings: [], data_quality_flags: ['STALE_SOURCE'],
-    };
-  }
-  if (missingPolicyFields.length) {
-    return {
-      ...base, available_balance: position.available_balance,
-      operational_status: STATUS.CONFIGURATION_REQUIRED,
-      status_reason: `Policy operasional belum lengkap: ${missingPolicyFields.join(', ')}.`,
-      warnings: [], data_quality_flags: ['INCOMPLETE_POLICY'],
-    };
+    return { ...base, operational_status: STATUS.CONFIGURATION_REQUIRED, status_reason: 'Belum ada posisi saldo terverifikasi dari rekonsiliasi.', missing_configuration: missingPolicyFields, warnings: [], data_quality_flags: ['NO_POSITION'] };
   }
 
   const availableBalance = Number(position.available_balance);
-  const absoluteMinimumBalance = Number(policy.absolute_minimum_balance);
-  const usableBalance = computeUsableBalance({ availableBalance, absoluteMinimumBalance });
+
+  // absolute_minimum_balance/usable_balance -- SELALU dihitung kalau policy-nya
+  // ada, TIDAK PERNAH ikut kosong hanya karena burn_window_minutes/topup_lead_
+  // time_minutes belum diisi (itu 2 field yang beda kebutuhannya).
+  const hasAbsoluteMinimum = !!policy && policy.absolute_minimum_balance !== null && policy.absolute_minimum_balance !== undefined;
+  const absoluteMinimumBalance = hasAbsoluteMinimum ? Number(policy.absolute_minimum_balance) : null;
+  const usableBalance = hasAbsoluteMinimum ? computeUsableBalance({ availableBalance, absoluteMinimumBalance }) : null;
 
   // movement variance -- opening+credit-debit vs available (analytics saja, TIDAK PERNAH overwrite available_balance).
   let movementVariance = null;
@@ -282,36 +286,84 @@ function buildOperationalCalculation({ STATUS, bank, policy, position, freshness
     }
   }
 
-  const windows = bucketOutflowsByWindow(outflowRows, now);
-  const primaryWindowMinutes = Number(policy.burn_window_minutes);
-  const { applied_rate_per_minute: burnRatePerMinute, trend, acceleration_detected, applied_rate_reason } =
-    selectOperationalBurnRate({ windows, primaryWindowMinutes });
+  // 4 window outflow (5/15/30/60 menit) -- SELALU dihitung dari outflowRows
+  // kalau ada (termasuk saat status DATA_STALE -- freshness itu soal umur
+  // POSISI saldo, bukan umur baris outflow matched-nya), TIDAK bergantung pada
+  // burn_window_minutes sama sekali (itu cuma dipakai utk MEMILIH window mana
+  // yang jadi "operational selected rate"). Null HANYA kalau caller memang
+  // tidak mengirim baris apa pun (mis. freshness UNAVAILABLE).
+  const windows = bucketOutflowsByWindow(outflowRows || [], now);
 
-  const leadTimeMinutes = Number(policy.topup_lead_time_minutes);
-  const criticalMarginMinutes = policy.critical_margin_minutes !== null && policy.critical_margin_minutes !== undefined ? Number(policy.critical_margin_minutes) : 0;
-  const watchBufferMinutes = policy.watch_buffer_minutes !== null && policy.watch_buffer_minutes !== undefined ? Number(policy.watch_buffer_minutes) : 0;
+  // Selected operational burn rate -- TIDAK ADA fallback window. Null total
+  // kalau burn_window_minutes belum dikonfigurasi, apa pun isi windows di atas.
+  const hasBurnWindow = !!policy && policy.burn_window_minutes !== null && policy.burn_window_minutes !== undefined;
+  let primaryWindowMinutes = null, burnRatePerMinute = null, trend = 'UNKNOWN', accelerationDetected = false, appliedRateReason = REASON_BURN_WINDOW_MISSING;
+  if (hasBurnWindow && windows) {
+    primaryWindowMinutes = Number(policy.burn_window_minutes);
+    const selected = selectOperationalBurnRate({ windows, primaryWindowMinutes });
+    burnRatePerMinute = selected.applied_rate_per_minute;
+    trend = selected.trend;
+    accelerationDetected = selected.acceleration_detected;
+    appliedRateReason = selected.applied_rate_reason;
+  }
+
+  const hasLeadTime = !!policy && policy.topup_lead_time_minutes !== null && policy.topup_lead_time_minutes !== undefined;
+  const leadTimeMinutes = hasLeadTime ? Number(policy.topup_lead_time_minutes) : null;
+  const criticalMarginMinutes = policy && policy.critical_margin_minutes !== null && policy.critical_margin_minutes !== undefined ? Number(policy.critical_margin_minutes) : 0;
+  const watchBufferMinutes = policy && policy.watch_buffer_minutes !== null && policy.watch_buffer_minutes !== undefined ? Number(policy.watch_buffer_minutes) : 0;
   const operationalSafetyMarginMinutes = 0; // belum ada field terpisah di policy rilis ini -- lihat known limitations.
 
-  const leadTimeNeed = computeLeadTimeNeed({ burnRatePerMinute, topupLeadTimeMinutes: leadTimeMinutes });
-  const safetyBufferAmount = computeSafetyBufferAmount({
-    safetyBufferType: policy.safety_buffer_type, safetyBufferFixedAmount: policy.safety_buffer_fixed_amount,
-    safetyBufferPercentage: policy.safety_buffer_percentage, leadTimeNeed,
-  });
-  const safeTargetBalance = computeSafeTargetBalance({ absoluteMinimumBalance, leadTimeNeed, safetyBufferAmount });
-  const { raw_recommended_topup, recommended_topup } = computeRecommendedTopup({
-    safeTargetBalance, availableBalance, topupRoundingAmount: policy.topup_rounding_amount,
-  });
+  // Runway -- HANYA dihitung kalau burn rate operasional (window terpilih)
+  // tersedia. TIDAK PERNAH pakai window lain sbg fallback/estimasi non-final.
+  const usableRunwayMinutes = (burnRatePerMinute !== null && usableBalance !== null)
+    ? computeUsableRunwayMinutes({ usableBalance, burnRatePerMinute }) : null;
+  const zeroBalanceRunwayMinutes = burnRatePerMinute !== null
+    ? computeZeroBalanceRunwayMinutes({ availableBalance, burnRatePerMinute }) : null;
 
-  const usableRunwayMinutes = computeUsableRunwayMinutes({ usableBalance, burnRatePerMinute });
-  const zeroBalanceRunwayMinutes = computeZeroBalanceRunwayMinutes({ availableBalance, burnRatePerMinute });
-  const { minimum_balance_breach_time, topup_deadline } = computeDeadlines({
-    now, usableRunwayMinutes, topupLeadTimeMinutes: leadTimeMinutes, operationalSafetyMarginMinutes,
-  });
+  let leadTimeNeed = null, safetyBufferAmount = null, safeTargetBalance = null, raw_recommended_topup = null, recommended_topup = null;
+  let minimum_balance_breach_time = null, topup_deadline = null;
+  const confirmedIncomingNotYetReflected = 0; // spec section 16/9 -- TETAP 0 sampai workflow top-up direkonsiliasi aman, tidak pernah dikurangkan sbg angka lain.
 
-  const { status, reason } = classifyOperationalStatus({
-    STATUS, availableBalance, usableBalance, burnRatePerMinute, usableRunwayMinutes, zeroBalanceRunwayMinutes,
-    topupLeadTimeMinutes: leadTimeMinutes, criticalMarginMinutes, watchBufferMinutes, recommendedTopup: recommended_topup,
-  });
+  if (burnRatePerMinute !== null && hasLeadTime) {
+    leadTimeNeed = computeLeadTimeNeed({ burnRatePerMinute, topupLeadTimeMinutes: leadTimeMinutes });
+    safetyBufferAmount = computeSafetyBufferAmount({
+      safetyBufferType: policy.safety_buffer_type, safetyBufferFixedAmount: policy.safety_buffer_fixed_amount,
+      safetyBufferPercentage: policy.safety_buffer_percentage, leadTimeNeed,
+    });
+    if (hasAbsoluteMinimum) {
+      safeTargetBalance = computeSafeTargetBalance({ absoluteMinimumBalance, leadTimeNeed, safetyBufferAmount });
+      const topup = computeRecommendedTopup({
+        safeTargetBalance, availableBalance: availableBalance + confirmedIncomingNotYetReflected, topupRoundingAmount: policy.topup_rounding_amount,
+      });
+      raw_recommended_topup = topup.raw_recommended_topup;
+      recommended_topup = topup.recommended_topup;
+    }
+    if (usableRunwayMinutes !== null) {
+      const deadlines = computeDeadlines({ now, usableRunwayMinutes, topupLeadTimeMinutes: leadTimeMinutes, operationalSafetyMarginMinutes });
+      minimum_balance_breach_time = deadlines.minimum_balance_breach_time;
+      topup_deadline = deadlines.topup_deadline;
+    }
+  }
+
+  // Prioritas SAMA PERSIS dgn versi sebelum kalkulasi parsial: DATA_STALE
+  // menang di atas CONFIGURATION_REQUIRED (policy belum lengkap) kalau
+  // dua-duanya kebetulan sekaligus terjadi -- tidak diubah, supaya perilaku
+  // status/alert utk kombinasi ini identik dgn rilis sebelumnya.
+  let status, reason;
+  if (freshness === 'STALE' || freshness === 'UNAVAILABLE') {
+    status = STATUS.DATA_STALE;
+    reason = `Data saldo terakhir (${position.synced_at}) sudah melewati batas freshness. Rekomendasi top-up tidak dapat dianggap final sampai sinkronisasi terbaru tersedia.`;
+  } else if (missingPolicyFields.length) {
+    status = STATUS.CONFIGURATION_REQUIRED;
+    reason = `Policy operasional belum lengkap: ${missingPolicyFields.join(', ')}. Nilai yang bisa dihitung dari data yang sudah ada tetap ditampilkan di bawah.`;
+  } else {
+    const classified = classifyOperationalStatus({
+      STATUS, availableBalance, usableBalance, burnRatePerMinute, usableRunwayMinutes, zeroBalanceRunwayMinutes,
+      topupLeadTimeMinutes: leadTimeMinutes, criticalMarginMinutes, watchBufferMinutes, recommendedTopup: recommended_topup,
+    });
+    status = classified.status;
+    reason = classified.reason;
+  }
 
   return {
     ...base,
@@ -319,31 +371,51 @@ function buildOperationalCalculation({ STATUS, bank, policy, position, freshness
     opening_balance: position.opening_balance, closing_balance: position.closing_balance,
     total_credit: position.total_credit_amount, total_debit: position.total_debit_amount,
     movement_variance: movementVariance,
-    absolute_minimum_balance: absoluteMinimumBalance, usable_balance: usableBalance,
+    absolute_minimum_balance: absoluteMinimumBalance,
+    absolute_minimum_balance_unavailable_reason: hasAbsoluteMinimum ? null : REASON_MIN_BALANCE_MISSING,
+    usable_balance: usableBalance,
+    usable_balance_unavailable_reason: usableBalance === null ? REASON_MIN_BALANCE_MISSING : null,
     selected_burn_window_minutes: primaryWindowMinutes,
-    burn_window_start: windows[primaryWindowMinutes].window_start, burn_window_end: windows[primaryWindowMinutes].window_end,
-    matched_transaction_count: windows[primaryWindowMinutes].matched_transaction_count,
-    matched_principal_outflow: windows[primaryWindowMinutes].matched_principal_outflow,
-    verified_fee_outflow: windows[primaryWindowMinutes].verified_fee_outflow,
+    burn_window_start: windows && primaryWindowMinutes ? windows[primaryWindowMinutes].window_start : null,
+    burn_window_end: windows && primaryWindowMinutes ? windows[primaryWindowMinutes].window_end : null,
+    matched_transaction_count: windows && primaryWindowMinutes ? windows[primaryWindowMinutes].matched_transaction_count : null,
+    matched_principal_outflow: windows && primaryWindowMinutes ? windows[primaryWindowMinutes].matched_principal_outflow : null,
+    verified_fee_outflow: windows && primaryWindowMinutes ? windows[primaryWindowMinutes].verified_fee_outflow : null,
     other_verified_operational_outflow: 0,
-    total_window_outflow: windows[primaryWindowMinutes].total_window_outflow,
+    total_window_outflow: windows && primaryWindowMinutes ? windows[primaryWindowMinutes].total_window_outflow : null,
     burn_rate_per_minute: burnRatePerMinute,
-    burn_rate_per_5_minutes: windows[5].burn_rate_per_minute,
-    burn_rate_per_15_minutes: windows[15].burn_rate_per_minute,
-    burn_rate_per_30_minutes: windows[30].burn_rate_per_minute,
-    burn_rate_per_60_minutes: windows[60].burn_rate_per_minute,
-    burn_trend: trend, acceleration_detected, applied_rate_reason,
-    topup_lead_time_minutes: leadTimeMinutes, lead_time_need: leadTimeNeed,
-    safety_buffer_type: policy.safety_buffer_type || null, safety_buffer_value: policy.safety_buffer_type === 'PERCENTAGE' ? policy.safety_buffer_percentage : policy.safety_buffer_fixed_amount,
+    burn_rate_unavailable_reason: burnRatePerMinute === null ? REASON_BURN_WINDOW_MISSING : null,
+    // 4 window mentah -- SELALU tampil kalau ada data, independen dari burn_window_minutes policy.
+    burn_rate_per_5_minutes: windows ? windows[5].burn_rate_per_minute : null,
+    burn_rate_per_15_minutes: windows ? windows[15].burn_rate_per_minute : null,
+    burn_rate_per_30_minutes: windows ? windows[30].burn_rate_per_minute : null,
+    burn_rate_per_60_minutes: windows ? windows[60].burn_rate_per_minute : null,
+    burn_trend: burnRatePerMinute !== null ? trend : 'UNKNOWN',
+    acceleration_detected: accelerationDetected, applied_rate_reason: appliedRateReason,
+    topup_lead_time_minutes: leadTimeMinutes,
+    topup_lead_time_unavailable_reason: hasLeadTime ? null : REASON_LEAD_TIME_MISSING,
+    lead_time_need: leadTimeNeed,
+    safety_buffer_type: policy && policy.safety_buffer_type ? policy.safety_buffer_type : null,
+    safety_buffer_value: policy && policy.safety_buffer_type === 'PERCENTAGE' ? policy.safety_buffer_percentage : (policy ? policy.safety_buffer_fixed_amount : null),
     safety_buffer_amount: safetyBufferAmount, safe_target_balance: safeTargetBalance,
-    raw_recommended_topup, recommended_topup, topup_rounding_amount: policy.topup_rounding_amount || null,
-    usable_runway_minutes: usableRunwayMinutes, zero_balance_runway_minutes: zeroBalanceRunwayMinutes,
+    raw_recommended_topup, recommended_topup,
+    recommended_topup_unavailable_reason: recommended_topup === null
+      ? (!hasAbsoluteMinimum ? REASON_MIN_BALANCE_MISSING : (burnRatePerMinute === null ? REASON_BURN_WINDOW_MISSING : REASON_LEAD_TIME_MISSING))
+      : null,
+    confirmed_incoming_not_yet_reflected: confirmedIncomingNotYetReflected,
+    topup_rounding_amount: policy && policy.topup_rounding_amount ? policy.topup_rounding_amount : null,
+    usable_runway_minutes: usableRunwayMinutes,
+    runway_unavailable_reason: usableRunwayMinutes === null ? (burnRatePerMinute === null ? REASON_BURN_WINDOW_MISSING : null) : null,
+    zero_balance_runway_minutes: zeroBalanceRunwayMinutes,
     minimum_balance_breach_time, zero_balance_time: zeroBalanceRunwayMinutes !== null ? new Date(now.getTime() + zeroBalanceRunwayMinutes * 60000).toISOString() : null,
     topup_deadline, topup_deadline_type: 'INITIATION',
-    operational_status: status, status_reason: reason,
+    operational_status: status, status_reason: reason, missing_configuration: missingPolicyFields,
+    today_usage: todayUsage || null,
     assumptions: [
       `Burn rate dihitung dari transaksi FP yang SUDAH diverifikasi matched terhadap OCBC (recon_status MATCHED/MATCHED_NO_FEE/FEE_MISMATCH) — reuse engine rekonsiliasi existing, tidak dihitung ulang.`,
       `operational_safety_margin_minutes belum dikonfigurasi terpisah di rilis ini (default 0).`,
+      `Tidak ada fallback/estimasi non-final utk burn rate atau runway — kedua field ini tetap kosong sampai burn_window_minutes eksplisit dikonfigurasi (keputusan scope, bukan bug).`,
+      `confirmed_incoming_not_yet_reflected selalu 0 pada rilis ini — permintaan top-up yang sudah diajukan/disetujui/ditransfer TIDAK dihitung sbg saldo tersedia sampai direkonsiliasi.`,
     ],
     warnings: movementVariance ? ['MOVEMENT_VARIANCE_DETECTED'] : [],
     data_quality_flags: [],

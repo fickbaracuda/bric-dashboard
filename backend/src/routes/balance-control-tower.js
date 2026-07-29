@@ -28,11 +28,14 @@ const {
   alertTypeForStatus,
   canTransitionTopup,
   isSelfApproval,
+  pickCurrentAndPrevious,
+  computeBalanceMovement,
+  enrichSnapshotHistory,
   STATUS,
 } = require('../utils/balanceControlTower');
 const { computeBurnRateStats, buildForecastOutput } = require('../reconciliation/balanceForecast');
 const { getLatestVerifiedBankPosition, getConfirmedFundingMutations, isSupportedBank } = require('../reconciliation/bankPosition');
-const { computeOperationalCalculationForBank } = require('../balanceControlTower/operationalDataAccess');
+const { computeOperationalCalculationForBank, fetchRecentMatchedOutflows } = require('../balanceControlTower/operationalDataAccess');
 
 function isoDateJakarta(date) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(date);
@@ -228,13 +231,14 @@ async function fetchBanksWithStatus(client, { onlyActive = true } = {}) {
   const ids = banks.map(b => b.id);
   const [policiesRes, snapshotsRankedRes, topupTodayRes] = await Promise.all([
     client.query(`SELECT * FROM bct_balance_policies WHERE bank_account_id = ANY($1)`, [ids]),
-    // Ambil 2 snapshot terbaru per bank (bukan cuma 1) -- snapshot ke-2
-    // dipakai sbg previousSnapshot utk deteksi sudden-drop.
+    // Ambil sampai 20 snapshot terbaru per bank (bukan cuma 2) -- perlu
+    // headroom supaya pickCurrentAndPrevious bisa cari baris RECONCILIATION
+    // terbaru walau ada beberapa baris MANUAL yang captured_at-nya lebih baru.
     client.query(
       `SELECT * FROM (
          SELECT *, ROW_NUMBER() OVER (PARTITION BY bank_account_id ORDER BY captured_at DESC) AS rn
          FROM bct_balance_snapshots WHERE bank_account_id = ANY($1)
-       ) t WHERE rn <= 2 ORDER BY bank_account_id, rn`,
+       ) t WHERE rn <= 20 ORDER BY bank_account_id, rn`,
       [ids]
     ),
     client.query(
@@ -249,12 +253,19 @@ async function fetchBanksWithStatus(client, { onlyActive = true } = {}) {
   ]);
 
   const policyByBank = new Map(policiesRes.rows.map(p => [String(p.bank_account_id), p]));
-  const snapshotByBank = new Map();
-  const previousSnapshotByBank = new Map();
+  const rowsByBank = new Map();
   for (const row of snapshotsRankedRes.rows) {
     const key = String(row.bank_account_id);
-    if (row.rn === 1 || row.rn === '1') snapshotByBank.set(key, row);
-    else previousSnapshotByBank.set(key, row);
+    if (!rowsByBank.has(key)) rowsByBank.set(key, []);
+    rowsByBank.get(key).push(row);
+  }
+  const snapshotByBank = new Map();
+  const previousSnapshotByBank = new Map();
+  for (const bank of banks) {
+    const key = String(bank.id);
+    const { snapshot, previousSnapshot } = pickCurrentAndPrevious(rowsByBank.get(key) || [], isSupportedBank(bank.bank_code));
+    if (snapshot) snapshotByBank.set(key, snapshot);
+    if (previousSnapshot) previousSnapshotByBank.set(key, previousSnapshot);
   }
   const topupTodayByBank = new Map(topupTodayRes.rows.map(t => [String(t.bank_account_id), Number(t.total)]));
 
@@ -497,9 +508,11 @@ router.get('/banks/:id', async (req, res) => {
     try { await refreshBankPositionIfNeeded(bank); }
     catch (e) { console.error(`refresh position (${bank.bank_code}) error:`, e.message); }
 
-    const [policyRes, latestSnapshotsRes, historyRes, topupHistoryRes, lastTopupRes, todayUsageRes, alertsRes] = await Promise.all([
+    const [policyRes, recentSnapshotsRes, historyRes, topupHistoryRes, lastTopupRes, todayUsageRes, alertsRes] = await Promise.all([
       pool.query(`SELECT * FROM bct_balance_policies WHERE bank_account_id = $1`, [id]),
-      pool.query(`SELECT * FROM bct_balance_snapshots WHERE bank_account_id = $1 ORDER BY captured_at DESC LIMIT 2`, [id]),
+      // 20 baris terakhir (bukan cuma 2) -- headroom utk pickCurrentAndPrevious
+      // cari baris RECONCILIATION terbaru walau ada baris MANUAL di antaranya.
+      pool.query(`SELECT * FROM bct_balance_snapshots WHERE bank_account_id = $1 ORDER BY captured_at DESC LIMIT 20`, [id]),
       pool.query(`SELECT * FROM bct_balance_snapshots WHERE bank_account_id = $1 ORDER BY captured_at DESC LIMIT 100`, [id]),
       pool.query(`SELECT * FROM bct_topup_requests WHERE bank_account_id = $1 ORDER BY created_at DESC LIMIT 50`, [id]),
       pool.query(
@@ -516,8 +529,7 @@ router.get('/banks/:id', async (req, res) => {
     ]);
 
     const policy = policyRes.rows[0] || null;
-    const snapshot = latestSnapshotsRes.rows[0] || null;
-    const previousSnapshot = latestSnapshotsRes.rows[1] || null;
+    const { snapshot, previousSnapshot } = pickCurrentAndPrevious(recentSnapshotsRes.rows, isSupportedBank(bank.bank_code));
     const now = new Date();
     // Forecast lama -- HANYA "Historical Analytics" (lihat frontend), tidak
     // lagi dipakai menentukan status/rekomendasi kalau operational tersedia.
@@ -553,6 +565,39 @@ router.get('/banks/:id', async (req, res) => {
       } catch (e) { console.error(`funding mutations (${bank.bank_code}) error:`, e.message); }
     }
 
+    // Δ Saldo (item 6) -- delta antara snapshot current & previous valid
+    // yang SUDAH dipilih pickCurrentAndPrevious di atas (utk bank rekonsiliasi
+    // sudah otomatis prefer RECONCILIATION, jadi delta ini konsisten dgn
+    // status/operational di atas, tidak tercampur dgn baris manual lama).
+    const balanceMovement = computeBalanceMovement({ current: snapshot, previous: previousSnapshot });
+
+    // Riwayat snapshot enrichment (item 7) -- rentang lebih lebar dari
+    // funding_mutations 3-hari di atas (khusus utk field itu, tidak diubah)
+    // supaya s/d 100 baris riwayat bisa di-enrich, dibatasi maksimal 30 hari
+    // ke belakang (query cost). Interval yang lebih tua dari cakupan ini
+    // ditandai eksplisit "data tidak tersedia" oleh enrichSnapshotHistory,
+    // TIDAK ditampilkan seolah funding-nya 0.
+    let enrichedHistory = historyRes.rows;
+    if (isSupportedBank(bank.bank_code) && historyRes.rows.length) {
+      try {
+        const oldestCapturedAt = new Date(historyRes.rows[historyRes.rows.length - 1].captured_at);
+        const maxLookbackFrom = new Date(now.getTime() - 30 * 86400000);
+        const coverageFrom = oldestCapturedAt > maxLookbackFrom ? oldestCapturedAt : maxLookbackFrom;
+        const [outflowForHistory, fundingForHistoryRes] = await Promise.all([
+          fetchRecentMatchedOutflows({ pool, bankCode: bank.bank_code, now, since: coverageFrom }),
+          getConfirmedFundingMutations({
+            pool, bankCode: bank.bank_code, bankAccountId: bank.id,
+            from: isoDateJakarta(coverageFrom), to: isoDateJakarta(now),
+          }),
+        ]);
+        const fundingRowsForHistory = fundingForHistoryRes.available ? fundingForHistoryRes.mutations : [];
+        enrichedHistory = enrichSnapshotHistory({
+          snapshots: historyRes.rows, outflowRows: outflowForHistory,
+          fundingMutations: fundingRowsForHistory, fundingCoverageFrom: coverageFrom,
+        });
+      } catch (e) { console.error(`enrichSnapshotHistory(${bank.bank_code}) error:`, e.message); }
+    }
+
     res.set('Cache-Control', 'no-store');
     res.json({
       success: true,
@@ -562,6 +607,7 @@ router.get('/banks/:id', async (req, res) => {
       status_reason: statusReason,
       operational,
       forecast,
+      balance_movement: balanceMovement,
       funding_mutations: fundingMutations,
       posisi_saldo_terbaru: snapshot ? {
         available_balance: Number(snapshot.available_balance),
@@ -577,7 +623,7 @@ router.get('/banks/:id', async (req, res) => {
       penggunaan_saldo_hari_ini: usageToday,
       total_topup_hari_ini: Number(todayUsageRes.rows[0]?.total || 0),
       top_up_terakhir: lastTopupRes.rows[0] || null,
-      riwayat_snapshot: historyRes.rows,
+      riwayat_snapshot: enrichedHistory,
       riwayat_topup: topupHistoryRes.rows,
       alert_aktif: alertsRes.rows,
     });
@@ -596,8 +642,9 @@ router.post('/banks/:id/snapshots', requireOpsOrFinance, async (req, res) => {
     const bankId = parseInt(req.params.id, 10);
     if (!Number.isFinite(bankId)) return res.status(400).json({ error: 'id tidak valid.' });
 
-    const bankRes = await client.query(`SELECT id FROM bct_bank_accounts WHERE id = $1`, [bankId]);
+    const bankRes = await client.query(`SELECT id, bank_code FROM bct_bank_accounts WHERE id = $1`, [bankId]);
     if (!bankRes.rows.length) return res.status(404).json({ error: 'Bank tidak ditemukan.' });
+    const bank = bankRes.rows[0];
 
     const { available_balance, held_balance = 0, pending_amount = 0 } = req.body || {};
     // reserve_balance SENGAJA tidak di-default 0 di destructuring -- undefined
@@ -606,6 +653,7 @@ router.post('/banks/:id/snapshots', requireOpsOrFinance, async (req, res) => {
     const providedReserveBalance = req.body?.reserve_balance;
     const source = req.body?.source ? String(req.body.source).toUpperCase() : 'MANUAL';
     const syncStatus = req.body?.sync_status ? String(req.body.sync_status).toUpperCase() : 'OK';
+    const manualReason = req.body?.reason ? String(req.body.reason).trim() : null;
 
     if (available_balance === undefined || available_balance === null || available_balance === '') {
       return res.status(400).json({ error: 'available_balance wajib diisi.' });
@@ -615,6 +663,13 @@ router.post('/banks/:id/snapshots', requireOpsOrFinance, async (req, res) => {
     }
     if (!VALID_SYNC_STATUS.includes(syncStatus)) {
       return res.status(400).json({ error: `sync_status wajib salah satu: ${VALID_SYNC_STATUS.join(', ')}` });
+    }
+    // Bank yang sudah punya mesin rekonsiliasi (OCBC) -- Input Saldo Manual
+    // hanya boleh dipakai sbg fallback darurat, WAJIB disertai alasan yang
+    // masuk audit log (spec item 5). Bank tanpa adapter rekonsiliasi TETAP
+    // pakai alur manual biasa TANPA syarat ini (tidak berubah).
+    if (source === 'MANUAL' && isSupportedBank(bank.bank_code) && !manualReason) {
+      return res.status(400).json({ error: 'reason wajib diisi utk Input Saldo Manual (Darurat) pada bank yang sudah didukung rekonsiliasi otomatis.' });
     }
     for (const [label, v] of [['available_balance', available_balance], ['held_balance', held_balance], ['pending_amount', pending_amount], ['reserve_balance', providedReserveBalance]]) {
       if (v !== null && v !== undefined && v !== '' && Number.isNaN(Number(v))) {
@@ -645,7 +700,7 @@ router.post('/banks/:id/snapshots', requireOpsOrFinance, async (req, res) => {
     await logAudit(client, {
       entityType: 'BALANCE_SNAPSHOT', entityId: r.rows[0].id, action: 'CREATE_BALANCE_SNAPSHOT',
       actorUserId: req.user?.id, actorUsername: req.user?.username, before: null, after: r.rows[0],
-      notes: `reserve_source=${reserveSource}`,
+      notes: `reserve_source=${reserveSource}` + (manualReason ? ` | alasan input manual darurat: ${manualReason}` : ''),
     });
     await client.query('COMMIT');
 
@@ -708,8 +763,36 @@ router.put('/banks/:id/policy', requireAdmin, async (req, res) => {
       critical_threshold = null, emergency_threshold = null, reserve_balance = null,
       sudden_drop_window_minutes = null, sudden_drop_amount_threshold = null, sudden_drop_percentage_threshold = null,
       is_active = true,
+      // Field mesin operasional (intraday FA Action Layer) -- SEBELUM revisi
+      // ini TIDAK ADA di route/modal sama sekali, itu sebabnya tidak pernah
+      // bisa dikonfigurasi walau kolomnya sudah ada di DB sejak migration
+      // add_balance_control_tower_operational_engine.sql.
+      burn_window_minutes = null, topup_lead_time_minutes = null,
+      critical_margin_minutes = null, watch_buffer_minutes = null,
+      safety_buffer_type = null, safety_buffer_fixed_amount = null,
     } = req.body || {};
     const reason = req.body?.reason ? String(req.body.reason).trim() : null;
+
+    const VALID_BURN_WINDOWS = [5, 15, 30, 60];
+    if (burn_window_minutes !== null && burn_window_minutes !== undefined && !VALID_BURN_WINDOWS.includes(Number(burn_window_minutes))) {
+      return res.status(400).json({ error: `burn_window_minutes harus salah satu: ${VALID_BURN_WINDOWS.join(', ')}.` });
+    }
+    if (topup_lead_time_minutes !== null && topup_lead_time_minutes !== undefined && (!Number.isFinite(Number(topup_lead_time_minutes)) || Number(topup_lead_time_minutes) <= 0)) {
+      return res.status(400).json({ error: 'topup_lead_time_minutes harus angka lebih besar dari 0.' });
+    }
+    for (const [label, v] of [['critical_margin_minutes', critical_margin_minutes], ['watch_buffer_minutes', watch_buffer_minutes]]) {
+      if (v !== null && v !== undefined && (!Number.isFinite(Number(v)) || Number(v) < 0)) {
+        return res.status(400).json({ error: `${label} harus angka >= 0.` });
+      }
+    }
+    const VALID_SAFETY_BUFFER_TYPES = ['FIXED', 'PERCENTAGE'];
+    if (safety_buffer_type !== null && safety_buffer_type !== undefined && !VALID_SAFETY_BUFFER_TYPES.includes(String(safety_buffer_type).toUpperCase())) {
+      return res.status(400).json({ error: `safety_buffer_type harus salah satu: ${VALID_SAFETY_BUFFER_TYPES.join(', ')}.` });
+    }
+    if (safety_buffer_fixed_amount !== null && safety_buffer_fixed_amount !== undefined && (!Number.isFinite(Number(safety_buffer_fixed_amount)) || Number(safety_buffer_fixed_amount) < 0)) {
+      return res.status(400).json({ error: 'safety_buffer_fixed_amount harus angka >= 0.' });
+    }
+    const safetyBufferTypeNormalized = safety_buffer_type ? String(safety_buffer_type).toUpperCase() : null;
 
     // Nominal & percentage & minute -- format check dulu (semua boleh null).
     for (const [label, v] of [
@@ -770,8 +853,10 @@ router.put('/banks/:id/policy', requireAdmin, async (req, res) => {
       `INSERT INTO bct_balance_policies
         (bank_account_id, absolute_minimum_balance, watch_threshold, excess_balance_threshold, stale_after_minutes,
          safety_buffer_percentage, topup_rounding_amount, critical_threshold, emergency_threshold, reserve_balance,
-         sudden_drop_window_minutes, sudden_drop_amount_threshold, sudden_drop_percentage_threshold, is_active, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+         sudden_drop_window_minutes, sudden_drop_amount_threshold, sudden_drop_percentage_threshold, is_active, created_by,
+         burn_window_minutes, topup_lead_time_minutes, critical_margin_minutes, watch_buffer_minutes,
+         safety_buffer_type, safety_buffer_fixed_amount)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
        ON CONFLICT (bank_account_id) DO UPDATE SET
          absolute_minimum_balance = EXCLUDED.absolute_minimum_balance,
          watch_threshold = EXCLUDED.watch_threshold,
@@ -786,12 +871,24 @@ router.put('/banks/:id/policy', requireAdmin, async (req, res) => {
          sudden_drop_amount_threshold = EXCLUDED.sudden_drop_amount_threshold,
          sudden_drop_percentage_threshold = EXCLUDED.sudden_drop_percentage_threshold,
          is_active = EXCLUDED.is_active,
+         burn_window_minutes = EXCLUDED.burn_window_minutes,
+         topup_lead_time_minutes = EXCLUDED.topup_lead_time_minutes,
+         critical_margin_minutes = EXCLUDED.critical_margin_minutes,
+         watch_buffer_minutes = EXCLUDED.watch_buffer_minutes,
+         safety_buffer_type = EXCLUDED.safety_buffer_type,
+         safety_buffer_fixed_amount = EXCLUDED.safety_buffer_fixed_amount,
          updated_at = NOW()
        RETURNING *`,
       [bankId, absolute_minimum_balance, watch_threshold, excess_balance_threshold, stale_after_minutes,
         safety_buffer_percentage, topup_rounding_amount, critical_threshold, emergency_threshold, reserve_balance,
         sudden_drop_window_minutes, sudden_drop_amount_threshold, sudden_drop_percentage_threshold,
-        !!is_active, req.user?.username || null]
+        !!is_active, req.user?.username || null,
+        burn_window_minutes !== null && burn_window_minutes !== undefined ? Number(burn_window_minutes) : null,
+        topup_lead_time_minutes !== null && topup_lead_time_minutes !== undefined ? Number(topup_lead_time_minutes) : null,
+        critical_margin_minutes !== null && critical_margin_minutes !== undefined ? Number(critical_margin_minutes) : null,
+        watch_buffer_minutes !== null && watch_buffer_minutes !== undefined ? Number(watch_buffer_minutes) : null,
+        safetyBufferTypeNormalized,
+        safety_buffer_fixed_amount !== null && safety_buffer_fixed_amount !== undefined ? Number(safety_buffer_fixed_amount) : null]
     );
 
     await logAudit(client, {

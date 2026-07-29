@@ -24,6 +24,10 @@ const {
   alertTypeForStatus,
   canTransitionTopup,
   isSelfApproval,
+  computeBalanceMovement,
+  enrichSnapshotHistory,
+  MOVEMENT_CLASSIFICATION,
+  pickCurrentAndPrevious,
   STATUS,
 } = require('../src/utils/balanceControlTower');
 const {
@@ -650,6 +654,137 @@ test('computeForecastConfidence: coverage separuh + funding_window default -> di
 });
 test('computeForecastConfidence: forecast tidak tersedia -> 0', () => {
   assert.strictEqual(computeForecastConfidence({ burnStats: { available: false }, fundingWindowIsDefault: true }), 0);
+});
+
+// ── computeBalanceMovement (item 6: kartu "Δ Saldo") ─────────────────────────
+test('computeBalanceMovement: tidak ada previous -> semua delta null (BUKAN 0 -- 0 = klaim tidak berubah, padahal tidak ada pembanding)', () => {
+  const out = computeBalanceMovement({ current: { available_balance: 680660209, captured_at: '2026-07-29T11:06:00Z' }, previous: null });
+  assert.strictEqual(out.delta_amount, null);
+  assert.strictEqual(out.delta_percentage, null);
+  assert.strictEqual(out.direction, null);
+  assert.ok(out.reason);
+});
+test('computeBalanceMovement: penurunan saldo -> delta negatif, direction DOWN, persentase dari previous', () => {
+  const out = computeBalanceMovement({
+    current: { available_balance: 680660209, captured_at: '2026-07-29T18:06:00Z' },
+    previous: { available_balance: 680660209 + 803762731, captured_at: '2026-07-29T17:00:00Z' },
+  });
+  assert.strictEqual(out.delta_amount, -803762731);
+  assert.strictEqual(out.direction, 'DOWN');
+  assert.ok(out.delta_percentage < 0);
+  assert.strictEqual(out.previous_captured_at, '2026-07-29T17:00:00Z');
+});
+test('computeBalanceMovement: kenaikan saldo -> direction UP', () => {
+  const out = computeBalanceMovement({
+    current: { available_balance: 1000000, captured_at: '2026-07-29T18:06:00Z' },
+    previous: { available_balance: 500000, captured_at: '2026-07-29T17:00:00Z' },
+  });
+  assert.strictEqual(out.direction, 'UP');
+  assert.strictEqual(out.delta_amount, 500000);
+});
+test('computeBalanceMovement: previous available_balance 0 -> delta_percentage null (tidak pernah dibagi nol)', () => {
+  const out = computeBalanceMovement({
+    current: { available_balance: 500000, captured_at: '2026-07-29T18:06:00Z' },
+    previous: { available_balance: 0, captured_at: '2026-07-29T17:00:00Z' },
+  });
+  assert.strictEqual(out.delta_percentage, null);
+});
+
+// ── enrichSnapshotHistory (item 7) ───────────────────────────────────────────
+test('enrichSnapshotHistory: snapshot tertua (tidak ada previous) -> NO_PREVIOUS, tidak crash', () => {
+  const snapshots = [{ id: 1, captured_at: '2026-07-29T10:00:00Z', available_balance: 500000, sync_status: 'OK' }];
+  const out = enrichSnapshotHistory({ snapshots, outflowRows: [], fundingMutations: [], fundingCoverageFrom: null });
+  assert.strictEqual(out.length, 1);
+  assert.strictEqual(out[0].movement_classification, MOVEMENT_CLASSIFICATION.NO_PREVIOUS);
+});
+test('enrichSnapshotHistory: skip snapshot ERROR saat cari previous valid', () => {
+  const snapshots = [
+    { id: 3, captured_at: '2026-07-29T12:00:00Z', available_balance: 900000, sync_status: 'OK' },
+    { id: 2, captured_at: '2026-07-29T11:00:00Z', available_balance: null, sync_status: 'ERROR' },
+    { id: 1, captured_at: '2026-07-29T10:00:00Z', available_balance: 500000, sync_status: 'OK' },
+  ];
+  const out = enrichSnapshotHistory({ snapshots, outflowRows: [], fundingMutations: [], fundingCoverageFrom: new Date('2026-07-29T00:00:00Z') });
+  assert.strictEqual(out[0].movement.previous_available_balance, 500000, 'harus lompat ke snapshot valid (id=1), skip yang ERROR (id=2)');
+  assert.strictEqual(out[0].movement.delta_amount, 400000);
+});
+test('enrichSnapshotHistory: interval di luar fundingCoverageFrom -> RECONCILIATION_DATA_UNAVAILABLE, BUKAN funding=0 palsu', () => {
+  const snapshots = [
+    { id: 2, captured_at: '2026-07-29T12:00:00Z', available_balance: 900000, sync_status: 'OK' },
+    { id: 1, captured_at: '2026-07-01T10:00:00Z', available_balance: 500000, sync_status: 'OK' },
+  ];
+  const out = enrichSnapshotHistory({ snapshots, outflowRows: [], fundingMutations: [], fundingCoverageFrom: new Date('2026-07-20T00:00:00Z') });
+  assert.strictEqual(out[0].funding_credit_interval, null);
+  assert.strictEqual(out[0].movement_classification, MOVEMENT_CLASSIFICATION.RECONCILIATION_DATA_UNAVAILABLE);
+});
+test('enrichSnapshotHistory: delta konsisten dgn matched outflow + funding credit -> CONSISTENT_WITH_VERIFIED_TRANSACTIONS', () => {
+  const from = new Date('2026-07-29T10:00:00Z');
+  const to = new Date('2026-07-29T12:00:00Z');
+  const snapshots = [
+    { id: 2, captured_at: to.toISOString(), available_balance: 1000000 + 5000000 - 4000000, sync_status: 'OK' }, // previous + funding - outflow
+    { id: 1, captured_at: from.toISOString(), available_balance: 1000000, sync_status: 'OK' },
+  ];
+  const outflowRows = [{ principal: 3900000, fee: 100000, matchedAt: new Date('2026-07-29T11:00:00Z') }];
+  const fundingMutations = [{ amount: 5000000, transaction_datetime: '2026-07-29T10:30:00Z', is_reversal: false, classification: 'FUNDING' }];
+  const out = enrichSnapshotHistory({ snapshots, outflowRows, fundingMutations, fundingCoverageFrom: from });
+  assert.strictEqual(out[0].matched_principal_outflow_interval, 3900000);
+  assert.strictEqual(out[0].verified_fee_outflow_interval, 100000);
+  assert.strictEqual(out[0].funding_credit_interval, 5000000);
+  assert.strictEqual(out[0].movement_classification, MOVEMENT_CLASSIFICATION.CONSISTENT_WITH_VERIFIED_TRANSACTIONS);
+});
+test('enrichSnapshotHistory: delta jauh dari matched+funding -> diklasifikasi LIKELY_* (bukan disembunyikan sbg konsisten)', () => {
+  const from = new Date('2026-07-29T10:00:00Z');
+  const to = new Date('2026-07-29T12:00:00Z');
+  const snapshots = [
+    { id: 2, captured_at: to.toISOString(), available_balance: 1000000 - 9000000, sync_status: 'OK' }, // turun jauh, tidak match outflow kecil di bawah
+    { id: 1, captured_at: from.toISOString(), available_balance: 1000000, sync_status: 'OK' },
+  ];
+  const outflowRows = [{ principal: 100000, fee: 0, matchedAt: new Date('2026-07-29T11:00:00Z') }];
+  const out = enrichSnapshotHistory({ snapshots, outflowRows, fundingMutations: [], fundingCoverageFrom: from });
+  assert.strictEqual(out[0].movement_classification, MOVEMENT_CLASSIFICATION.LIKELY_OPERATIONAL_OUTFLOW_UNVERIFIED);
+});
+test('enrichSnapshotHistory: preserve seluruh field snapshot asli (tidak ada data historis yang hilang/ditimpa)', () => {
+  const snapshots = [{ id: 1, captured_at: '2026-07-29T10:00:00Z', available_balance: 500000, sync_status: 'OK', source: 'RECONCILIATION', held_balance: 0 }];
+  const out = enrichSnapshotHistory({ snapshots, outflowRows: [], fundingMutations: [], fundingCoverageFrom: null });
+  assert.strictEqual(out[0].source, 'RECONCILIATION');
+  assert.strictEqual(out[0].held_balance, 0);
+  assert.strictEqual(out[0].id, 1);
+});
+
+// ── pickCurrentAndPrevious (item 5: manual balance TIDAK BOLEH menimpa rekonsiliasi) ──
+test('pickCurrentAndPrevious: bank rekonsiliasi -- baris MANUAL lebih baru TIDAK menang atas RECONCILIATION lebih lama', () => {
+  const rows = [
+    { id: 3, captured_at: '2026-07-29T12:00:00Z', source: 'MANUAL', available_balance: 999999999 },
+    { id: 2, captured_at: '2026-07-29T11:00:00Z', source: 'RECONCILIATION', available_balance: 680660209 },
+    { id: 1, captured_at: '2026-07-29T10:00:00Z', source: 'RECONCILIATION', available_balance: 700000000 },
+  ];
+  const { snapshot, previousSnapshot } = pickCurrentAndPrevious(rows, true);
+  assert.strictEqual(snapshot.id, 2, 'RECONCILIATION terbaru harus menang walau ada MANUAL yang capture-nya lebih baru');
+  assert.strictEqual(previousSnapshot.id, 1);
+});
+test('pickCurrentAndPrevious: bank rekonsiliasi, belum pernah ada RECONCILIATION -- MANUAL boleh jadi current (fallback darurat)', () => {
+  const rows = [
+    { id: 2, captured_at: '2026-07-29T12:00:00Z', source: 'MANUAL', available_balance: 111 },
+    { id: 1, captured_at: '2026-07-29T10:00:00Z', source: 'MANUAL', available_balance: 222 },
+  ];
+  const { snapshot } = pickCurrentAndPrevious(rows, true);
+  assert.strictEqual(snapshot.id, 2, 'tanpa RECONCILIATION sama sekali, fallback ke captured_at DESC biasa');
+});
+test('pickCurrentAndPrevious: bank TANPA adapter rekonsiliasi -- perilaku lama (captured_at DESC) tidak berubah', () => {
+  const rows = [
+    { id: 2, captured_at: '2026-07-29T12:00:00Z', source: 'MANUAL', available_balance: 111 },
+    { id: 1, captured_at: '2026-07-29T10:00:00Z', source: 'MANUAL', available_balance: 222 },
+  ];
+  const { snapshot, previousSnapshot } = pickCurrentAndPrevious(rows, false);
+  assert.strictEqual(snapshot.id, 2);
+  assert.strictEqual(previousSnapshot.id, 1);
+});
+
+// ── STATUS TAXONOMY (item 8) ─────────────────────────────────────────────────
+test('status taxonomy: 6 status canonical (SAFE/WATCH/CRITICAL/EMERGENCY/DATA_STALE/CONFIGURATION_REQUIRED) semuanya ada & unik, tidak ada alias ganda', () => {
+  const canonical = ['SAFE', 'WATCH', 'CRITICAL', 'EMERGENCY', 'DATA_STALE', 'CONFIGURATION_REQUIRED'];
+  for (const s of canonical) assert.strictEqual(STATUS[s], s, `STATUS.${s} harus ada & bernilai string dirinya sendiri`);
+  // Tidak ada 'NORMAL' terpisah yang berarti sama dgn SAFE -- SATU nama kanonik per konsep.
+  assert.strictEqual(STATUS.NORMAL, undefined, 'tidak boleh ada alias NORMAL berdampingan dgn SAFE utk konsep yang sama');
 });
 
 // ── Runner ──────────────────────────────────────────────────────────────────

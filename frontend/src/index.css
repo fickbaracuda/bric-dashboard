@@ -5588,6 +5588,8 @@ body {
 .fbr-modal-title { font-size: 15px; font-weight: 800; color: var(--text-1); letter-spacing: .02em; margin-bottom: 18px; }
 .fbr-field { margin-bottom: 16px; display: flex; flex-direction: column; gap: 6px; }
 .fbr-field-label { font-size: 12px; font-weight: 700; color: var(--text-3); text-transform: uppercase; letter-spacing: .04em; }
+.fbr-field-hint { font-size: 11.5px; color: var(--text-4); line-height: 1.4; margin-top: -2px; }
+.fbr-hint-suggested { font-size: 11.5px; color: #B45309; background: #FEF3C7; border-radius: 6px; padding: 4px 8px; margin-top: 2px; }
 .fbr-bank-value { font-size: 16px; font-weight: 800; color: var(--text-1); }
 .fbr-input {
   padding: 9px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-page);

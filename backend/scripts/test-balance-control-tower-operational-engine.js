@@ -237,7 +237,10 @@ test('buildOperationalCalculation: posisi tidak tersedia -> CONFIGURATION_REQUIR
 test('buildOperationalCalculation: freshness STALE -> DATA_STALE, TIDAK menampilkan deadline meyakinkan', () => {
   const out = buildOperationalCalculation({ STATUS, bank: BANK, policy: BASE_POLICY, position: position(), freshness: 'STALE', outflowRows: [], now: new Date() });
   assert.strictEqual(out.operational_status, STATUS.DATA_STALE);
-  assert.strictEqual(out.topup_deadline, undefined);
+  // Kalkulasi parsial (revisi): field ini SELALU ada di payload (schema
+  // konsisten), null berarti "tidak ada deadline" -- sama artinya dgn
+  // undefined di versi sebelumnya, TIDAK menampilkan deadline meyakinkan.
+  assert.strictEqual(out.topup_deadline, null);
 });
 test('buildOperationalCalculation: policy tidak lengkap (burn_window_minutes null) -> CONFIGURATION_REQUIRED', () => {
   const incompletePolicy = { ...BASE_POLICY, burn_window_minutes: null };
@@ -276,6 +279,102 @@ test('buildOperationalCalculation: dua panggilan dgn input IDENTIK -> hasil stat
   assert.strictEqual(out1.recommended_topup, out2.recommended_topup);
   assert.strictEqual(out1.usable_runway_minutes, out2.usable_runway_minutes);
 });
+
+// ── PARTIAL CALCULATION (revisi wajib item 1) ───────────────────────────
+test('partial calc: burn_window_minutes & topup_lead_time_minutes null -> absolute_minimum/usable_balance TETAP tampil (bukan blank)', () => {
+  const now = new Date();
+  const policy = { absolute_minimum_balance: 200000000, burn_window_minutes: null, topup_lead_time_minutes: null };
+  const out = buildOperationalCalculation({ STATUS, bank: BANK, policy, position: position(), freshness: 'FRESH', outflowRows: [], now });
+  assert.strictEqual(out.operational_status, STATUS.CONFIGURATION_REQUIRED);
+  assert.strictEqual(out.available_balance, 845077711);
+  assert.strictEqual(out.absolute_minimum_balance, 200000000, 'minimum HARUS tampil walau burn_window/lead_time belum dikonfigurasi');
+  assert.strictEqual(out.usable_balance, 645077711, 'usable_balance HARUS tampil (available - minimum), tidak menunggu burn_window/lead_time');
+  assert.strictEqual(out.missing_configuration.includes('burn_window_minutes'), true);
+  assert.strictEqual(out.missing_configuration.includes('topup_lead_time_minutes'), true);
+});
+test('partial calc: absolute_minimum_balance null -> minimum & usable_balance null DENGAN alasan eksplisit (bukan angka dikarang)', () => {
+  const now = new Date();
+  const policy = { absolute_minimum_balance: null, burn_window_minutes: 15, topup_lead_time_minutes: 30 };
+  const out = buildOperationalCalculation({ STATUS, bank: BANK, policy, position: position(), freshness: 'FRESH', outflowRows: [], now });
+  assert.strictEqual(out.absolute_minimum_balance, null);
+  assert.strictEqual(out.usable_balance, null);
+  assert.ok(out.absolute_minimum_balance_unavailable_reason);
+  assert.ok(out.usable_balance_unavailable_reason);
+});
+test('partial calc: 5/15/30/60 window outflow SELALU tampil dari outflowRows, independen dari burn_window_minutes policy', () => {
+  const now = new Date();
+  const policy = { absolute_minimum_balance: 200000000, burn_window_minutes: null, topup_lead_time_minutes: null };
+  const rows = outflowRows(1000000, 10, now); // 10 baris 1 menit terakhir -> masuk window 15/30/60, sebagian ke window 5
+  const out = buildOperationalCalculation({ STATUS, bank: BANK, policy, position: position(), freshness: 'FRESH', outflowRows: rows, now });
+  assert.ok(out.burn_rate_per_5_minutes > 0, 'window mentah 5 menit harus tetap terisi walau burn_window_minutes belum dikonfigurasi');
+  assert.ok(out.burn_rate_per_15_minutes > 0);
+  assert.ok(out.burn_rate_per_30_minutes > 0);
+  assert.ok(out.burn_rate_per_60_minutes > 0);
+});
+test('partial calc: TIDAK ADA fallback/estimasi non-final utk selected burn rate & runway -- keduanya tetap null total kalau burn_window_minutes belum diisi', () => {
+  const now = new Date();
+  const policy = { absolute_minimum_balance: 200000000, burn_window_minutes: null, topup_lead_time_minutes: 30 };
+  const rows = outflowRows(1000000, 10, now);
+  const out = buildOperationalCalculation({ STATUS, bank: BANK, policy, position: position(), freshness: 'FRESH', outflowRows: rows, now });
+  assert.strictEqual(out.selected_burn_window_minutes, null);
+  assert.strictEqual(out.burn_rate_per_minute, null, 'tidak boleh diam-diam pakai window lain sbg pengganti');
+  assert.strictEqual(out.usable_runway_minutes, null, 'runway tidak boleh muncul non-final/estimasi tanpa burn_window_minutes eksplisit');
+  assert.ok(out.burn_rate_unavailable_reason);
+  assert.ok(out.runway_unavailable_reason);
+});
+test('partial calc: recommended_topup & topup_deadline tetap unavailable kalau topup_lead_time_minutes belum diisi, walau burn_window sudah ada', () => {
+  const now = new Date();
+  const policy = { absolute_minimum_balance: 200000000, burn_window_minutes: 15, topup_lead_time_minutes: null };
+  const rows = outflowRows(1000000, 10, now);
+  const out = buildOperationalCalculation({ STATUS, bank: BANK, policy, position: position(), freshness: 'FRESH', outflowRows: rows, now });
+  assert.strictEqual(out.recommended_topup, null);
+  assert.strictEqual(out.topup_deadline, null);
+  assert.ok(out.recommended_topup_unavailable_reason.includes('lead time') || out.recommended_topup_unavailable_reason.includes('top-up lead time'));
+  assert.strictEqual(out.operational_status, STATUS.CONFIGURATION_REQUIRED);
+});
+test('partial calc: policy lengkap penuh -> tidak ada field yang unavailable_reason terisi (semua kosong/null)', () => {
+  const now = new Date();
+  const rows = outflowRows(100000, 5, now);
+  const out = buildOperationalCalculation({ STATUS, bank: BANK, policy: BASE_POLICY, position: position(), freshness: 'FRESH', outflowRows: rows, now });
+  assert.strictEqual(out.operational_status === STATUS.CONFIGURATION_REQUIRED, false);
+  assert.strictEqual(out.absolute_minimum_balance_unavailable_reason, null);
+  assert.strictEqual(out.usable_balance_unavailable_reason, null);
+  assert.strictEqual(out.burn_rate_unavailable_reason, null);
+});
+
+// ── today_usage (item 4) ────────────────────────────────────────────────
+test('today_usage: dilewatkan apa adanya dari caller, independen dari policy (tampil walau CONFIGURATION_REQUIRED)', () => {
+  const now = new Date();
+  const policy = { absolute_minimum_balance: 200000000, burn_window_minutes: null, topup_lead_time_minutes: null };
+  const todayUsage = {
+    business_date: '2026-07-29', matched_principal_outflow_today: 6000000000, verified_fee_outflow_today: 5000000,
+    other_verified_operational_outflow_today: 0, total_bank_debit_today: 6583281616, unmatched_or_anomaly_debit_today: 578281616,
+  };
+  const out = buildOperationalCalculation({ STATUS, bank: BANK, policy, position: position(), freshness: 'FRESH', outflowRows: [], todayUsage, now });
+  assert.strictEqual(out.operational_status, STATUS.CONFIGURATION_REQUIRED);
+  assert.deepStrictEqual(out.today_usage, todayUsage, 'today_usage tidak boleh ikut kosong hanya karena policy belum lengkap');
+});
+
+// ── FORMULA AUDIT (item 9) ──────────────────────────────────────────────
+test('formula audit: confirmed_incoming_not_yet_reflected selalu 0, TIDAK mengurangi recommended_topup pada rilis ini', () => {
+  const now = new Date();
+  const pos = position({ available_balance: 220000000 });
+  const rows = outflowRows(10000000, 15, now);
+  const out = buildOperationalCalculation({ STATUS, bank: BANK, policy: BASE_POLICY, position: pos, freshness: 'FRESH', outflowRows: rows, now });
+  assert.strictEqual(out.confirmed_incoming_not_yet_reflected, 0);
+  // Formula manual: safe_target - available - confirmed_incoming(0) == recommended_topup (sebelum rounding/clamp check terpisah)
+  const expectedRaw = out.safe_target_balance - pos.available_balance - 0;
+  assert.strictEqual(out.raw_recommended_topup, round2(expectedRaw));
+});
+test('formula audit: reserve historis (balanceForecast.js) TIDAK PERNAH masuk ke formula recommended_topup operasional -- safe_target_balance hanya absolute_minimum+lead_time_need+safety_buffer, masing2 SATU KALI', () => {
+  const now = new Date();
+  const pos = position({ available_balance: 220000000 });
+  const rows = outflowRows(10000000, 15, now);
+  const out = buildOperationalCalculation({ STATUS, bank: BANK, policy: BASE_POLICY, position: pos, freshness: 'FRESH', outflowRows: rows, now });
+  const manualSafeTarget = round2(BASE_POLICY.absolute_minimum_balance + out.lead_time_need + out.safety_buffer_amount);
+  assert.strictEqual(out.safe_target_balance, manualSafeTarget, 'tidak ada komponen reserve dinamis historis yang ikut ditambahkan');
+});
+function round2(n) { return Math.round(n * 100) / 100; }
 
 // ── Runner ──────────────────────────────────────────────────────────────
 let pass = 0, fail = 0;

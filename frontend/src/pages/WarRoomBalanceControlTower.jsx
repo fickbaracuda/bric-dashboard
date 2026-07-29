@@ -44,6 +44,18 @@ const TOPUP_STATUS_META = {
 };
 function topupMeta(s) { return TOPUP_STATUS_META[s] || { label: s || '-', color: '#6B7280', bg: '#F3F4F6' }; }
 
+const MOVEMENT_CLASSIFICATION_LABEL = {
+  NO_PREVIOUS: { label: 'Tidak ada pembanding', color: 'var(--text-4)' },
+  NO_CHANGE: { label: 'Tidak ada perubahan', color: 'var(--text-3)' },
+  RECONCILIATION_DATA_UNAVAILABLE: { label: 'Data rekonsiliasi tidak tersedia', color: '#B45309' },
+  CONSISTENT_WITH_VERIFIED_TRANSACTIONS: { label: 'Konsisten dgn transaksi terverifikasi', color: '#059669' },
+  LIKELY_INCOMING_FUNDS_UNVERIFIED: { label: 'Kemungkinan dana masuk (belum terverifikasi penuh)', color: '#2563EB' },
+  LIKELY_OPERATIONAL_OUTFLOW_UNVERIFIED: { label: 'Kemungkinan transaksi operasional (belum terverifikasi penuh)', color: '#DC2626' },
+};
+function movementClassificationMeta(c) {
+  return MOVEMENT_CLASSIFICATION_LABEL[c] || { label: c || '-', color: 'var(--text-4)' };
+}
+
 const ALERT_TYPE_LABEL = {
   LOW_BALANCE: 'Saldo Rendah', CRITICAL_BALANCE: 'Saldo Kritis', EXCESS_BALANCE: 'Saldo Berlebih',
   DATA_STALE: 'Data Kedaluwarsa', SYNC_ERROR: 'Gagal Sync',
@@ -326,7 +338,11 @@ function DetailTab({ banks, selectedBankId, onSelectBank, detail, loading, isOps
         <select className="select-input" value={selectedBankId || ''} onChange={e => onSelectBank(Number(e.target.value))}>
           {banks.map(b => <option key={b.id} value={b.id}>{b.bank_name} — {b.account_number}</option>)}
         </select>
-        {isOps && <button className="fbr-btn" onClick={onInputSnapshot}><i className="ti ti-cash-register" /> Input Saldo</button>}
+        {isOps && (
+          <button className="fbr-btn" onClick={onInputSnapshot}>
+            <i className="ti ti-cash-register" /> {detail?.operational ? 'Input Saldo Manual (Darurat)' : 'Input Saldo'}
+          </button>
+        )}
         {isAdmin && <button className="fbr-btn" onClick={onEditPolicy}><i className="ti ti-settings" /> Atur Policy</button>}
         {isOps && <button className="fbr-btn fbr-btn-primary" onClick={onCreateTopup}><i className="ti ti-transfer-in" /> Ajukan Top Up</button>}
       </div>
@@ -396,20 +412,39 @@ function DetailTab({ banks, selectedBankId, onSelectBank, detail, loading, isOps
             <div className="wr-table-controls"><div className="wr-table-left"><b>Riwayat Snapshot</b> ({detail.riwayat_snapshot?.length || 0})</div></div>
             <div className="wr-table-wrap">
               <table className="wr-table">
-                <thead><tr><th>Waktu</th><th>Tersedia</th><th>Tertahan</th><th>Pending</th><th>Cadangan</th><th>Efektif</th><th>Sumber</th><th>Sync</th></tr></thead>
+                <thead>
+                  <tr>
+                    <th>Waktu</th><th>Tersedia</th><th>Δ</th><th>Δ%</th><th>Tertahan</th><th>Pending</th><th>Cadangan</th><th>Efektif</th>
+                    <th>FP Matched</th><th>Fee</th><th>Funding Credit</th><th>Unmatched/Unknown</th><th>Klasifikasi Pergerakan</th>
+                    <th>Sumber</th><th>Sync</th>
+                  </tr>
+                </thead>
                 <tbody>
-                  {(detail.riwayat_snapshot || []).slice(0, 30).map(s => (
-                    <tr key={s.id}>
-                      <td>{fmtDateTime(s.captured_at)}</td>
-                      <td>{fmtRp(s.available_balance)}</td>
-                      <td>{fmtRp(s.held_balance)}</td>
-                      <td>{fmtRp(s.pending_amount)}</td>
-                      <td>{fmtRp(s.reserve_balance)}</td>
-                      <td><b>{fmtRp(s.effective_balance)}</b></td>
-                      <td>{s.source}</td>
-                      <td>{s.sync_status}</td>
-                    </tr>
-                  ))}
+                  {(detail.riwayat_snapshot || []).slice(0, 30).map(s => {
+                    const m = s.movement;
+                    const cls = movementClassificationMeta(s.movement_classification);
+                    return (
+                      <tr key={s.id}>
+                        <td>{fmtDateTime(s.captured_at)}</td>
+                        <td>{fmtRp(s.available_balance)}</td>
+                        <td style={{ color: m?.delta_amount > 0 ? '#059669' : (m?.delta_amount < 0 ? '#DC2626' : 'var(--text-3)') }}>
+                          {m?.delta_amount !== null && m?.delta_amount !== undefined ? `${m.delta_amount > 0 ? '+' : ''}${fmtRp(m.delta_amount)}` : '-'}
+                        </td>
+                        <td>{m?.delta_percentage !== null && m?.delta_percentage !== undefined ? `${m.delta_percentage.toFixed(1)}%` : '-'}</td>
+                        <td>{fmtRp(s.held_balance)}</td>
+                        <td>{fmtRp(s.pending_amount)}</td>
+                        <td>{fmtRp(s.reserve_balance)}</td>
+                        <td><b>{fmtRp(s.effective_balance)}</b></td>
+                        <td>{s.matched_principal_outflow_interval !== null && s.matched_principal_outflow_interval !== undefined ? fmtRp(s.matched_principal_outflow_interval) : '-'}</td>
+                        <td>{s.verified_fee_outflow_interval !== null && s.verified_fee_outflow_interval !== undefined ? fmtRp(s.verified_fee_outflow_interval) : '-'}</td>
+                        <td>{s.funding_credit_interval !== null && s.funding_credit_interval !== undefined ? fmtRp(s.funding_credit_interval) : '-'}</td>
+                        <td>{s.unmatched_or_unknown_movement_interval !== null && s.unmatched_or_unknown_movement_interval !== undefined ? fmtRp(s.unmatched_or_unknown_movement_interval) : '-'}</td>
+                        <td><span style={{ color: cls.color, fontWeight: 600, fontSize: 12 }}>{cls.label}</span></td>
+                        <td>{s.source}</td>
+                        <td>{s.sync_status}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -474,10 +509,37 @@ function trendLabel(trend) {
   return { label: '-', color: 'var(--text-3)' };
 }
 
+/** value kalau ada, kalau tidak tampilkan alasan spesifik (BUKAN cuma "-") -- inti perbaikan kalkulasi parsial. */
+function KpiVal({ value, formatter, reason, fallback = 'Belum dapat dihitung' }) {
+  if (value !== null && value !== undefined) return formatter(value);
+  return <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-4)' }}>{reason || fallback}</span>;
+}
+
+function DeltaSaldoCard({ movement }) {
+  if (!movement) return null;
+  if (movement.delta_amount === null) {
+    return <Kpi label="Δ Saldo" value={<span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-4)' }}>{movement.reason || 'Belum ada pembanding'}</span>} />;
+  }
+  const isUp = movement.direction === 'UP';
+  const isDown = movement.direction === 'DOWN';
+  const color = isDown ? '#DC2626' : (isUp ? '#059669' : 'var(--text-2)');
+  const sign = movement.delta_amount > 0 ? '+' : '';
+  return (
+    <Kpi
+      label="Δ Saldo"
+      value={<span style={{ color, fontWeight: 800 }}>{sign}{fmtRp(movement.delta_amount)}</span>}
+      sub={`sejak ${fmtDateTime(movement.previous_captured_at)}${movement.delta_percentage !== null ? ` (${sign}${movement.delta_percentage.toFixed(1)}%)` : ''}`}
+      alert={isDown && Math.abs(movement.delta_percentage || 0) > 0}
+    />
+  );
+}
+
 function FaActionSummary({ detail, isOps, onCreateTopup, onEditPolicy, onForecastRefreshed, isAdmin }) {
   const op = detail.operational;
   const status = detail.status;
   const action = actionMeta(status);
+  const rp = (v) => fmtRp(v);
+  const mins = (v) => fmtMinutes(v);
 
   return (
     <div className="wr-table-section" style={{ marginBottom: 16, borderWidth: 2 }}>
@@ -489,6 +551,11 @@ function FaActionSummary({ detail, isOps, onCreateTopup, onEditPolicy, onForecas
       </div>
 
       <div style={{ padding: 16 }}>
+        {/* Δ Saldo -- independen dari mesin operasional, tampil selama ada ≥2 snapshot valid utk bank apa pun (item 6). */}
+        <div className="bct-kpi-grid" style={{ marginBottom: 14 }}>
+          <DeltaSaldoCard movement={detail.balance_movement} />
+        </div>
+
         {!op ? (
           <div style={{ color: 'var(--text-3)', fontSize: 13 }}>
             Mesin kalkulasi operasional belum tersedia utk bank ini (belum didukung integrasi rekonsiliasi). Status memakai policy manual saja.
@@ -496,22 +563,49 @@ function FaActionSummary({ detail, isOps, onCreateTopup, onEditPolicy, onForecas
         ) : (
           <>
             <div className="bct-kpi-grid" style={{ marginBottom: 14 }}>
-              <Kpi label="Saldo Tersedia (Actual)" value={fmtRp(op.available_balance)} sub={fmtDateTime(op.balance_source_timestamp)} />
-              <Kpi label="Batas Minimum Terlindungi" value={fmtRp(op.absolute_minimum_balance)} />
-              <Kpi label="Saldo Bisa Dipakai" value={fmtRp(op.usable_balance)} alert={Number(op.usable_balance) <= 0} />
-              <Kpi label={`Outflow ${op.selected_burn_window_minutes ?? '-'} Menit`} value={fmtRp(op.total_window_outflow)}
-                sub={`${fmtRp(op.burn_rate_per_minute)}/menit`} />
+              <Kpi label="Saldo Tersedia (Actual)" value={rp(op.available_balance)} sub={fmtDateTime(op.balance_source_timestamp)} />
+              <Kpi label="Batas Minimum Terlindungi" value={<KpiVal value={op.absolute_minimum_balance} formatter={rp} reason={op.absolute_minimum_balance_unavailable_reason} />} />
+              <Kpi label="Saldo Bisa Dipakai" value={<KpiVal value={op.usable_balance} formatter={rp} reason={op.usable_balance_unavailable_reason} />} alert={Number(op.usable_balance) <= 0} />
               <Kpi label="Tren Transaksi" value={<span style={{ color: trendLabel(op.burn_trend).color, fontWeight: 700 }}>{trendLabel(op.burn_trend).label}</span>}
                 sub={op.acceleration_detected ? 'akselerasi terdeteksi' : null} />
             </div>
 
+            {/* 4 window outflow mentah -- SELALU tampil kalau ada data, independen dari burn_window_minutes policy (item 1/7 spec). */}
+            <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text-4)', textTransform: 'uppercase', letterSpacing: '.03em', margin: '2px 0 6px' }}>Outflow Intraday (mentah, 4 window)</div>
             <div className="bct-kpi-grid" style={{ marginBottom: 14 }}>
-              <Kpi label="Runway ke Batas Minimum" value={fmtMinutes(op.usable_runway_minutes)} sub={op.minimum_balance_breach_time ? `≈ ${fmtDateTime(op.minimum_balance_breach_time)}` : 'tidak ada outflow aktif'} />
-              <Kpi label="Runway ke Saldo Nol" value={fmtMinutes(op.zero_balance_runway_minutes)} />
-              <Kpi label="Rekomendasi Top-up" value={fmtRp(op.recommended_topup)} alert={Number(op.recommended_topup) > 0}
-                sub={op.topup_deadline ? `sebelum ${fmtDateTime(op.topup_deadline)}` : null} />
-              <Kpi label="Lead Time Top-up" value={fmtMinutes(op.topup_lead_time_minutes)} />
-              <Kpi label="Safety Buffer" value={fmtRp(op.safety_buffer_amount)} sub={op.safety_buffer_type ? `mode ${op.safety_buffer_type}` : null} />
+              <Kpi label="Outflow 5 Menit" value={rp(op.burn_rate_per_5_minutes !== null ? op.burn_rate_per_5_minutes * 5 : null)} sub={op.burn_rate_per_5_minutes !== null ? `${rp(op.burn_rate_per_5_minutes)}/menit` : 'tidak ada transaksi matched'} />
+              <Kpi label="Outflow 15 Menit" value={rp(op.burn_rate_per_15_minutes !== null ? op.burn_rate_per_15_minutes * 15 : null)} sub={op.burn_rate_per_15_minutes !== null ? `${rp(op.burn_rate_per_15_minutes)}/menit` : 'tidak ada transaksi matched'} />
+              <Kpi label="Outflow 30 Menit" value={rp(op.burn_rate_per_30_minutes !== null ? op.burn_rate_per_30_minutes * 30 : null)} sub={op.burn_rate_per_30_minutes !== null ? `${rp(op.burn_rate_per_30_minutes)}/menit` : 'tidak ada transaksi matched'} />
+              <Kpi label="Outflow 60 Menit" value={rp(op.burn_rate_per_60_minutes !== null ? op.burn_rate_per_60_minutes * 60 : null)} sub={op.burn_rate_per_60_minutes !== null ? `${rp(op.burn_rate_per_60_minutes)}/menit` : 'tidak ada transaksi matched'} />
+              <Kpi label="Burn Rate Operasional Terpilih" value={<KpiVal value={op.burn_rate_per_minute} formatter={(v) => `${rp(v)}/menit`} reason={op.burn_rate_unavailable_reason} />}
+                sub={op.selected_burn_window_minutes ? `window ${op.selected_burn_window_minutes} menit` : null} />
+            </div>
+
+            {/* Penggunaan Saldo Hari Ini -- independen dari burn_window_minutes (item 4 spec), reconciliation-sourced. */}
+            <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text-4)', textTransform: 'uppercase', letterSpacing: '.03em', margin: '2px 0 6px' }}>Penggunaan Saldo Hari Ini</div>
+            <div className="bct-kpi-grid" style={{ marginBottom: 14 }}>
+              {op.today_usage ? (
+                <>
+                  <Kpi label="FP Matched — Principal" value={rp(op.today_usage.matched_principal_outflow_today)} sub={`${op.today_usage.matched_transaction_count_today} transaksi matched`} />
+                  <Kpi label="Fee Terverifikasi" value={rp(op.today_usage.verified_fee_outflow_today)} />
+                  <Kpi label="Outflow Operasional Lain" value={rp(op.today_usage.other_verified_operational_outflow_today)} />
+                  <Kpi label="Unmatched / Anomali" value={op.today_usage.unmatched_or_anomaly_debit_today === null ? <KpiVal value={null} reason="Total bank debit belum tersedia" /> : rp(op.today_usage.unmatched_or_anomaly_debit_today)}
+                    alert={Number(op.today_usage.unmatched_or_anomaly_debit_today) > 0} />
+                  <Kpi label="Total Bank Debit Hari Ini" value={<KpiVal value={op.today_usage.total_bank_debit_today} formatter={rp} reason="Belum tersedia dari statement bank" />} sub={op.today_usage.business_date} />
+                </>
+              ) : (
+                <Kpi label="Total Bank Debit Hari Ini" value={<KpiVal value={null} reason="Data posisi saldo belum tersedia" />} />
+              )}
+            </div>
+
+            <div className="bct-kpi-grid" style={{ marginBottom: 14 }}>
+              <Kpi label="Runway ke Batas Minimum" value={<KpiVal value={op.usable_runway_minutes} formatter={mins} reason={op.runway_unavailable_reason || (op.usable_runway_minutes === null ? 'Tidak ada outflow aktif' : null)} />}
+                sub={op.minimum_balance_breach_time ? `≈ ${fmtDateTime(op.minimum_balance_breach_time)}` : null} />
+              <Kpi label="Runway ke Saldo Nol" value={<KpiVal value={op.zero_balance_runway_minutes} formatter={mins} reason={op.burn_rate_unavailable_reason} />} />
+              <Kpi label="Rekomendasi Top-up" value={<KpiVal value={op.recommended_topup} formatter={rp} reason={op.recommended_topup_unavailable_reason} />} alert={Number(op.recommended_topup) > 0}
+                sub={op.topup_deadline ? `Top-up sebelum ${fmtDateTime(op.topup_deadline)}` : null} />
+              <Kpi label="Lead Time Top-up" value={<KpiVal value={op.topup_lead_time_minutes} formatter={mins} reason={op.topup_lead_time_unavailable_reason} />} />
+              <Kpi label="Safety Buffer" value={<KpiVal value={op.safety_buffer_amount} formatter={rp} reason={op.recommended_topup_unavailable_reason} />} sub={op.safety_buffer_type ? `mode ${op.safety_buffer_type}` : null} />
             </div>
 
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
@@ -527,23 +621,34 @@ function FaActionSummary({ detail, isOps, onCreateTopup, onEditPolicy, onForecas
               )}
               {status === 'CONFIGURATION_REQUIRED' && isAdmin && (
                 <button className="fbr-btn fbr-btn-primary" onClick={onEditPolicy}>
-                  <i className="ti ti-settings" /> {action.label}
+                  <i className="ti ti-settings" /> Lengkapi Kebijakan Operasional
                 </button>
               )}
               {status === 'SAFE' && <span className="bct-badge" style={{ color: '#059669', background: '#DCFCE7' }}><i className="ti ti-circle-check" /> {action.label}</span>}
-              <span style={{ fontSize: 11.5, color: 'var(--text-4)' }}>
-                calculation_version {op.calculation_version} · dihitung {fmtDateTime(op.calculation_timestamp)}
-              </span>
             </div>
 
             {op.status_reason && (
               <div style={{ marginTop: 12, fontSize: 13, color: 'var(--text-2)', lineHeight: 1.5 }}>{op.status_reason}</div>
+            )}
+            {!!(op.missing_configuration && op.missing_configuration.length) && (
+              <div className="fbr-error" style={{ marginTop: 10, background: '#F3F4F6', color: 'var(--text-2)', borderRadius: 8, padding: '10px 12px' }}>
+                <b>Konfigurasi yang masih kurang:</b> {op.missing_configuration.join(', ')}.
+              </div>
             )}
             {op.movement_variance && (
               <div className="fbr-error" style={{ marginTop: 10 }}>
                 Available Balance tetap dipakai sbg saldo aktual. Terdeteksi selisih movement-summary: {fmtRp(op.movement_variance.variance_amount)} ({op.movement_variance.variance_percentage}%) — butuh review rekonsiliasi.
               </div>
             )}
+
+            {/* Footer -- refresh-on-read disclosure (spec item wajib: JANGAN terkesan real-time monitoring proaktif). */}
+            <div style={{ marginTop: 14, paddingTop: 10, borderTop: '1px solid var(--border)', display: 'flex', flexWrap: 'wrap', gap: 14, fontSize: 11, color: 'var(--text-4)' }}>
+              <span>calculation_version {op.calculation_version}</span>
+              <span>dihitung {fmtDateTime(op.calculation_timestamp)}</span>
+              <span>sumber saldo {fmtDateTime(op.balance_source_timestamp)}</span>
+              <span>freshness: {op.data_freshness_status || '-'}</span>
+              <span style={{ fontStyle: 'italic' }}>Perhitungan diperbarui saat halaman dimuat atau tombol Refresh digunakan — belum ada pemantauan proaktif otomatis.</span>
+            </div>
           </>
         )}
       </div>
@@ -574,6 +679,19 @@ function fmtMinutes(v) {
   if (n < 1440) return `${(n / 60).toFixed(1)} jam`;
   return `${(n / 1440).toFixed(1)} hari`;
 }
+/**
+ * Label deadline utk panel historis SAJA -- TIDAK PERNAH pakai kata "sebelum"
+ * (itu khusus rekomendasi operasional FA Action Summary/op.topup_deadline).
+ * Kalau waktu simulasi sudah lewat, dinyatakan eksplisit expired -- TIDAK
+ * ditampilkan seolah masih jadi instruksi aktif (spec item 10).
+ */
+function forecastDeadlineLabel(deadline) {
+  if (!deadline) return null;
+  const d = new Date(deadline);
+  if (Number.isNaN(d.getTime())) return null;
+  if (d.getTime() < Date.now()) return `Waktu simulasi telah lewat (${fmtDateTime(deadline)})`;
+  return `Waktu simulasi model historis: ${fmtDateTime(deadline)}`;
+}
 
 function ForecastPanel({ bankId, detail, isOps, onRefreshed }) {
   const [refreshing, setRefreshing] = useState(false);
@@ -596,7 +714,7 @@ function ForecastPanel({ bankId, detail, isOps, onRefreshed }) {
     <div className="wr-table-section" style={{ marginBottom: 16 }}>
       <div className="wr-table-controls">
         <div className="wr-table-left">
-          <b>Forecast</b> <span className="bct-badge" style={{ color: '#0891B2', background: '#CFFAFE' }}>Sumber: OCBC Rekonsiliasi</span>
+          <b>Simulasi &amp; Threshold Historis</b> <span className="bct-badge" style={{ color: '#0891B2', background: '#CFFAFE' }}>Sumber: OCBC Rekonsiliasi</span>
         </div>
         {isOps && (
           <button className="fbr-btn" onClick={handleRefresh} disabled={refreshing}>
@@ -606,6 +724,10 @@ function ForecastPanel({ bankId, detail, isOps, onRefreshed }) {
       </div>
 
       <div style={{ padding: 16 }}>
+        <div style={{ marginBottom: 14, fontSize: 12.5, color: '#0369A1', background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 8, padding: '10px 12px', lineHeight: 1.5 }}>
+          Analitik berikut menggunakan pola historis (rata-rata burn 14 hari) untuk perencanaan, dan <b>tidak menentukan status atau rekomendasi top-up FA saat ini</b> — lihat FA Action Summary di atas untuk keputusan operasional.
+        </div>
+
         {refreshError && <div className="fbr-error" style={{ marginBottom: 12 }}>{refreshError}</div>}
 
         {statusReason && (
@@ -616,7 +738,7 @@ function ForecastPanel({ bankId, detail, isOps, onRefreshed }) {
 
         {!forecast || !forecast.forecast_available ? (
           <div style={{ color: 'var(--text-3)', fontSize: 13 }}>
-            Forecast belum tersedia — {forecast?.forecast_unavailable_reason || 'belum ada data rekonsiliasi OCBC pada window terakhir.'}
+            Analitik historis belum tersedia — {forecast?.forecast_unavailable_reason || 'belum ada data rekonsiliasi OCBC pada window terakhir.'}
             {' '}Threshold status memakai Finance Policy manual saja (kalau sudah diisi).
           </div>
         ) : (
@@ -624,14 +746,17 @@ function ForecastPanel({ bankId, detail, isOps, onRefreshed }) {
             <div className="bct-kpi-grid">
               <Kpi label="Saldo Saat Ini (Actual Balance)" value={fmtRp(forecast.available_balance)} />
               <Kpi label="Saldo Efektif" value={fmtRp(forecast.effective_balance)} />
-              <Kpi label="Proyeksi Saldo (Funding Window Berikutnya)" value={fmtRp(forecast.projected_balance_at_next_funding)} />
-              <Kpi label="Estimasi Runway" value={fmtMinutes(forecast.estimated_runway_minutes)} sub={forecast.estimated_runway_minutes === null ? 'burn rate 0 / tidak ada data' : null} />
+              <Kpi label="Proyeksi Historis 24 Jam" value={fmtRp(forecast.projected_balance_at_next_funding)} sub="berdasarkan burn rata-rata 14 hari, bukan burn real-time" />
+              <Kpi label="Runway Teoretis (Rata-rata 14 Hari)" value={fmtMinutes(forecast.estimated_runway_minutes)} sub={forecast.estimated_runway_minutes === null ? 'burn rate 0 / tidak ada data' : 'model historis, bukan burn real-time'} />
               <Kpi label="Burn Rate Rata-rata" value={fmtRp(forecast.average_burn_rate) + '/hari'} />
               <Kpi label="Burn Rate Puncak" value={fmtRp(forecast.peak_burn_rate) + '/hari'} />
-              <Kpi label="Kebutuhan Forecast" value={fmtRp(forecast.forecast_required_balance)} sub={`window ${forecast.funding_window_hours} jam${forecast.funding_window_is_default ? ' (default)' : ''}`} />
-              <Kpi label="Reserve Dinamis" value={fmtRp(forecast.dynamic_reserve_balance)} />
-              <Kpi label="Rekomendasi Top Up" value={fmtRp(forecast.recommended_topup_amount)} alert={forecast.recommended_topup_amount > 0}
-                sub={forecast.recommended_topup_deadline ? `sebelum ${fmtDateTime(forecast.recommended_topup_deadline)}` : null} />
+              <Kpi label="Kebutuhan Historis (Funding Window)" value={fmtRp(forecast.forecast_required_balance)} sub={`window ${forecast.funding_window_hours} jam${forecast.funding_window_is_default ? ' (default)' : ''}`} />
+              <Kpi label="Reserve Dinamis (Historis, Analytics-Only)" value={fmtRp(forecast.dynamic_reserve_balance)} sub="tidak masuk formula recommended_topup operasional" />
+              <Kpi label="Simulasi Kebutuhan Pendanaan Historis 24 Jam" value={fmtRp(forecast.recommended_topup_amount)}
+                sub={forecastDeadlineLabel(forecast.recommended_topup_deadline)} />
+            </div>
+            <div style={{ marginTop: -8, marginBottom: 14, fontSize: 11.5, color: 'var(--text-4)', fontStyle: 'italic' }}>
+              Bukan rekomendasi top-up operasional. Angka di atas adalah simulasi perencanaan dari model burn historis, terpisah dari FA Action Summary.
             </div>
 
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, fontSize: 12.5, color: 'var(--text-3)', marginBottom: 14 }}>
@@ -640,20 +765,24 @@ function ForecastPanel({ bankId, detail, isOps, onRefreshed }) {
               <span>Sudden Drop: {forecast.sudden_drop_amount !== null ? `${fmtRp(forecast.sudden_drop_amount)} (${forecast.sudden_drop_percentage?.toFixed(1)}%)` : 'tidak terdeteksi'}</span>
             </div>
 
-            <div className="wr-table-wrap" style={{ marginBottom: 14 }}>
+            <div className="wr-table-wrap" style={{ marginBottom: 6 }}>
               <table className="wr-table">
-                <thead><tr><th>Threshold</th><th>Nilai Dipakai</th><th>Sumber</th></tr></thead>
+                <thead><tr><th>Planning Threshold</th><th>Nilai Dipakai</th><th>Sumber</th></tr></thead>
                 <tbody>
-                  <tr><td>Watch</td><td>{fmtRp(forecast.dynamic_watch_threshold)}</td><td><SourceTag source={forecast.thresholds_source?.watch} /></td></tr>
-                  <tr><td>Critical</td><td>{fmtRp(forecast.dynamic_critical_threshold)}</td><td><SourceTag source={forecast.thresholds_source?.critical} /></td></tr>
-                  <tr><td>Emergency</td><td>{fmtRp(forecast.dynamic_emergency_threshold)}</td><td><SourceTag source={forecast.thresholds_source?.emergency} /></td></tr>
-                  <tr><td>Reserve</td><td>{fmtRp(forecast.dynamic_reserve_balance)}</td><td><SourceTag source={forecast.thresholds_source?.reserve} /></td></tr>
+                  <tr><td>Planning Watch Threshold</td><td>{fmtRp(forecast.dynamic_watch_threshold)}</td><td><SourceTag source={forecast.thresholds_source?.watch} /></td></tr>
+                  <tr><td>Planning Critical Threshold</td><td>{fmtRp(forecast.dynamic_critical_threshold)}</td><td><SourceTag source={forecast.thresholds_source?.critical} /></td></tr>
+                  <tr><td>Planning Emergency Threshold</td><td>{fmtRp(forecast.dynamic_emergency_threshold)}</td><td><SourceTag source={forecast.thresholds_source?.emergency} /></td></tr>
+                  <tr><td>Reserve Historis</td><td>{fmtRp(forecast.dynamic_reserve_balance)}</td><td><SourceTag source={forecast.thresholds_source?.reserve} /></td></tr>
                   <tr>
                     <td>Excess Balance / Stale After / Safety Buffer / Top-up Rounding</td>
                     <td colSpan={2}><span className="bct-badge" style={{ color: '#B45309', background: '#FEF3C7' }}>Finance Policy (manual)</span></td>
                   </tr>
                 </tbody>
               </table>
+            </div>
+            <div style={{ marginBottom: 14, fontSize: 11.5, color: 'var(--text-4)', lineHeight: 1.6 }}>
+              Planning Watch/Critical/Emergency Threshold = ambang perencanaan dari model historis (BUKAN status operasional saat ini — lihat status di FA Action Summary).
+              Reserve Historis = cadangan hasil model volatilitas 14 hari, khusus perencanaan, tidak pernah dihitung dua kali dengan Safety Buffer operasional di FA Action Summary.
             </div>
 
             <details open={showDetail} onToggle={e => setShowDetail(e.target.open)}>
@@ -791,6 +920,13 @@ function AlertsTab({ alerts, isOps, onAcknowledge, onSnooze, onResolve }) {
  * user langsung tahu field mana yang salah). Backend tetap validasi ulang
  * (sumber kebenaran, mode di sini cuma UX).
  */
+const VALID_BURN_WINDOWS = [5, 15, 30, 60];
+// Saran default teknis (spec) -- HANYA prefill form, TIDAK PERNAH disimpan
+// otomatis. Admin harus eksplisit submit utk menyimpan, boleh diubah/dihapus
+// dulu. topup_lead_time_minutes SENGAJA tidak punya saran -- harus berasal
+// dari workflow FA nyata, bukan angka teknis yang dikarang.
+const SUGGESTED_POLICY_DEFAULTS = { burn_window_minutes: 15, critical_margin_minutes: 10, watch_buffer_minutes: 30 };
+
 function validatePolicyForm(form) {
   const num = (v) => (v === '' || v === null || v === undefined ? null : Number(v));
   const nonNegFields = [
@@ -798,6 +934,8 @@ function validatePolicyForm(form) {
     ['emergency_threshold', 'Emergency Threshold'], ['watch_threshold', 'Watch Threshold'],
     ['excess_balance_threshold', 'Excess Balance Threshold'], ['reserve_balance', 'Reserve Balance'],
     ['topup_rounding_amount', 'Pembulatan Top Up'], ['sudden_drop_amount_threshold', 'Sudden Drop Nominal'],
+    ['critical_margin_minutes', 'Critical Margin'], ['watch_buffer_minutes', 'Watch Buffer'],
+    ['safety_buffer_fixed_amount', 'Safety Buffer (Nominal Tetap)'],
   ];
   for (const [key, label] of nonNegFields) {
     const v = num(form[key]);
@@ -807,9 +945,13 @@ function validatePolicyForm(form) {
     const v = num(form[key]);
     if (v !== null && (Number.isNaN(v) || v < 0 || v > 100)) return `${label} harus di antara 0 dan 100.`;
   }
-  for (const [key, label] of [['stale_after_minutes', 'Stale After'], ['sudden_drop_window_minutes', 'Sudden Drop Window']]) {
+  for (const [key, label] of [['stale_after_minutes', 'Stale After'], ['sudden_drop_window_minutes', 'Sudden Drop Window'], ['topup_lead_time_minutes', 'Top-up Lead Time']]) {
     const v = num(form[key]);
     if (v !== null && (Number.isNaN(v) || v <= 0)) return `${label} harus lebih besar dari 0 menit.`;
+  }
+  const burnWindow = num(form.burn_window_minutes);
+  if (burnWindow !== null && !VALID_BURN_WINDOWS.includes(burnWindow)) {
+    return `Burn Window harus salah satu: ${VALID_BURN_WINDOWS.join(', ')} menit.`;
   }
   const emergency = num(form.emergency_threshold);
   const critical = num(form.critical_threshold);
@@ -847,9 +989,19 @@ function Modal({ modal, banks, bankDetail, onClose, loading, error, run }) {
         safety_buffer_percentage: bankDetail.policy.safety_buffer_percentage ?? '',
         topup_rounding_amount: bankDetail.policy.topup_rounding_amount ?? '',
         is_active: bankDetail.policy.is_active ?? true,
+        // Field mesin operasional -- kalau sudah ada nilai tersimpan, pakai
+        // itu apa adanya. Kalau BELUM ADA (null), prefill saran default
+        // teknis (SUGGESTED_POLICY_DEFAULTS) sbg draft yang HARUS di-review
+        // & disubmit eksplisit oleh admin -- tidak pernah otomatis tersimpan.
+        burn_window_minutes: bankDetail.policy.burn_window_minutes ?? SUGGESTED_POLICY_DEFAULTS.burn_window_minutes,
+        topup_lead_time_minutes: bankDetail.policy.topup_lead_time_minutes ?? '',
+        critical_margin_minutes: bankDetail.policy.critical_margin_minutes ?? SUGGESTED_POLICY_DEFAULTS.critical_margin_minutes,
+        watch_buffer_minutes: bankDetail.policy.watch_buffer_minutes ?? SUGGESTED_POLICY_DEFAULTS.watch_buffer_minutes,
+        safety_buffer_type: bankDetail.policy.safety_buffer_type ?? '',
+        safety_buffer_fixed_amount: bankDetail.policy.safety_buffer_fixed_amount ?? '',
       });
     } else {
-      setForm(f => ({ ...f, is_active: true }));
+      setForm(f => ({ ...f, is_active: true, ...SUGGESTED_POLICY_DEFAULTS }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modal.type]);
@@ -875,25 +1027,88 @@ function Modal({ modal, banks, bankDetail, onClose, loading, error, run }) {
   }
 
   if (modal.type === 'snapshot') {
-    title = `Input Saldo — ${bankName(modal.bankId)}`;
+    // Bank sudah punya mesin rekonsiliasi (detail.operational truthy) -> ini
+    // FALLBACK DARURAT, bukan alur input normal (spec item 5). Wajib alasan,
+    // masuk audit log, dan TIDAK PERNAH menimpa balance rekonsiliasi yang
+    // lebih segar (dijamin backend via pickCurrentAndPrevious).
+    const isReconciliationBacked = modal.bankId === bankDetail?.bank?.id && !!bankDetail?.operational;
+    title = isReconciliationBacked ? `Input Saldo Manual (Darurat) — ${bankName(modal.bankId)}` : `Input Saldo — ${bankName(modal.bankId)}`;
     body = (
       <>
+        {isReconciliationBacked && (
+          <div className="fbr-error" style={{ background: '#FEF3C7', color: '#92400E', borderRadius: 8, padding: '10px 12px', marginBottom: 4 }}>
+            Saldo bank ini otomatis dari rekonsiliasi OCBC. Input manual di sini HANYA fallback darurat —
+            tidak akan menggantikan saldo rekonsiliasi yang lebih baru, dan wajib disertai alasan (masuk audit log).
+          </div>
+        )}
         <Field label="Saldo Tersedia (available_balance)"><input className="fbr-input" type="number" value={form.available_balance || ''} onChange={e => set('available_balance', e.target.value)} /></Field>
         <Field label="Saldo Tertahan (held_balance)"><input className="fbr-input" type="number" value={form.held_balance || ''} onChange={e => set('held_balance', e.target.value)} /></Field>
         <Field label="Transaksi Pending (pending_amount)"><input className="fbr-input" type="number" value={form.pending_amount || ''} onChange={e => set('pending_amount', e.target.value)} /></Field>
         <Field label="Saldo Cadangan (reserve_balance) — kosongkan untuk pakai default dari policy">
           <input className="fbr-input" type="number" value={form.reserve_balance ?? ''} onChange={e => set('reserve_balance', e.target.value)} />
         </Field>
+        {isReconciliationBacked && (
+          <Field label="Alasan Input Manual Darurat (wajib)">
+            <textarea className="fbr-input" rows={3} value={form.reason || ''} onChange={e => set('reason', e.target.value)}
+              placeholder="mis. rekonsiliasi OCBC gagal sync, dikonfirmasi manual oleh Finance" />
+          </Field>
+        )}
       </>
     );
-    onConfirm = () => run(() => createBctSnapshot(modal.bankId, form));
+    onConfirm = () => {
+      if (isReconciliationBacked && !String(form.reason || '').trim()) {
+        setLocalError('Alasan wajib diisi untuk Input Saldo Manual (Darurat) pada bank yang sudah didukung rekonsiliasi otomatis.');
+        return;
+      }
+      setLocalError(null);
+      run(() => createBctSnapshot(modal.bankId, form));
+    };
   }
 
   if (modal.type === 'policy') {
     title = `Atur Policy — ${bankName(modal.bankId)}`;
+    const p = bankDetail?.policy || {};
     body = (
       <>
-        <Field label="Batas Minimum Absolut (legacy)"><input className="fbr-input" type="number" value={form.absolute_minimum_balance || ''} onChange={e => set('absolute_minimum_balance', e.target.value)} /></Field>
+        <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '.04em', margin: '2px 0 8px' }}>
+          Mesin Kalkulasi Operasional (FA Action Layer)
+        </div>
+        <Field label="Burn Window (menit)" hint="Jendela waktu utk menghitung outflow operasional saat ini. Tanpa ini, selected burn rate & runway tidak bisa dihitung.">
+          <select className="select-input" style={{ width: '100%' }} value={form.burn_window_minutes ?? ''} onChange={e => set('burn_window_minutes', e.target.value ? Number(e.target.value) : '')}>
+            <option value="">— belum dipilih —</option>
+            {VALID_BURN_WINDOWS.map(m => <option key={m} value={m}>{m} menit</option>)}
+          </select>
+          {(p.burn_window_minutes === null || p.burn_window_minutes === undefined) && <div className="fbr-hint-suggested">Saran default: {SUGGESTED_POLICY_DEFAULTS.burn_window_minutes} menit — review & submit utk menyimpan.</div>}
+        </Field>
+        <Field label="Top-up Lead Time (menit)" hint="Waktu dari FA mengajukan top-up sampai dana masuk ke OCBC. WAJIB berasal dari workflow FA nyata, tidak ada saran teknis. Tanpa ini, rekomendasi top-up & deadline tidak bisa dihitung.">
+          <input className="fbr-input" type="number" value={form.topup_lead_time_minutes ?? ''} onChange={e => set('topup_lead_time_minutes', e.target.value)} placeholder="Isi sesuai SLA transfer riil" />
+        </Field>
+        <Field label="Critical Margin (menit)" hint="Margin tambahan di atas lead time sebelum status naik ke Kritis.">
+          <input className="fbr-input" type="number" value={form.critical_margin_minutes ?? ''} onChange={e => set('critical_margin_minutes', e.target.value)} />
+          {(p.critical_margin_minutes === null || p.critical_margin_minutes === undefined) && <div className="fbr-hint-suggested">Saran default: {SUGGESTED_POLICY_DEFAULTS.critical_margin_minutes} menit — review & submit utk menyimpan.</div>}
+        </Field>
+        <Field label="Watch Buffer (menit)" hint="Buffer tambahan setelah critical margin sebelum status naik ke Waspada.">
+          <input className="fbr-input" type="number" value={form.watch_buffer_minutes ?? ''} onChange={e => set('watch_buffer_minutes', e.target.value)} />
+          {(p.watch_buffer_minutes === null || p.watch_buffer_minutes === undefined) && <div className="fbr-hint-suggested">Saran default: {SUGGESTED_POLICY_DEFAULTS.watch_buffer_minutes} menit — review & submit utk menyimpan.</div>}
+        </Field>
+        <Field label="Safety Buffer — Mode" hint="FIXED = nominal tetap. PERCENTAGE = persentase dari lead_time_need. Hanya SATU mode aktif.">
+          <select className="select-input" style={{ width: '100%' }} value={form.safety_buffer_type ?? ''} onChange={e => set('safety_buffer_type', e.target.value)}>
+            <option value="">— tidak dipakai —</option>
+            <option value="FIXED">FIXED (nominal tetap)</option>
+            <option value="PERCENTAGE">PERCENTAGE (dari lead_time_need)</option>
+          </select>
+        </Field>
+        {form.safety_buffer_type === 'FIXED' && (
+          <Field label="Safety Buffer — Nominal Tetap"><input className="fbr-input" type="number" value={form.safety_buffer_fixed_amount ?? ''} onChange={e => set('safety_buffer_fixed_amount', e.target.value)} /></Field>
+        )}
+        {form.safety_buffer_type === 'PERCENTAGE' && (
+          <Field label="Safety Buffer (%) — dari lead_time_need"><input className="fbr-input" type="number" value={form.safety_buffer_percentage ?? ''} onChange={e => set('safety_buffer_percentage', e.target.value)} /></Field>
+        )}
+
+        <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '.04em', margin: '16px 0 8px' }}>
+          Threshold Legacy / Planning
+        </div>
+        <Field label="Batas Minimum Absolut"><input className="fbr-input" type="number" value={form.absolute_minimum_balance || ''} onChange={e => set('absolute_minimum_balance', e.target.value)} /></Field>
         <Field label="Emergency Threshold"><input className="fbr-input" type="number" value={form.emergency_threshold || ''} onChange={e => set('emergency_threshold', e.target.value)} /></Field>
         <Field label="Critical Threshold"><input className="fbr-input" type="number" value={form.critical_threshold || ''} onChange={e => set('critical_threshold', e.target.value)} /></Field>
         <Field label="Watch Threshold"><input className="fbr-input" type="number" value={form.watch_threshold || ''} onChange={e => set('watch_threshold', e.target.value)} /></Field>
@@ -903,7 +1118,6 @@ function Modal({ modal, banks, bankDetail, onClose, loading, error, run }) {
         <Field label="Sudden Drop Window (menit)"><input className="fbr-input" type="number" value={form.sudden_drop_window_minutes || ''} onChange={e => set('sudden_drop_window_minutes', e.target.value)} /></Field>
         <Field label="Sudden Drop Nominal"><input className="fbr-input" type="number" value={form.sudden_drop_amount_threshold || ''} onChange={e => set('sudden_drop_amount_threshold', e.target.value)} /></Field>
         <Field label="Sudden Drop Percentage (%)"><input className="fbr-input" type="number" value={form.sudden_drop_percentage_threshold || ''} onChange={e => set('sudden_drop_percentage_threshold', e.target.value)} /></Field>
-        <Field label="Safety Buffer (%)"><input className="fbr-input" type="number" value={form.safety_buffer_percentage || ''} onChange={e => set('safety_buffer_percentage', e.target.value)} /></Field>
         <Field label="Pembulatan Top Up"><input className="fbr-input" type="number" value={form.topup_rounding_amount || ''} onChange={e => set('topup_rounding_amount', e.target.value)} /></Field>
         <Field label="Aktifkan Policy">
           <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -1010,10 +1224,11 @@ function Modal({ modal, banks, bankDetail, onClose, loading, error, run }) {
   );
 }
 
-function Field({ label, children }) {
+function Field({ label, hint, children }) {
   return (
     <div className="fbr-field">
       <div className="fbr-field-label">{label}</div>
+      {hint && <div className="fbr-field-hint">{hint}</div>}
       {children}
     </div>
   );

@@ -297,6 +297,159 @@ function isSelfApproval(requesterUserId, approverUserId) {
   return String(requesterUserId) === String(approverUserId);
 }
 
+function round2(n) {
+  return n === null || n === undefined || !Number.isFinite(n) ? n : Math.round(n * 100) / 100;
+}
+
+/**
+ * Pilih snapshot "current" & "previous" dari daftar snapshot 1 bank (SUDAH
+ * terurut DESC by captured_at). Utk bank yang punya adapter rekonsiliasi
+ * (isReconciliationBacked) -- Input Saldo Manual TIDAK BOLEH menimpa balance
+ * yang lebih segar dari rekonsiliasi (spec item 5): kalau ada baris
+ * RECONCILIATION SAMA SEKALI, itu yang jadi "current", TERLEPAS ada baris
+ * MANUAL yang lebih baru captured_at-nya. MANUAL hanya jadi "current" kalau
+ * BELUM PERNAH ada baris RECONCILIATION utk bank ini (mis. sebelum sync
+ * pertama). Bank tanpa adapter rekonsiliasi TIDAK terpengaruh -- tetap
+ * captured_at DESC biasa (perilaku lama, tidak diubah).
+ */
+function pickCurrentAndPrevious(rowsForBank, isReconciliationBacked) {
+  if (!Array.isArray(rowsForBank)) return { snapshot: null, previousSnapshot: null };
+  if (!isReconciliationBacked) {
+    return { snapshot: rowsForBank[0] || null, previousSnapshot: rowsForBank[1] || null };
+  }
+  const reconRows = rowsForBank.filter(r => r.source === 'RECONCILIATION');
+  if (reconRows.length) {
+    const previous = reconRows[1] || rowsForBank.find(r => r.id !== reconRows[0].id) || null;
+    return { snapshot: reconRows[0], previousSnapshot: previous };
+  }
+  return { snapshot: rowsForBank[0] || null, previousSnapshot: rowsForBank[1] || null };
+}
+
+/**
+ * Delta saldo antara snapshot saat ini & snapshot valid sebelumnya (PURE) --
+ * dipakai kartu "Δ Saldo" FA Action Summary DAN sbg building block enrichment
+ * riwayat snapshot. `previous` null -> semua delta null (BUKAN 0 -- 0 berarti
+ * klaim "tidak ada perubahan", padahal sebenarnya "tidak ada pembanding").
+ */
+function computeBalanceMovement({ current, previous }) {
+  if (!current) return null;
+  const currentBalance = Number(current.available_balance);
+  if (!previous) {
+    return {
+      delta_amount: null, delta_percentage: null, direction: null,
+      current_captured_at: current.captured_at, previous_captured_at: null,
+      current_available_balance: currentBalance, previous_available_balance: null,
+      reason: 'Belum ada snapshot valid sebelumnya untuk dibandingkan.',
+    };
+  }
+  const previousBalance = Number(previous.available_balance);
+  const delta = round2(currentBalance - previousBalance);
+  const direction = delta > 0 ? 'UP' : (delta < 0 ? 'DOWN' : 'FLAT');
+  const deltaPercentage = previousBalance !== 0 ? round2((delta / Math.abs(previousBalance)) * 100) : null;
+  return {
+    delta_amount: delta, delta_percentage: deltaPercentage, direction,
+    current_captured_at: current.captured_at, previous_captured_at: previous.captured_at,
+    current_available_balance: currentBalance, previous_available_balance: previousBalance,
+    reason: null,
+  };
+}
+
+const MOVEMENT_CLASSIFICATION = {
+  NO_PREVIOUS: 'NO_PREVIOUS',
+  NO_CHANGE: 'NO_CHANGE',
+  RECONCILIATION_DATA_UNAVAILABLE: 'RECONCILIATION_DATA_UNAVAILABLE',
+  CONSISTENT_WITH_VERIFIED_TRANSACTIONS: 'CONSISTENT_WITH_VERIFIED_TRANSACTIONS',
+  LIKELY_INCOMING_FUNDS_UNVERIFIED: 'LIKELY_INCOMING_FUNDS_UNVERIFIED',
+  LIKELY_OPERATIONAL_OUTFLOW_UNVERIFIED: 'LIKELY_OPERATIONAL_OUTFLOW_UNVERIFIED',
+};
+
+/**
+ * Enrichment riwayat snapshot (PURE, tidak query DB) -- utk tiap snapshot,
+ * cari snapshot valid sebelumnya (skip yang sync_status ERROR), hitung delta,
+ * lalu breakdown interval itu jadi matched principal/fee (dari recon_results
+ * yang SUDAH matched, reuse row shape fetchRecentMatchedOutflows) + funding
+ * credit (dari getConfirmedFundingMutations, filter is_reversal=false) +
+ * residual (unmatched_or_unknown_movement). Kalau funding coverage TIDAK
+ * mencakup interval itu (interval mulai sebelum fundingCoverageFrom),
+ * funding/residual/classification dikembalikan null dgn alasan eksplisit --
+ * TIDAK PERNAH ditampilkan sbg 0 (0 = klaim pasti tidak ada funding, padahal
+ * sebenarnya "tidak diketahui").
+ *
+ * `snapshots` HARUS terurut DESC by captured_at (kontrak query existing).
+ * `outflowRows`: [{ principal, fee, matchedAt }] mencakup seluruh rentang
+ * snapshot yang mau di-enrich. `fundingMutations`: [{ amount,
+ * transaction_datetime, is_reversal, classification }] dari
+ * getConfirmedFundingMutations. `fundingCoverageFrom`: Date/null -- awal
+ * rentang waktu yang benar2 sudah di-query utk fundingMutations.
+ */
+function enrichSnapshotHistory({ snapshots, outflowRows = [], fundingMutations = [], fundingCoverageFrom = null }) {
+  if (!Array.isArray(snapshots) || !snapshots.length) return [];
+
+  const sumInRange = (rows, from, to, amountKey, timeKey) => {
+    let total = 0;
+    for (const r of rows) {
+      const t = r[timeKey] instanceof Date ? r[timeKey] : new Date(r[timeKey]);
+      if (Number.isNaN(t.getTime())) continue;
+      if (t > from && t <= to) total += Number(r[amountKey]) || 0;
+    }
+    return round2(total);
+  };
+
+  return snapshots.map((snap, idx) => {
+    // Cari snapshot valid sebelumnya (skip ERROR) -- indeks lebih besar = lebih lama krn DESC.
+    let previous = null;
+    for (let j = idx + 1; j < snapshots.length; j++) {
+      if (snapshots[j].sync_status !== 'ERROR' && snapshots[j].available_balance !== null && snapshots[j].available_balance !== undefined) {
+        previous = snapshots[j];
+        break;
+      }
+    }
+    const movement = computeBalanceMovement({ current: snap, previous });
+    if (!previous || movement.delta_amount === null) {
+      return { ...snap, movement, matched_principal_outflow_interval: null, verified_fee_outflow_interval: null,
+        funding_credit_interval: null, unmatched_or_unknown_movement_interval: null,
+        movement_classification: MOVEMENT_CLASSIFICATION.NO_PREVIOUS };
+    }
+
+    const from = new Date(previous.captured_at);
+    const to = new Date(snap.captured_at);
+    const matchedPrincipal = sumInRange(outflowRows, from, to, 'principal', 'matchedAt');
+    const verifiedFee = sumInRange(outflowRows, from, to, 'fee', 'matchedAt');
+
+    const coverageOk = fundingCoverageFrom && from >= new Date(fundingCoverageFrom);
+    let fundingCredit = null, unmatched = null, classification;
+    if (Math.abs(movement.delta_amount) < 1) {
+      classification = MOVEMENT_CLASSIFICATION.NO_CHANGE;
+    } else if (!coverageOk) {
+      classification = MOVEMENT_CLASSIFICATION.RECONCILIATION_DATA_UNAVAILABLE;
+    } else {
+      fundingCredit = sumInRange(
+        fundingMutations.filter(m => !m.is_reversal && m.classification === 'FUNDING'),
+        from, to, 'amount', 'transaction_datetime'
+      );
+      const expected = round2(fundingCredit - matchedPrincipal - verifiedFee);
+      unmatched = round2(movement.delta_amount - expected);
+      const tolerance = Math.max(1, Math.abs(movement.delta_amount) * 0.05);
+      if (Math.abs(unmatched) <= tolerance) {
+        classification = MOVEMENT_CLASSIFICATION.CONSISTENT_WITH_VERIFIED_TRANSACTIONS;
+      } else if (movement.delta_amount > 0) {
+        classification = MOVEMENT_CLASSIFICATION.LIKELY_INCOMING_FUNDS_UNVERIFIED;
+      } else {
+        classification = MOVEMENT_CLASSIFICATION.LIKELY_OPERATIONAL_OUTFLOW_UNVERIFIED;
+      }
+    }
+
+    return {
+      ...snap, movement,
+      matched_principal_outflow_interval: matchedPrincipal,
+      verified_fee_outflow_interval: verifiedFee,
+      funding_credit_interval: fundingCredit,
+      unmatched_or_unknown_movement_interval: unmatched,
+      movement_classification: classification,
+    };
+  });
+}
+
 module.exports = {
   toCents,
   centsToString,
@@ -310,4 +463,8 @@ module.exports = {
   TOPUP_TRANSITIONS,
   canTransitionTopup,
   isSelfApproval,
+  pickCurrentAndPrevious,
+  computeBalanceMovement,
+  enrichSnapshotHistory,
+  MOVEMENT_CLASSIFICATION,
 };
