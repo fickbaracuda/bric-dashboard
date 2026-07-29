@@ -29,17 +29,57 @@ const RECON_CHUNK_SIZE = 1500;
 /**
  * Parser angka aman — WAJIB cek typeof number DULU (insiden Speedcash: titik
  * desimal number asli ikut terhapus kalau diproses sebagai string).
+ *
+ * FIX (root cause salah 100x): versi lama membuang SEMUA titik & koma
+ * sekaligus tanpa membedakan pemisah ribuan dari pemisah desimal --
+ * "500,000.00" (format Barat: koma=ribuan, titik=desimal) jadi keliru
+ * 50.000.000 (dikali 100), bukan 500.000. Sama utk "500.000,00" (format
+ * Indonesia: titik=ribuan, koma=desimal). Fix: kalau ADA 2 jenis pemisah,
+ * yang PALING KANAN = desimal (dibuang, krn Rupiah tidak punya sen
+ * bermakna), sisanya = ribuan. Kalau HANYA 1 jenis pemisah & diikuti PERSIS
+ * 2 digit di akhir -> desimal (dibuang). Selain itu (mis. "500.000" tanpa
+ * desimal, atau "4.095.000" multi-titik) -> pemisah ribuan, digabung apa
+ * adanya.
  */
 function reconCleanNum_(value) {
   if (value === null || value === undefined) return null;
   if (typeof value === 'number') return isFinite(value) ? value : null;
-  const raw = String(value).trim();
+  let raw = String(value).trim();
   if (raw === '' || raw === '-') return null;
-  let cleaned = raw.replace(/rp/gi, '').trim();
-  cleaned = cleaned.replace(/[.,]/g, '');
-  cleaned = cleaned.replace(/[^0-9-]/g, '');
+  raw = raw.replace(/rp/gi, '').trim();
+  if (raw === '' || raw === '-') return null;
+
+  let cleaned = raw.replace(/[^0-9.,-]/g, '');
   if (cleaned === '' || cleaned === '-') return null;
-  const n = Number(cleaned);
+
+  const hasDot = cleaned.indexOf('.') !== -1;
+  const hasComma = cleaned.indexOf(',') !== -1;
+  let normalized;
+
+  if (hasDot && hasComma) {
+    const lastDot = cleaned.lastIndexOf('.');
+    const lastComma = cleaned.lastIndexOf(',');
+    const decimalSep = lastDot > lastComma ? '.' : ',';
+    const thousandsSep = decimalSep === '.' ? ',' : '.';
+    normalized = cleaned.split(thousandsSep).join('');
+    const decIdx = normalized.lastIndexOf(decimalSep);
+    normalized = decIdx === -1 ? normalized : normalized.slice(0, decIdx);
+  } else if (hasDot || hasComma) {
+    const sep = hasDot ? '.' : ',';
+    const parts = cleaned.split(sep);
+    const lastPart = parts[parts.length - 1];
+    if (parts.length === 2 && lastPart.length === 2) {
+      normalized = parts[0]; // 1 pemisah + persis 2 digit di akhir -> desimal (sen), dibuang
+    } else {
+      normalized = parts.join(''); // pemisah ribuan
+    }
+  } else {
+    normalized = cleaned;
+  }
+
+  normalized = normalized.replace(/[^0-9-]/g, '');
+  if (normalized === '' || normalized === '-') return null;
+  const n = Number(normalized);
   return isFinite(n) ? n : null;
 }
 
@@ -121,6 +161,29 @@ function reconReadFp_() {
 }
 
 /**
+ * Deteksi presisi jam kolom Transaction Date dari TAMPILAN sel (bukan nilai
+ * mentah) — root cause fix DUPLICATE_BANK massal (lihat discovery report):
+ * sel date-only yang dibaca via getValues() SELALU jadi Date object jam
+ * 00:00:00, tidak bisa dibedakan dari transaksi yang genuinely tengah
+ * malam. Format asli OCBC pakai titik dua (HH:mm[:ss]) utk jam, garis
+ * miring (DD/MM/YYYY) utk tanggal -- jadi pola titik dua APA PUN di teks
+ * tampilan sudah cukup jadi bukti ada jam. Fallback titik (HH.mm[.ss])
+ * disertakan utk jaga-jaga locale lain, TAPI dijaga supaya tidak salah
+ * tangkap pola tanggal "DD.MM.YYYY" (selalu diikuti tahun 4 digit).
+ */
+function reconDetectTimePrecision_(displayValue) {
+  const s = String(displayValue || '').trim();
+  if (!s) return 'DATE_ONLY';
+  const colonMatch = /(\d{1,2}):(\d{2})(?::(\d{2}))?/.exec(s);
+  if (colonMatch) return colonMatch[3] !== undefined ? 'SECOND' : 'MINUTE';
+  if (!/\d{1,2}\.\d{1,2}\.\d{4}/.test(s)) {
+    const dotMatch = /(?:^|\s)(\d{1,2})\.(\d{2})(?:\.(\d{2}))?(?:\s|$)/.exec(s);
+    if (dotMatch) return dotMatch[3] !== undefined ? 'SECOND' : 'MINUTE';
+  }
+  return 'DATE_ONLY';
+}
+
+/**
  * Sheet "DATA BANK OCBC": info rekening baris 1-8, header baris 10, data
  * mulai baris 11. A..H dipetakan, I & J (kolom bantuan) SENGAJA diabaikan.
  */
@@ -130,6 +193,14 @@ function reconReadBank_() {
   if (!sheet) throw new Error('Sheet "' + RECON_SHEET_BANK + '" tidak ditemukan.');
 
   const values = sheet.getDataRange().getValues();
+  // getDisplayValues() -- TEKS PERSIS spt ditampilkan di sel (menghormati
+  // format cell), dipakai KHUSUS utk mendeteksi apakah kolom Transaction
+  // Date (kolom A) benar-benar menampilkan jam atau cuma tanggal. getValues()
+  // TIDAK bisa dipakai utk ini -- Date object dari sel date-only SELALU
+  // punya komponen jam 00:00:00 tersimpan (krn timestamp internal Sheets),
+  // tidak ada cara membedakan "genuinely tengah malam" dari "date-only yg
+  // di-default-kan" hanya dari getValues() saja.
+  const displayValues = sheet.getDataRange().getDisplayValues();
 
   // ── Summary rekening — layout PERSIS dikonfirmasi dari data riil (baris
   // 1-5, sisanya 6-8 kosong): 2 pasang label:value per baris (kolom A/B dan
@@ -180,19 +251,24 @@ function reconReadBank_() {
   const rows = [];
   for (let r = dataStartRow; r < values.length; r++) {
     const row = values[r];
+    const displayRow = displayValues[r] || [];
     const reference = String(row[2] || '').trim();
     const description = String(row[4] || '').trim();
     const debit = reconCleanNum_(row[5]);
     const credit = reconCleanNum_(row[6]);
     if (!reference && !description && debit === null && credit === null) continue; // baris kosong
+    const timePrecision = reconDetectTimePrecision_(displayRow[0]);
+    const hasReliableTime = timePrecision === 'MINUTE' || timePrecision === 'SECOND';
     rows.push({
       transaction_date: reconToIsoDateOnly_(row[0]),
-      // transaction_date_time: presisi jam-menit-detik (kalau ada di sel,
-      // Date object atau string) — dipakai backend utk coverage-aware
-      // reconciliation (menghitung boundary minute snapshot 5.000 baris).
+      // transaction_date_time: presisi jam-menit-detik -- HANYA diisi kalau
+      // time_precision eksplisit MINUTE/SECOND (tampilan sel benar2
+      // mengandung jam). DATE_ONLY -> null, TIDAK PERNAH dikirim sbg jam
+      // 00:00 (root cause DUPLICATE_BANK massal, lihat discovery report).
       // reconToIso_ SUDAH pakai Asia/Jakarta eksplisit (bukan timezone
       // server), sama seperti time_response di DATA FP.
-      transaction_date_time: reconToIso_(row[0]),
+      transaction_date_time: hasReliableTime ? reconToIso_(row[0]) : null,
+      time_precision: timePrecision,
       value_date: reconToIsoDateOnly_(row[1]),
       reference_no: reference || null,
       cheque_no: String(row[3] || '').trim() || null,
@@ -308,13 +384,54 @@ function reconValidateDates_(fpRows, bankRows, businessDate) {
   };
 }
 
+/**
+ * Tanggal PALING SERING muncul dari daftar tanggal ISO (yyyy-MM-dd) -- null
+ * kalau daftar kosong. Deterministik: kalau seri (>1 tanggal sama-sama
+ * paling sering), tanggal yang PERTAMA ditemukan menang (stabil, tidak
+ * bergantung urutan objek internal).
+ */
+function reconComputeMajorityDate_(dates) {
+  const counts = {};
+  let best = null, bestCount = 0;
+  for (const d of dates) {
+    if (!d) continue;
+    counts[d] = (counts[d] || 0) + 1;
+    if (counts[d] > bestCount) { bestCount = counts[d]; best = d; }
+  }
+  return best;
+}
+
+/**
+ * business_date -- root cause fix (lihat discovery report point 3): versi
+ * lama SELALU pakai new Date() (tanggal eksekusi script), berisiko salah
+ * kalau Finance sync ulang data historis. Sekarang diambil dari tanggal
+ * yang PALING SERING muncul di DATA BANK OCBC (prioritas 1), fallback ke
+ * tanggal mayoritas time_response DATA FP (prioritas 2) kalau bank kosong,
+ * fallback TERAKHIR ke tanggal hari ini HANYA kalau kedua sumber data genap
+ * kosong/tidak valid (dicatat sbg WARNING di Execution Log, bukan gagal
+ * diam-diam).
+ */
+function reconComputeBusinessDate_(bankRows, fpRowsAll) {
+  const bankDates = bankRows.map(function (r) { return r.transaction_date; }).filter(Boolean);
+  let businessDate = reconComputeMajorityDate_(bankDates);
+  if (businessDate) return businessDate;
+
+  const fpDates = fpRowsAll.map(function (r) { return reconExtractIsoDate_(r.time_response); }).filter(Boolean);
+  businessDate = reconComputeMajorityDate_(fpDates);
+  if (businessDate) return businessDate;
+
+  const today = new Date();
+  businessDate = Utilities.formatDate(today, 'Asia/Jakarta', 'yyyy-MM-dd');
+  Logger.log('WARNING: business_date tidak bisa ditentukan dari data (DATA BANK OCBC & DATA FP sama-sama kosong/tanpa tanggal valid) -- fallback ke tanggal hari ini: ' + businessDate);
+  return businessDate;
+}
+
 function reconBuildPayloadChunks_() {
   const props = PropertiesService.getScriptProperties();
   const fpRowsAll = reconReadFp_();
   const bankData = reconReadBank_();
 
-  const today = new Date();
-  const businessDate = Utilities.formatDate(today, 'Asia/Jakarta', 'yyyy-MM-dd');
+  const businessDate = reconComputeBusinessDate_(bankData.rows, fpRowsAll);
 
   // Validasi tanggal SEBELUM chunking/push -- lihat catatan panjang
   // reconValidateDates_. fpRows yg dipakai utk chunk & dikirim adalah versi

@@ -160,16 +160,61 @@ function parseOcbcRawDateTimeFallback(rawData) {
 }
 
 /**
+ * Deteksi tengah malam WIB PERSIS (00:00:00.000) -- dipakai utk menolak hasil
+ * fallback date-only sbg "waktu terpercaya". hour12:false pada beberapa versi
+ * ICU/Node mengembalikan "24" bukan "00" utk tengah malam persis (insiden
+ * serupa sudah pernah terjadi & di-fix di modul lain), jadi dinormalisasi
+ * dulu sebelum dibandingkan.
+ */
+function isOcbcMidnightWib(date) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return false;
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  }).formatToParts(date).reduce((a, p) => { a[p.type] = p.value; return a; }, {});
+  const hourFixed = parts.hour === '24' ? '00' : parts.hour;
+  return hourFixed === '00' && parts.minute === '00' && parts.second === '00';
+}
+
+/**
  * Resolusi tunggal jam presisi transaksi bank OCBC, dipakai di SEMUA jalur
  * (SNAPSHOT insert & BACKFILL): `transaction_date_time` (toleran ISO ATAU
- * "DD/MM/YYYY HH:mm" mentah) > fallback raw_data.A > date-only (fallback
- * terakhir, tanpa presisi jam -- coverage classification default aman ke
- * IN_BANK_COVERAGE).
+ * "DD/MM/YYYY HH:mm" mentah) > fallback raw_data.A > date-only.
+ *
+ * INSIDEN NYATA (root cause DUPLICATE_BANK massal, lihat discovery report):
+ * versi lama men-treat hasil fallback date-only (SELALU jam 00:00:00 WIB,
+ * lihat reconToIso_/parseTimeResponse) sbg waktu VALID. Sel yang genuinely
+ * date-only di Google Sheets kadang terbaca beda antar sync (kadang jam
+ * asli kebaca, kadang jatuh ke date-only) -- karena transaction_date_time
+ * ikut fingerprint, 1 transaksi fisik yang sama tersimpan sbg BEBERAPA baris
+ * archive dgn fingerprint berbeda, menghasilkan >1 "principal" match saat
+ * grouping -> DUPLICATE_BANK palsu.
+ *
+ * Fix: row.time_precision === 'DATE_ONLY' (dikirim Apps Script versi baru)
+ * -> LANGSUNG null, tidak pernah coba fallback apa pun. PENTING: bug nyata
+ * di produksi TERNYATA muncul lewat TIER 1 (`transaction_date_time`
+ * eksplisit) juga, BUKAN cuma tier 3 -- Apps Script versi LAMA (belum
+ * di-update) sudah men-generate ISO string "...T00:00:00+07:00" via
+ * reconToIso_() utk sel date-only SEBELUM dikirim, jadi tier 1 tetap
+ * "berhasil" parse walau datanya sebenarnya tidak terpercaya. Karena Apps
+ * Script lama TIDAK mengirim time_precision sama sekali, backend TIDAK BISA
+ * membedakan tier mana yang menghasilkan nilai akhir -- satu-satunya sinyal
+ * yang tersisa adalah: hasil akhirnya PERSIS tengah malam WIB. Maka guard
+ * ini diterapkan ke HASIL AKHIR (gabungan tier 1-3), bukan cuma tier 3, dan
+ * HANYA kalau time_precision tidak eksplisit MINUTE/SECOND dari Apps Script
+ * versi baru (yang berarti genuinely ADA jam, walau kebetulan tengah malam).
  */
 function resolveOcbcTransactionDateTime(row) {
-  return parseFlexibleOcbcDateTime(row.transaction_date_time)
+  if (row.time_precision === 'DATE_ONLY') return null;
+
+  const resolved = parseFlexibleOcbcDateTime(row.transaction_date_time)
     || parseOcbcRawDateTimeFallback(row.raw_data)
     || parseTimeResponse(row.transaction_date);
+  if (!resolved) return null;
+
+  const hasExplicitPrecision = row.time_precision === 'MINUTE' || row.time_precision === 'SECOND';
+  if (!hasExplicitPrecision && isOcbcMidnightWib(resolved)) return null;
+
+  return resolved;
 }
 
 function numEq(a, b) {
@@ -947,6 +992,53 @@ async function upsertBankArchiveRows(client, archiveRows) {
 }
 
 /**
+ * Dedupe LOGIS baris archive SEBELUM matching -- TIDAK menghapus/mengubah
+ * apa pun di DB (archive tetap kumulatif & utuh), hanya memilih SATU
+ * representasi terbaik per transaksi fisik saat membangun input engine.
+ * Diperlukan krn baris archive HISTORIS yang SUDAH terlanjur terduplikasi
+ * (insiden date-only -> jam palsu 00:00, lihat discovery report/fix
+ * resolveOcbcTransactionDateTime di atas) tetap ada di DB selamanya --
+ * tanpa dedupe di titik baca ini, business_date mana pun yang sudah
+ * terdampak akan TERUS menghasilkan DUPLICATE_BANK palsu setiap kali
+ * batch-nya di-reconcile ulang, walau bug penyebabnya sudah diperbaiki.
+ *
+ * Key (bank_code & business_date SUDAH konstan dari WHERE clause pemanggil,
+ * tidak perlu diulang di sini): account_no + reference_no + description
+ * (dinormalisasi, REUSE normalizeDescriptionForFingerprint yang sudah ada)
+ * + debit + credit. Prioritas representasi kalau ada >1 utk key yang sama:
+ *   1. transactionDateTime non-null menang atas null (representasi dgn jam
+ *      asli lebih terpercaya drpd date-only).
+ *   2. Kalau masih ambigu (sama2 punya jam atau sama2 tidak), firstSeenAt
+ *      PALING AWAL menang -- deterministik, tidak bergantung urutan array.
+ */
+function normalizeOcbcArchiveDedupeKey(row) {
+  return [
+    normalizeForFingerprint(row.accountNo),
+    normalizeForFingerprint(row.referenceNo),
+    normalizeDescriptionForFingerprint(row.description),
+    normalizeNumForFingerprint(row.debit),
+    normalizeNumForFingerprint(row.credit),
+  ].join('|');
+}
+
+function dedupeOcbcArchiveRowsForMatching(rows) {
+  const bestByKey = new Map();
+  for (const row of rows) {
+    const key = normalizeOcbcArchiveDedupeKey(row);
+    const existing = bestByKey.get(key);
+    if (!existing) { bestByKey.set(key, row); continue; }
+    const rowHasTime = row.transactionDateTime instanceof Date && !Number.isNaN(row.transactionDateTime.getTime());
+    const existingHasTime = existing.transactionDateTime instanceof Date && !Number.isNaN(existing.transactionDateTime.getTime());
+    if (rowHasTime && !existingHasTime) { bestByKey.set(key, row); continue; }
+    if (!rowHasTime && existingHasTime) continue;
+    const rowFirst = row.firstSeenAt instanceof Date ? row.firstSeenAt.getTime() : Infinity;
+    const existingFirst = existing.firstSeenAt instanceof Date ? existing.firstSeenAt.getTime() : Infinity;
+    if (rowFirst < existingFirst) bestByKey.set(key, row);
+  }
+  return [...bestByKey.values()];
+}
+
+/**
  * Jalankan engine coverage-aware atas 1 batch & simpan hasilnya. Dipakai
  * oleh SNAPSHOT (chunk terakhir) maupun BACKFILL (setelah archive
  * diperkaya) — supaya logic "ambil FP, ambil archive, jalankan engine,
@@ -995,13 +1087,19 @@ async function runOcbcEngineAndPersist(client, { batchId, bankCode, accountNo, b
     `SELECT *, business_date::text AS business_date, value_date::text AS value_date FROM recon_bank_archive WHERE ${archiveWhere}`,
     archiveParams
   );
-  const bankForEngine = archiveRes.rows.map(r => ({
+  const bankForEngineRaw = archiveRes.rows.map(r => ({
     accountNo: r.account_no, transactionDate: r.business_date,
     transactionDateTime: r.transaction_date_time ? new Date(r.transaction_date_time) : null,
     referenceNo: r.reference_no, description: r.description,
     debit: r.debit !== null ? Number(r.debit) : null, credit: r.credit !== null ? Number(r.credit) : null,
     fromArchive: r.source_snapshot_id !== snapshotMeta.id,
+    firstSeenAt: r.first_seen_at ? new Date(r.first_seen_at) : null,
   }));
+  // Dedupe LOGIS (lihat dedupeOcbcArchiveRowsForMatching di atas) -- baris
+  // archive historis yang sudah terlanjur terduplikasi (jam palsu 00:00 vs
+  // jam asli) digabung jadi 1 representasi per transaksi fisik SEBELUM
+  // grouping/matching, TANPA mengubah apa pun di recon_bank_archive.
+  const bankForEngine = dedupeOcbcArchiveRowsForMatching(bankForEngineRaw);
 
   const coverage = {
     sourceLimit: snapshotMeta.sourceLimit, bankRowCount: snapshotMeta.rowCount, isSourceTruncated: snapshotMeta.isTruncated,
@@ -2291,6 +2389,9 @@ module.exports = {
   parseOcbcRawDateTimeFallback,
   parseFlexibleOcbcDateTime,
   resolveOcbcTransactionDateTime,
+  isOcbcMidnightWib,
+  normalizeOcbcArchiveDedupeKey,
+  dedupeOcbcArchiveRowsForMatching,
   DEFAULT_SOURCE_LIMIT,
   // exported utk script repair (backend/scripts/repair-reconciliation-cross-date.js)
   runOcbcEngineAndPersist,

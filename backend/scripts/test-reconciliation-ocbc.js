@@ -10,6 +10,7 @@ const {
   reconcileTransactionsWithCoverage, calculateOcbcCoverage, classifyFpCoverage, isCompleteOcbcGroup,
   buildOcbcBankArchiveRows, computeBankRowFingerprint, normalizeDescriptionForFingerprint,
   parseOcbcRawDateTimeFallback, resolveOcbcTransactionDateTime, parseFlexibleOcbcDateTime,
+  isOcbcMidnightWib, normalizeOcbcArchiveDedupeKey, dedupeOcbcArchiveRowsForMatching,
   buildTransactionsQuery, normalizeCanonicalKey, buildOcbcBankGroups,
   computeOcbcBalanceNeedsPeriodic, dateRangeArray,
 } = require('../src/routes/warroom-reconciliation');
@@ -470,10 +471,6 @@ test('TEST 12d: resolveOcbcTransactionDateTime -- prioritas: transaction_date_ti
   assert.strictEqual(explicit.toISOString(), '2026-07-13T03:00:00.000Z');
   const viaRawData = resolveOcbcTransactionDateTime({ transaction_date_time: null, raw_data: { A: '13/07/2026 19:48' }, transaction_date: '13/07/2026' });
   assert.strictEqual(viaRawData.toISOString(), '2026-07-13T12:48:00.000Z');
-  // tanpa raw_data.A yang cocok, jatuh ke parseTimeResponse(transaction_date) apa adanya
-  // (perilaku lama, termasuk keterbatasannya utk string non-ISO -- bukan cakupan fallback ini)
-  const dateOnly = resolveOcbcTransactionDateTime({ transaction_date_time: null, raw_data: {}, transaction_date: '2026-07-13' });
-  assert.ok(dateOnly instanceof Date && !Number.isNaN(dateOnly.getTime()));
 });
 test('TEST 12e: resolveOcbcTransactionDateTime -- REGRESI insiden nyata: transaction_date_time berisi string mentah "DD/MM/YYYY HH:mm" (bukan ISO, dari reconToIso_ Apps Script yang salah format utk sel TEXT) -- HARUS tetap ter-parse benar, bukan diam-diam null', () => {
   const dt = resolveOcbcTransactionDateTime({ transaction_date_time: '13/07/2026 19:48', raw_data: { A: '13/07/2026 19:48' }, transaction_date: '13/07/2026' });
@@ -483,9 +480,105 @@ test('TEST 12e: resolveOcbcTransactionDateTime -- REGRESI insiden nyata: transac
 test('TEST 12f: parseFlexibleOcbcDateTime -- terima ISO maupun "DD/MM/YYYY[ HH:mm]" mentah, tanggal>12 tidak salah tafsir MM/DD', () => {
   assert.strictEqual(parseFlexibleOcbcDateTime('2026-07-13T05:09:09.000Z').toISOString(), '2026-07-13T05:09:09.000Z');
   assert.strictEqual(parseFlexibleOcbcDateTime('25/12/2026 08:05').toISOString(), '2026-12-25T01:05:00.000Z');
-  assert.strictEqual(parseFlexibleOcbcDateTime('13/07/2026').toISOString(), '2026-07-12T17:00:00.000Z'); // date-only -> tengah malam WIB
+  // parseFlexibleOcbcDateTime SENDIRI (parser jam mentah tingkat rendah)
+  // TETAP menghasilkan tengah malam WIB utk string date-only -- ini BENAR &
+  // TIDAK diubah, krn fungsi ini murni parsing (tidak menilai "terpercaya
+  // atau tidak"). Keputusan "date-only -> tidak terpercaya" ada SATU
+  // TINGKAT DI ATAS, di resolveOcbcTransactionDateTime() (lihat TEST 12g-12h
+  // di bawah) -- lihat juga catatan panjang di kode & discovery report.
+  assert.strictEqual(parseFlexibleOcbcDateTime('13/07/2026').toISOString(), '2026-07-12T17:00:00.000Z');
   assert.strictEqual(parseFlexibleOcbcDateTime(''), null);
   assert.strictEqual(parseFlexibleOcbcDateTime(null), null);
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// TEST 12g-12l: FIX ROOT CAUSE DUPLICATE_BANK MASSAL -- date-only OCBC
+// (Post Date/Value Date tanpa jam) TIDAK PERNAH lagi diperlakukan sbg jam
+// 00:00:00 WIB yang terpercaya. Lihat discovery report (root cause: 1
+// transaksi fisik ke-archive 2x dgn fingerprint berbeda -- generasi
+// "fake-midnight" & generasi "jam asli" -- krn transaction_date_time ikut
+// fingerprint).
+// ═══════════════════════════════════════════════════════════════════════
+
+test('TEST 12g: resolveOcbcTransactionDateTime -- date-only via time_precision eksplisit (Apps Script baru) -> null, BUKAN 00:00', () => {
+  const r = resolveOcbcTransactionDateTime({ transaction_date_time: null, time_precision: 'DATE_ONLY', raw_data: {}, transaction_date: '2026-07-29' });
+  assert.strictEqual(r, null);
+});
+
+test('TEST 12h: resolveOcbcTransactionDateTime -- REGRESI insiden nyata: Apps Script LAMA (tanpa time_precision) mengirim transaction_date_time = ISO tengah-malam WIB persis (hasil reconToIso_() utk sel date-only) -> HARUS null, bukan dipercaya sbg jam valid', () => {
+  const r = resolveOcbcTransactionDateTime({ transaction_date_time: '2026-07-29T00:00:00+07:00', raw_data: { A: '29/07/2026' }, transaction_date: '2026-07-29' });
+  assert.strictEqual(r, null, 'jam palsu 00:00 WIB dari date-only TIDAK boleh dipercaya -- ini akar masalah DUPLICATE_BANK massal');
+});
+
+test('TEST 12i: resolveOcbcTransactionDateTime -- timed row (jam asli, bukan date-only) TETAP menghasilkan waktu valid', () => {
+  const r = resolveOcbcTransactionDateTime({ transaction_date_time: '2026-07-29T09:34:23+07:00', raw_data: { A: '29/07/2026 09:34:23' }, transaction_date: '2026-07-29' });
+  assert.ok(r instanceof Date && !Number.isNaN(r.getTime()));
+  assert.strictEqual(r.toISOString(), '2026-07-29T02:34:23.000Z');
+});
+
+test('TEST 12j: resolveOcbcTransactionDateTime -- time_precision=MINUTE/SECOND eksplisit, KEBETULAN genuinely tengah malam -> TETAP dipercaya (bukan ditolak)', () => {
+  const r = resolveOcbcTransactionDateTime({ transaction_date_time: '2026-07-29T00:00:00+07:00', time_precision: 'MINUTE', raw_data: {}, transaction_date: '2026-07-29' });
+  assert.ok(r instanceof Date && !Number.isNaN(r.getTime()), 'time_precision eksplisit MINUTE berarti Apps Script YAKIN ada jam -- tidak boleh ditolak hanya krn kebetulan 00:00');
+  assert.strictEqual(r.toISOString(), '2026-07-28T17:00:00.000Z');
+});
+
+test('TEST 12k: calculateOcbcCoverage -- baris tanpa transactionDateTime (hasil date-only yg sudah di-null-kan) diabaikan dari oldest/newest & boundary, TIDAK mencemari trusted_coverage_start', () => {
+  const bankRows = [];
+  for (let i = 0; i < 5000; i++) bankRows.push({ transactionDateTime: new Date(`2026-07-29T${String(9 + Math.floor(i / 400)).padStart(2, '0')}:00:00+07:00`) });
+  // 50 baris date-only (transactionDateTime null, spt hasil resolveOcbcTransactionDateTime yg sudah di-fix) -- TIDAK boleh dianggap "paling tua"
+  for (let i = 0; i < 50; i++) bankRows.push({ transactionDateTime: null });
+  const coverage = calculateOcbcCoverage(bankRows, { sourceLimit: 5000 });
+  assert.strictEqual(coverage.isSourceTruncated, true);
+  // oldest HARUS dari baris timed (jam 09:xx), BUKAN null/ikut baris tanpa jam
+  assert.ok(coverage.snapshotOldestTime.toISOString().startsWith('2026-07-29T02:'), `oldest harus dari jam 09:xx WIB (02:xx UTC), got ${coverage.snapshotOldestTime.toISOString()}`);
+});
+
+test('TEST 12l: dedupeOcbcArchiveRowsForMatching -- date-only & timed row dgn reference/debit/credit/description SAMA digabung jadi 1 transaksi fisik (prioritas: row dgn transactionDateTime non-null menang)', () => {
+  const desc = 'CASA OUT BI FAST BUDI SANTOSO/FA12345';
+  const fakeMidnightPrincipal = { accountNo: '123', referenceNo: 'REF001', description: desc, debit: 100000, credit: null, transactionDateTime: null, firstSeenAt: new Date('2026-07-29T03:10:50Z') };
+  const fakeMidnightFee = { accountNo: '123', referenceNo: 'REF001', description: desc, debit: 25, credit: null, transactionDateTime: null, firstSeenAt: new Date('2026-07-29T03:10:50Z') };
+  const timedPrincipal = { accountNo: '123', referenceNo: 'REF001', description: desc, debit: 100000, credit: null, transactionDateTime: new Date('2026-07-29T02:34:23Z'), firstSeenAt: new Date('2026-07-29T03:35:12Z') };
+  const timedFee = { accountNo: '123', referenceNo: 'REF001', description: desc, debit: 25, credit: null, transactionDateTime: new Date('2026-07-29T02:34:23Z'), firstSeenAt: new Date('2026-07-29T03:35:12Z') };
+  const deduped = dedupeOcbcArchiveRowsForMatching([fakeMidnightPrincipal, fakeMidnightFee, timedPrincipal, timedFee]);
+  assert.strictEqual(deduped.length, 2, `harus 2 baris (1 principal + 1 fee), got ${deduped.length}`);
+  assert.ok(deduped.every(r => r.transactionDateTime !== null), 'representasi yg menang harus yg PUNYA jam (timed), bukan fake-midnight');
+});
+
+test('TEST 12m: dedupeOcbcArchiveRowsForMatching + reconcileTransactionsWithCoverage -- principal + fee Rp25 TETAP MATCHED setelah dedupe (bukti fix DUPLICATE_BANK)', () => {
+  const desc = 'CASA OUT BI FAST BUDI SANTOSO/FA12345';
+  const rawArchiveRows = [
+    { accountNo: null, referenceNo: 'REF002', description: desc, debit: 100000, credit: null, transactionDateTime: null, firstSeenAt: new Date('2026-07-29T03:10:50Z') },
+    { accountNo: null, referenceNo: 'REF002', description: desc, debit: 25, credit: null, transactionDateTime: null, firstSeenAt: new Date('2026-07-29T03:10:50Z') },
+    { accountNo: null, referenceNo: 'REF002', description: desc, debit: 100000, credit: null, transactionDateTime: new Date('2026-07-29T02:34:23Z'), firstSeenAt: new Date('2026-07-29T03:35:12Z') },
+    { accountNo: null, referenceNo: 'REF002', description: desc, debit: 25, credit: null, transactionDateTime: new Date('2026-07-29T02:34:23Z'), firstSeenAt: new Date('2026-07-29T03:35:12Z') },
+  ];
+  const dedupedRows = dedupeOcbcArchiveRowsForMatching(rawArchiveRows);
+  const fpRows = [fp('REF002', 100000, { timeResponse: new Date('2026-07-29T02:34:00Z') })];
+  const { results } = reconcileTransactionsWithCoverage(fpRows, dedupedRows, { expectedFee: 25 }, new Date('2026-07-29T05:00:00Z'));
+  assert.strictEqual(results.length, 1);
+  assert.strictEqual(results[0].reconStatus, 'MATCHED', `harus MATCHED setelah dedupe, got ${results[0].reconStatus} (notes: ${results[0].notes})`);
+  assert.strictEqual(results[0].bankPrincipal, 100000);
+  assert.strictEqual(results[0].bankFee, 25);
+});
+
+test('TEST 12n: dua principal yang BENAR-BENAR berbeda (transaksi fisik berbeda, kebetulan nominal sama) TETAP DUPLICATE_BANK setelah dedupe -- dedupe TIDAK menyembunyikan duplikat asli', () => {
+  // Dedupe key SENGAJA tidak mengikutkan transactionDateTime (representasi
+  // date-only vs timed utk TRANSAKSI FISIK YANG SAMA justru harus digabung,
+  // lihat TEST 12l/12m) -- yang membedakan 2 transaksi fisik BERBEDA adalah
+  // description, BUKAN jam. Simulasikan reference_no SAMA (1 grup/canonical
+  // key) dgn 2 baris berdescription beda yang SAMA-SAMA kebetulan cocok
+  // nominal FP (skenario nyata "dua principal beda" yang harus tetap
+  // DUPLICATE_BANK, BUKAN disembunyikan oleh dedupe).
+  const genuinelyDifferent = [
+    { accountNo: null, referenceNo: 'REF005', description: 'CASA OUT BI FAST A/FA1', debit: 100000, credit: null, transactionDateTime: new Date('2026-07-29T02:00:00Z'), firstSeenAt: new Date('2026-07-29T02:01:00Z') },
+    { accountNo: null, referenceNo: 'REF005', description: 'CASA OUT BI FAST B/FA2', debit: 100000, credit: null, transactionDateTime: new Date('2026-07-29T03:00:00Z'), firstSeenAt: new Date('2026-07-29T03:01:00Z') },
+  ];
+  const dedupedGenuine = dedupeOcbcArchiveRowsForMatching(genuinelyDifferent);
+  assert.strictEqual(dedupedGenuine.length, 2, 'dedupe TIDAK boleh menggabung 2 baris principal yg genuinely berbeda (description berbeda)');
+  const fpRows = [fp('REF005', 100000, { timeResponse: new Date('2026-07-29T02:00:00Z') })];
+  const { results } = reconcileTransactionsWithCoverage(fpRows, dedupedGenuine, { expectedFee: 25 }, new Date('2026-07-29T05:00:00Z'));
+  assert.strictEqual(results.length, 1);
+  assert.strictEqual(results[0].reconStatus, 'DUPLICATE_BANK', `2 principal genuinely berbeda harus tetap DUPLICATE_BANK, got ${results[0].reconStatus}`);
 });
 
 // ── TEST 8: resolution manual + audit log tetap ada lintas resync ───────
