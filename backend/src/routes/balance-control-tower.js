@@ -32,9 +32,61 @@ const {
 } = require('../utils/balanceControlTower');
 const { computeBurnRateStats, buildForecastOutput } = require('../reconciliation/balanceForecast');
 const { getLatestVerifiedBankPosition, getConfirmedFundingMutations, isSupportedBank } = require('../reconciliation/bankPosition');
+const { computeOperationalCalculationForBank } = require('../balanceControlTower/operationalDataAccess');
 
 function isoDateJakarta(date) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(date);
+}
+
+/**
+ * Resolusi status FINAL — SATU tempat, dipakai summary/detail/alert engine
+ * SEKALIGUS, supaya old & new formula TIDAK PERNAH aktif bersamaan utk bank
+ * yang sama:
+ *   1. Sudden-drop (evaluateSuddenDrop) -- prioritas tertinggi, TIDAK berubah.
+ *   2. Kalau bank didukung mesin operasional (operationalDataAccess) DAN
+ *      berhasil dihitung -> pakai status/alasan dari SANA (intraday burn
+ *      window, BUKAN average_burn_rate 14 hari). Cascade forecast lama
+ *      (classifyBankStatusDetailed dgn `forecast`) TIDAK dipanggil sama
+ *      sekali utk bank ini lagi.
+ *   3. Excess balance (legacy, manual policy) -- tetap dicek SETELAH mesin
+ *      baru, HANYA kalau hasilnya SAFE (mempertahankan perilaku lama tanpa
+ *      duplikasi threshold dinamis).
+ *   4. Fallback: bank TANPA adapter rekonsiliasi -> cascade manual-policy
+ *      lama TANPA forecast (backward-compatible, tidak berubah).
+ */
+async function resolveFinalStatus({ bank, snapshot, previousSnapshot, policy, now }) {
+  const suddenDrop = evaluateSuddenDrop({ snapshot, previousSnapshot, policy: policy || {}, now });
+  if (suddenDrop.triggered) {
+    return {
+      status: STATUS.SUDDEN_DROP,
+      reason: `Penurunan saldo Rp${Math.round(suddenDrop.dropAmount).toLocaleString('id-ID')} (${suddenDrop.dropPercentage.toFixed(1)}%) terdeteksi dalam window sudden-drop.`,
+      operational: null,
+    };
+  }
+
+  let operational = null;
+  try {
+    operational = await computeOperationalCalculationForBank({ pool, bank, policy, STATUS, now });
+  } catch (e) {
+    console.error(`computeOperationalCalculationForBank(${bank.bank_code}) error:`, e.message);
+  }
+
+  if (operational) {
+    let status = operational.operational_status;
+    let reason = operational.status_reason;
+    if (status === STATUS.SAFE && policy && policy.excess_balance_threshold !== null && policy.excess_balance_threshold !== undefined) {
+      const excess = Number(policy.excess_balance_threshold);
+      if (operational.available_balance !== undefined && Number(operational.available_balance) >= excess) {
+        status = STATUS.EXCESS_BALANCE;
+        reason = `Saldo tersedia melebihi excess_balance_threshold Rp${Math.round(excess).toLocaleString('id-ID')}.`;
+      }
+    }
+    return { status, reason, operational };
+  }
+
+  // Fallback: bank tanpa adapter rekonsiliasi -- cascade manual-policy lama, forecast TIDAK dipakai lagi.
+  const legacy = classifyBankStatusDetailed({ snapshot, policy, previousSnapshot, forecast: null, now });
+  return { status: legacy.status, reason: legacy.reason, operational: null };
 }
 
 /**
@@ -211,16 +263,20 @@ async function fetchBanksWithStatus(client, { onlyActive = true } = {}) {
     const policy = policyByBank.get(String(bank.id)) || null;
     const snapshot = snapshotByBank.get(String(bank.id)) || null;
     const previousSnapshot = previousSnapshotByBank.get(String(bank.id)) || null;
+    // Forecast lama (average_burn_rate 14 hari) TETAP dihitung -- HANYA utk
+    // "Historical Analytics" (lihat frontend), TIDAK LAGI dipakai menentukan
+    // status/alert utk bank yang punya mesin operasional (resolveFinalStatus).
     let forecast = null;
     try { forecast = await computeForecastForBank(pool, bank, snapshot, previousSnapshot, policy, now); }
     catch (e) { console.error(`computeForecastForBank(${bank.bank_code}) error:`, e.message); }
-    const { status, reason } = classifyBankStatusDetailed({ snapshot, policy, previousSnapshot, forecast, now });
+    const { status, reason, operational } = await resolveFinalStatus({ bank, snapshot, previousSnapshot, policy, now });
     return {
       bank,
       policy,
       snapshot,
       previousSnapshot,
       forecast,
+      operational,
       status,
       status_reason: reason,
       topup_today: topupTodayByBank.get(String(bank.id)) || 0,
@@ -249,7 +305,11 @@ async function syncAlertsForBank(client, bankId, status) {
   }
 }
 
-function mapBankRow({ bank, policy, snapshot, status, status_reason, topup_today, forecast }) {
+function mapBankRow({ bank, policy, snapshot, status, status_reason, topup_today, forecast, operational }) {
+  // operational (mesin baru, intraday) adalah SUMBER UTAMA runway/rekomendasi
+  // top-up kalau tersedia -- forecast lama (average_burn_rate 14 hari) HANYA
+  // fallback utk bank yang belum didukung adapter rekonsiliasi. Tidak pernah
+  // campur: satu bank pakai SATU sumber saja per field ini.
   return {
     id: bank.id,
     bank_code: bank.bank_code,
@@ -268,12 +328,15 @@ function mapBankRow({ bank, policy, snapshot, status, status_reason, topup_today
     sync_status: snapshot ? snapshot.sync_status : null,
     last_captured_at: snapshot ? snapshot.captured_at : null,
     has_policy: !!(policy && policy.is_active),
+    calculation_source: operational ? 'OPERATIONAL_ENGINE' : (forecast && forecast.forecast_available ? 'LEGACY_FORECAST' : null),
+    calculation_version: operational ? operational.calculation_version : null,
+    usable_balance: operational ? operational.usable_balance : null,
+    burn_rate_per_minute: operational ? operational.burn_rate_per_minute : null,
+    usable_runway_minutes: operational ? operational.usable_runway_minutes : (forecast ? forecast.estimated_runway_minutes : null),
+    recommended_topup_amount: operational ? operational.recommended_topup : (forecast ? forecast.recommended_topup_amount : null),
+    topup_deadline: operational ? operational.topup_deadline : (forecast ? forecast.recommended_topup_deadline : null),
     forecast_available: !!(forecast && forecast.forecast_available),
     forecast_source: forecast ? forecast.forecast_source : null,
-    forecast_confidence: forecast ? forecast.forecast_confidence : null,
-    estimated_runway_minutes: forecast ? forecast.estimated_runway_minutes : null,
-    recommended_topup_amount: forecast ? forecast.recommended_topup_amount : null,
-    recommended_topup_deadline: forecast ? forecast.recommended_topup_deadline : null,
   };
 }
 
@@ -456,10 +519,12 @@ router.get('/banks/:id', async (req, res) => {
     const snapshot = latestSnapshotsRes.rows[0] || null;
     const previousSnapshot = latestSnapshotsRes.rows[1] || null;
     const now = new Date();
+    // Forecast lama -- HANYA "Historical Analytics" (lihat frontend), tidak
+    // lagi dipakai menentukan status/rekomendasi kalau operational tersedia.
     let forecast = null;
     try { forecast = await computeForecastForBank(pool, bank, snapshot, previousSnapshot, policy, now); }
     catch (e) { console.error(`bank detail forecast(${bank.bank_code}) error:`, e.message); }
-    const { status, reason: statusReason } = classifyBankStatusDetailed({ snapshot, policy, previousSnapshot, forecast, now });
+    const { status, reason: statusReason, operational } = await resolveFinalStatus({ bank, snapshot, previousSnapshot, policy, now });
 
     // Penggunaan saldo hari ini = selisih saldo tersedia snapshot terakhir kemarin vs sekarang (proxy sederhana, tanpa buku besar transaksi).
     let usageToday = null;
@@ -495,6 +560,7 @@ router.get('/banks/:id', async (req, res) => {
       policy,
       status,
       status_reason: statusReason,
+      operational,
       forecast,
       funding_mutations: fundingMutations,
       posisi_saldo_terbaru: snapshot ? {
@@ -769,10 +835,10 @@ router.get('/banks/:id/forecast', async (req, res) => {
     const now = new Date();
 
     const forecast = await computeForecastForBank(pool, bank, snapshot, previousSnapshot, policy, now);
-    const { status, reason } = classifyBankStatusDetailed({ snapshot, policy, previousSnapshot, forecast, now });
+    const { status, reason, operational } = await resolveFinalStatus({ bank, snapshot, previousSnapshot, policy, now });
 
     res.set('Cache-Control', 'no-store');
-    res.json({ success: true, bank_id: id, status, status_reason: reason, forecast });
+    res.json({ success: true, bank_id: id, status, status_reason: reason, operational, forecast });
   } catch (e) {
     console.error('balance-control-tower get forecast error:', e.message);
     res.status(500).json({ error: e.message });
@@ -801,7 +867,12 @@ router.post('/banks/:id/forecast/refresh', requireOpsOrFinance, async (req, res)
     const now = new Date();
 
     const forecast = await computeForecastForBank(pool, bank, snapshot, previousSnapshot, policy, now);
-    const { status, reason } = classifyBankStatusDetailed({ snapshot, policy, previousSnapshot, forecast, now });
+    const { status, reason, operational } = await resolveFinalStatus({ bank, snapshot, previousSnapshot, policy, now });
+    // recommended_topup_amount TERSIMPAN mengikuti sumber otoritatif SAAT INI
+    // (operational engine kalau tersedia, forecast lama HANYA fallback) --
+    // konsisten dgn mapBankRow, TIDAK ada 2 angka top-up berbeda beredar.
+    const authoritativeTopup = operational ? operational.recommended_topup : (forecast?.recommended_topup_amount ?? null);
+    const authoritativeDeadline = operational ? operational.topup_deadline : (forecast?.recommended_topup_deadline ?? null);
 
     await client.query('BEGIN');
     const insertRes = await client.query(
@@ -809,24 +880,31 @@ router.post('/banks/:id/forecast/refresh', requireOpsOrFinance, async (req, res)
         (bank_account_id, status, status_reason, effective_balance, forecast_required_balance, projected_balance_at_next_funding,
          estimated_runway_minutes, average_burn_rate, peak_burn_rate, dynamic_reserve_balance, dynamic_watch_threshold,
          dynamic_critical_threshold, dynamic_emergency_threshold, recommended_topup_amount, recommended_topup_deadline,
-         forecast_confidence, forecast_source, forecast_available, raw_output, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+         forecast_confidence, forecast_source, forecast_available, raw_output, created_by,
+         calculation_version, usable_balance, burn_window_minutes_used, burn_rate_per_minute, usable_runway_minutes,
+         zero_balance_runway_minutes, lead_time_need, safety_buffer_amount, safe_target_balance, operational_status, data_freshness_status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31)
        RETURNING *`,
       [id, status, reason, snapshot ? snapshot.effective_balance : null,
         forecast?.forecast_required_balance ?? null, forecast?.projected_balance_at_next_funding ?? null,
         forecast?.estimated_runway_minutes ?? null, forecast?.average_burn_rate ?? null, forecast?.peak_burn_rate ?? null,
         forecast?.dynamic_reserve_balance ?? null, forecast?.dynamic_watch_threshold ?? null,
         forecast?.dynamic_critical_threshold ?? null, forecast?.dynamic_emergency_threshold ?? null,
-        forecast?.recommended_topup_amount ?? null, forecast?.recommended_topup_deadline ?? null,
+        authoritativeTopup, authoritativeDeadline,
         forecast?.forecast_confidence ?? null, forecast?.forecast_source ?? null, !!forecast?.forecast_available,
-        forecast ? JSON.stringify(forecast) : null, req.user?.username || null]
+        forecast ? JSON.stringify(forecast) : null, req.user?.username || null,
+        operational?.calculation_version ?? null, operational?.usable_balance ?? null, operational?.selected_burn_window_minutes ?? null,
+        operational?.burn_rate_per_minute ?? null, operational?.usable_runway_minutes ?? null,
+        operational?.zero_balance_runway_minutes ?? null, operational?.lead_time_need ?? null,
+        operational?.safety_buffer_amount ?? null, operational?.safe_target_balance ?? null,
+        operational?.operational_status ?? null, operational?.data_freshness_status ?? null]
     );
 
     await logAudit(client, {
       entityType: 'FORECAST', entityId: id, action: 'REFRESH_FORECAST',
       actorUserId: req.user?.id, actorUsername: req.user?.username,
       before: lastForecast, after: insertRes.rows[0],
-      notes: `forecast_available=${!!forecast?.forecast_available}, source=${forecast?.forecast_source || 'null'}`,
+      notes: `calc_source=${operational ? 'OPERATIONAL_ENGINE' : 'LEGACY_FORECAST'}, forecast_available=${!!forecast?.forecast_available}, source=${forecast?.forecast_source || 'null'}`,
     });
 
     if (lastForecast && lastForecast.status !== status) {
@@ -838,7 +916,7 @@ router.post('/banks/:id/forecast/refresh', requireOpsOrFinance, async (req, res)
       });
     }
     const prevTopup = lastForecast ? Number(lastForecast.recommended_topup_amount || 0) : null;
-    const newTopup = forecast ? Number(forecast.recommended_topup_amount || 0) : null;
+    const newTopup = authoritativeTopup !== null && authoritativeTopup !== undefined ? Number(authoritativeTopup) : null;
     if (prevTopup !== null && newTopup !== null && Math.abs(prevTopup - newTopup) >= 1) {
       await logAudit(client, {
         entityType: 'FORECAST', entityId: id, action: 'RECOMMENDATION_CHANGE',
@@ -848,7 +926,7 @@ router.post('/banks/:id/forecast/refresh', requireOpsOrFinance, async (req, res)
     }
 
     await client.query('COMMIT');
-    res.json({ success: true, forecast_snapshot: insertRes.rows[0], status, status_reason: reason, forecast });
+    res.json({ success: true, forecast_snapshot: insertRes.rows[0], status, status_reason: reason, operational, forecast });
   } catch (e) {
     await client.query('ROLLBACK');
     console.error('balance-control-tower refresh forecast error:', e.message);

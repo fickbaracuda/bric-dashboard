@@ -337,6 +337,8 @@ function DetailTab({ banks, selectedBankId, onSelectBank, detail, loading, isOps
         <div className="empty-state"><div className="empty-icon">🏦</div><div className="empty-title">Pilih bank</div></div>
       ) : (
         <>
+          <FaActionSummary detail={detail} isOps={isOps} onCreateTopup={onCreateTopup} onEditPolicy={onEditPolicy} onForecastRefreshed={onForecastRefreshed} isAdmin={isAdmin} />
+
           <div className="bct-kpi-grid">
             <Kpi label="Saldo Tersedia" value={fmtRp(detail.posisi_saldo_terbaru?.available_balance)} sub={fmtDateTime(detail.posisi_saldo_terbaru?.captured_at)} />
             <Kpi label="Saldo Efektif" value={fmtRp(detail.posisi_saldo_terbaru?.effective_balance)} />
@@ -351,6 +353,9 @@ function DetailTab({ banks, selectedBankId, onSelectBank, detail, loading, isOps
             </div>
           )}
 
+          <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '.04em', margin: '4px 0 8px' }}>
+            Historical &amp; Planning Analytics <span style={{ fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>— burn rata-rata 14 hari, bukan pemicu keputusan top-up saat ini</span>
+          </div>
           <ForecastPanel bankId={selectedBankId} detail={detail} isOps={isOps} onRefreshed={onForecastRefreshed} />
 
           <div className="wr-table-section" style={{ marginBottom: 16 }}>
@@ -434,6 +439,115 @@ function DetailTab({ banks, selectedBankId, onSelectBank, detail, loading, isOps
         </>
       )}
     </>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// FA Action Layer — lapisan keputusan operasional utama utk staf Finance
+// Administration/Treasury, ditempatkan di ATAS Control Tower Analytics yang
+// sudah ada (tidak menghapus/menggantikan apa pun di bawahnya). SELURUH
+// angka di sini murni render dari backend (detail.operational, hasil
+// backend/src/balanceControlTower/calculationEngine.js) -- TIDAK ADA
+// kalkulasi status/rekomendasi di frontend.
+// ─────────────────────────────────────────────────────────────────────────
+const ACTION_LABEL = {
+  SAFE: { label: 'Top-up Belum Diperlukan', icon: 'ti-circle-check', tone: 'safe' },
+  WATCH: { label: 'Siapkan Top-up', icon: 'ti-alert-triangle', tone: 'watch' },
+  CRITICAL: { label: 'Proses Top-up Sekarang', icon: 'ti-alert-octagon', tone: 'critical' },
+  EMERGENCY: { label: 'Pendanaan Darurat Diperlukan', icon: 'ti-flame', tone: 'critical' },
+  DATA_STALE: { label: 'Refresh Rekonsiliasi', icon: 'ti-refresh', tone: 'stale' },
+  CONFIGURATION_REQUIRED: { label: 'Lengkapi Konfigurasi', icon: 'ti-settings', tone: 'stale' },
+};
+function actionMeta(status) {
+  return ACTION_LABEL[status] || { label: '-', icon: 'ti-help', tone: 'stale' };
+}
+function maskAccountNumber(acc) {
+  if (!acc) return '-';
+  const digits = String(acc).replace(/\D/g, '');
+  if (digits.length < 4) return acc;
+  return acc.replace(digits.slice(0, -4), m => '•'.repeat(m.length));
+}
+function trendLabel(trend) {
+  if (trend === 'ACCELERATING') return { label: 'Percepatan', color: '#DC2626' };
+  if (trend === 'DECELERATING') return { label: 'Perlambatan', color: '#059669' };
+  if (trend === 'STABLE') return { label: 'Stabil', color: 'var(--text-2)' };
+  return { label: '-', color: 'var(--text-3)' };
+}
+
+function FaActionSummary({ detail, isOps, onCreateTopup, onEditPolicy, onForecastRefreshed, isAdmin }) {
+  const op = detail.operational;
+  const status = detail.status;
+  const action = actionMeta(status);
+
+  return (
+    <div className="wr-table-section" style={{ marginBottom: 16, borderWidth: 2 }}>
+      <div className="wr-table-controls">
+        <div className="wr-table-left">
+          <b>FA Action Summary</b> <span style={{ color: 'var(--text-3)', fontWeight: 400 }}>— {maskAccountNumber(detail.bank?.account_number)} · {detail.bank?.account_name}</span>
+        </div>
+        <StatusBadge status={status} />
+      </div>
+
+      <div style={{ padding: 16 }}>
+        {!op ? (
+          <div style={{ color: 'var(--text-3)', fontSize: 13 }}>
+            Mesin kalkulasi operasional belum tersedia utk bank ini (belum didukung integrasi rekonsiliasi). Status memakai policy manual saja.
+          </div>
+        ) : (
+          <>
+            <div className="bct-kpi-grid" style={{ marginBottom: 14 }}>
+              <Kpi label="Saldo Tersedia (Actual)" value={fmtRp(op.available_balance)} sub={fmtDateTime(op.balance_source_timestamp)} />
+              <Kpi label="Batas Minimum Terlindungi" value={fmtRp(op.absolute_minimum_balance)} />
+              <Kpi label="Saldo Bisa Dipakai" value={fmtRp(op.usable_balance)} alert={Number(op.usable_balance) <= 0} />
+              <Kpi label={`Outflow ${op.selected_burn_window_minutes ?? '-'} Menit`} value={fmtRp(op.total_window_outflow)}
+                sub={`${fmtRp(op.burn_rate_per_minute)}/menit`} />
+              <Kpi label="Tren Transaksi" value={<span style={{ color: trendLabel(op.burn_trend).color, fontWeight: 700 }}>{trendLabel(op.burn_trend).label}</span>}
+                sub={op.acceleration_detected ? 'akselerasi terdeteksi' : null} />
+            </div>
+
+            <div className="bct-kpi-grid" style={{ marginBottom: 14 }}>
+              <Kpi label="Runway ke Batas Minimum" value={fmtMinutes(op.usable_runway_minutes)} sub={op.minimum_balance_breach_time ? `≈ ${fmtDateTime(op.minimum_balance_breach_time)}` : 'tidak ada outflow aktif'} />
+              <Kpi label="Runway ke Saldo Nol" value={fmtMinutes(op.zero_balance_runway_minutes)} />
+              <Kpi label="Rekomendasi Top-up" value={fmtRp(op.recommended_topup)} alert={Number(op.recommended_topup) > 0}
+                sub={op.topup_deadline ? `sebelum ${fmtDateTime(op.topup_deadline)}` : null} />
+              <Kpi label="Lead Time Top-up" value={fmtMinutes(op.topup_lead_time_minutes)} />
+              <Kpi label="Safety Buffer" value={fmtRp(op.safety_buffer_amount)} sub={op.safety_buffer_type ? `mode ${op.safety_buffer_type}` : null} />
+            </div>
+
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
+              {isOps && (status === 'CRITICAL' || status === 'EMERGENCY' || status === 'WATCH') && (
+                <button className="fbr-btn fbr-btn-primary" onClick={onCreateTopup}>
+                  <i className={'ti ' + action.icon} /> {action.label}
+                </button>
+              )}
+              {status === 'DATA_STALE' && isOps && (
+                <button className="fbr-btn fbr-btn-primary" onClick={onForecastRefreshed}>
+                  <i className="ti ti-refresh" /> {action.label}
+                </button>
+              )}
+              {status === 'CONFIGURATION_REQUIRED' && isAdmin && (
+                <button className="fbr-btn fbr-btn-primary" onClick={onEditPolicy}>
+                  <i className="ti ti-settings" /> {action.label}
+                </button>
+              )}
+              {status === 'SAFE' && <span className="bct-badge" style={{ color: '#059669', background: '#DCFCE7' }}><i className="ti ti-circle-check" /> {action.label}</span>}
+              <span style={{ fontSize: 11.5, color: 'var(--text-4)' }}>
+                calculation_version {op.calculation_version} · dihitung {fmtDateTime(op.calculation_timestamp)}
+              </span>
+            </div>
+
+            {op.status_reason && (
+              <div style={{ marginTop: 12, fontSize: 13, color: 'var(--text-2)', lineHeight: 1.5 }}>{op.status_reason}</div>
+            )}
+            {op.movement_variance && (
+              <div className="fbr-error" style={{ marginTop: 10 }}>
+                Available Balance tetap dipakai sbg saldo aktual. Terdeteksi selisih movement-summary: {fmtRp(op.movement_variance.variance_amount)} ({op.movement_variance.variance_percentage}%) — butuh review rekonsiliasi.
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 
