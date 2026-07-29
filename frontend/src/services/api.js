@@ -535,6 +535,57 @@ export const getDompetDigitalData = async (bulan) => {
   return res.data;
 };
 
+/* WAR-ROOM — Balance Control Tower (data operasional finansial, TIDAK di-cache) */
+const BCT_BASE = `${API_URL}/api/warroom/balance-control-tower`;
+export const getBctSummary = () =>
+  axios.get(`${BCT_BASE}/summary`, { params: { t: Date.now() }, headers: authHeaders() }).then(r => r.data);
+export const getBctBanks = (params = {}) =>
+  axios.get(`${BCT_BASE}/banks`, { params: { ...params, t: Date.now() }, headers: authHeaders() }).then(r => r.data);
+export const createBctBank = (payload) =>
+  axios.post(`${BCT_BASE}/banks`, payload, { headers: authHeaders() }).then(r => r.data);
+export const updateBctBank = (id, payload) =>
+  axios.put(`${BCT_BASE}/banks/${id}`, payload, { headers: authHeaders() }).then(r => r.data);
+export const getBctBankDetail = (id) =>
+  axios.get(`${BCT_BASE}/banks/${id}`, { params: { t: Date.now() }, headers: authHeaders() }).then(r => r.data);
+export const createBctSnapshot = (bankId, payload) =>
+  axios.post(`${BCT_BASE}/banks/${bankId}/snapshots`, payload, { headers: authHeaders() }).then(r => r.data);
+export const getBctSnapshots = (bankId, params = {}) =>
+  axios.get(`${BCT_BASE}/banks/${bankId}/snapshots`, { params, headers: authHeaders() }).then(r => r.data);
+export const getBctPolicy = (bankId) =>
+  axios.get(`${BCT_BASE}/banks/${bankId}/policy`, { headers: authHeaders() }).then(r => r.data);
+export const updateBctPolicy = (bankId, payload) =>
+  axios.put(`${BCT_BASE}/banks/${bankId}/policy`, payload, { headers: authHeaders() }).then(r => r.data);
+
+export const createBctTopup = (payload) =>
+  axios.post(`${BCT_BASE}/topup`, payload, { headers: authHeaders() }).then(r => r.data);
+export const getBctTopups = (params = {}) =>
+  axios.get(`${BCT_BASE}/topup`, { params: { ...params, t: Date.now() }, headers: authHeaders() }).then(r => r.data);
+export const getBctTopupDetail = (id) =>
+  axios.get(`${BCT_BASE}/topup/${id}`, { params: { t: Date.now() }, headers: authHeaders() }).then(r => r.data);
+export const requestBctTopup = (id) =>
+  axios.post(`${BCT_BASE}/topup/${id}/request`, {}, { headers: authHeaders() }).then(r => r.data);
+export const approveBctTopup = (id, payload = {}) =>
+  axios.post(`${BCT_BASE}/topup/${id}/approve`, payload, { headers: authHeaders() }).then(r => r.data);
+export const rejectBctTopup = (id, reason) =>
+  axios.post(`${BCT_BASE}/topup/${id}/reject`, { reason }, { headers: authHeaders() }).then(r => r.data);
+export const transferBctTopup = (id, payload) =>
+  axios.post(`${BCT_BASE}/topup/${id}/transfer`, payload, { headers: authHeaders() }).then(r => r.data);
+export const confirmBctTopupBalance = (id, balanceAfter) =>
+  axios.post(`${BCT_BASE}/topup/${id}/confirm-balance`, { balance_after: balanceAfter }, { headers: authHeaders() }).then(r => r.data);
+export const completeBctTopup = (id, notes) =>
+  axios.post(`${BCT_BASE}/topup/${id}/complete`, { notes }, { headers: authHeaders() }).then(r => r.data);
+export const cancelBctTopup = (id) =>
+  axios.post(`${BCT_BASE}/topup/${id}/cancel`, {}, { headers: authHeaders() }).then(r => r.data);
+
+export const getBctAlerts = (params = {}) =>
+  axios.get(`${BCT_BASE}/alerts`, { params: { ...params, t: Date.now() }, headers: authHeaders() }).then(r => r.data);
+export const acknowledgeBctAlert = (id) =>
+  axios.post(`${BCT_BASE}/alerts/${id}/acknowledge`, {}, { headers: authHeaders() }).then(r => r.data);
+export const snoozeBctAlert = (id, snoozedUntil) =>
+  axios.post(`${BCT_BASE}/alerts/${id}/snooze`, { snoozed_until: snoozedUntil }, { headers: authHeaders() }).then(r => r.data);
+export const resolveBctAlert = (id, reason) =>
+  axios.post(`${BCT_BASE}/alerts/${id}/resolve`, { reason }, { headers: authHeaders() }).then(r => r.data);
+
 export const getPaymentAgentData = async (bulan) => {
   const res = await axios.get(`${API_URL}/api/paymentagent`, {
     params: { bulan },
