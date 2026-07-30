@@ -17,6 +17,7 @@ import WarRoomReconciliationMandiri from './pages/WarRoomReconciliationMandiri';
 import WarRoomReconciliationBri from './pages/WarRoomReconciliationBri';
 import WarRoomReconciliationBriBifast from './pages/WarRoomReconciliationBriBifast';
 import WarRoomReconciliationBni from './pages/WarRoomReconciliationBni';
+import WarRoomReconciliationBca from './pages/WarRoomReconciliationBca';
 import WarRoomBalanceControlTower from './pages/WarRoomBalanceControlTower';
 import WarRoomFastpay from './pages/WarRoomFastpay';
 import WarRoomFarming from './pages/WarRoomFarming';
@@ -80,6 +81,7 @@ export default function App() {
         <Route path="/war-room/rekonsiliasi/bri" element={<ProtectedRoute><WarRoomReconciliationBri /></ProtectedRoute>} />
         <Route path="/war-room/rekonsiliasi/bri-bifast" element={<ProtectedRoute><WarRoomReconciliationBriBifast /></ProtectedRoute>} />
         <Route path="/war-room/rekonsiliasi/bni" element={<ProtectedRoute><WarRoomReconciliationBni /></ProtectedRoute>} />
+        <Route path="/war-room/rekonsiliasi/bca" element={<ProtectedRoute><WarRoomReconciliationBca /></ProtectedRoute>} />
         <Route path="/war-room/balance-control-tower" element={<ProtectedRoute><WarRoomBalanceControlTower /></ProtectedRoute>} />
         <Route path="/war-room/fastpayglobal" element={<ProtectedRoute><WarRoomFastpay /></ProtectedRoute>} />
         <Route path="/war-room/farming"       element={<ProtectedRoute><WarRoomFarming /></ProtectedRoute>} />

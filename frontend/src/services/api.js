@@ -393,6 +393,7 @@ export const getMandiriPeriodicBalanceNeeds = (params = {}) => getPeriodicBalanc
 export const getBriPeriodicBalanceNeeds = (params = {}) => getPeriodicBalanceNeeds('bri', params);
 export const getBriBifastPeriodicBalanceNeeds = (params = {}) => getPeriodicBalanceNeeds('bri-bifast', params);
 export const getBniPeriodicBalanceNeeds = (params = {}) => getPeriodicBalanceNeeds('bni', params);
+export const getBcaPeriodicBalanceNeeds = (params = {}) => getPeriodicBalanceNeeds('bca', params);
 export const getReconciliationTransactions = (params = {}) =>
   axios.get(`${API_URL}/api/warroom/reconciliation/transactions`, { params, headers: authHeaders() }).then(r => r.data);
 // Export butuh Authorization header (JWT) -> tidak bisa lewat <a href> biasa,
@@ -507,6 +508,26 @@ export const resolveReconciliationBni = (id, data) =>
   axios.post(`${API_URL}/api/warroom/reconciliation/bni/${id}/resolve`, data, { headers: authHeaders() }).then(r => r.data);
 export const getReconciliationBniLogs = (id) =>
   axios.get(`${API_URL}/api/warroom/reconciliation/bni/${id}/logs`, { headers: authHeaders() }).then(r => r.data);
+
+/* WAR-ROOM — Rekonsiliasi FP vs BCA (TIDAK di-cache — data operasional, harus selalu fresh) */
+export const getReconciliationBcaAnalytics = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/bca/analytics`, { params, headers: authHeaders() }).then(r => r.data);
+export const getReconciliationBcaDailyReport = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/bca/daily-report`, { params, headers: authHeaders() }).then(r => r.data);
+export const getReconciliationBcaTransactions = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/bca/transactions`, { params, headers: authHeaders() }).then(r => r.data);
+export const getReconciliationBcaRawBank = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/bca/raw-bank`, { params, headers: authHeaders() }).then(r => r.data);
+export const getReconciliationBcaRawFp = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/bca/raw-fp`, { params, headers: authHeaders() }).then(r => r.data);
+export const getReconciliationBcaResolutionHistory = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/bca/resolution-history`, { params, headers: authHeaders() }).then(r => r.data);
+export const exportReconciliationBca = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/bca/export`, { params, headers: authHeaders(), responseType: 'blob' }).then(r => r.data);
+export const resolveReconciliationBca = (id, data) =>
+  axios.post(`${API_URL}/api/warroom/reconciliation/bca/${id}/resolve`, data, { headers: authHeaders() }).then(r => r.data);
+export const getReconciliationBcaLogs = (id) =>
+  axios.get(`${API_URL}/api/warroom/reconciliation/bca/${id}/logs`, { headers: authHeaders() }).then(r => r.data);
 
 /* WAR-ROOM — QRIS Issuance Control Tower */
 export const getQrisControlTowerAnalytics = () =>

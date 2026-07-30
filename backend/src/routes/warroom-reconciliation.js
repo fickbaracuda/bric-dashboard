@@ -31,10 +31,29 @@ const RECON_STATUSES = [
   'MATCHED', 'MATCHED_NO_FEE', 'PENDING_BANK', 'FP_ONLY', 'BANK_ONLY',
   'NOMINAL_MISMATCH', 'FEE_MISMATCH', 'DUPLICATE_FP', 'DUPLICATE_BANK',
   'REVERSAL', 'NEED_REVIEW',
+  // ── Rekonsiliasi BCA (warroom-reconciliation-bca.js) — vocabulary
+  // TERPISAH dari status generik di atas (bank lain TIDAK PERNAH
+  // menghasilkan status di bawah ini). Ditambahkan ke array SHARED ini
+  // (bukan array baru) supaya agregasi generik (byStatus loop di setiap
+  // route bank), validasi resolveHandler, dan export CSV tetap bisa dipakai
+  // apa adanya oleh warroom-reconciliation-bca.js — penambahan murni
+  // additive, tidak mengubah perilaku bank lain (mereka cukup mendapat
+  // bucket status_distribution tambahan yang selalu bernilai 0).
+  'MATCHED_AMOUNT_EXACT', 'FP_NOT_FOUND_IN_BANK', 'BANK_NOT_FOUND_IN_FP',
+  'AMOUNT_MISMATCH', 'DUPLICATE_FP_TRANSACTION_ID', 'DUPLICATE_BANK_TRANSACTION_ID',
+  'MULTIPLE_BANK_ROWS_SAME_ID', 'CREDIT_TRANSACTION', 'UNPARSEABLE_REFERENCE',
+  'UNKNOWN', 'REQUIRES_MAPPING_REVIEW',
 ];
 const EXCEPTION_STATUSES = [
   'PENDING_BANK', 'FP_ONLY', 'BANK_ONLY', 'NOMINAL_MISMATCH', 'FEE_MISMATCH',
   'DUPLICATE_FP', 'DUPLICATE_BANK', 'REVERSAL', 'NEED_REVIEW',
+  // ── Rekonsiliasi BCA — lihat catatan di RECON_STATUSES di atas. MATCHED/
+  // MATCHED_AMOUNT_EXACT/CREDIT_TRANSACTION SENGAJA tidak masuk sini (bukan
+  // exception yang butuh tindak lanjut).
+  'FP_NOT_FOUND_IN_BANK', 'BANK_NOT_FOUND_IN_FP', 'AMOUNT_MISMATCH',
+  'DUPLICATE_FP_TRANSACTION_ID', 'DUPLICATE_BANK_TRANSACTION_ID',
+  'MULTIPLE_BANK_ROWS_SAME_ID', 'UNPARSEABLE_REFERENCE', 'UNKNOWN',
+  'REQUIRES_MAPPING_REVIEW',
 ];
 
 // ─────────────────────────────────────────────────────────────────────────

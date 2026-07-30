@@ -187,6 +187,7 @@ export default function Sidebar({ onClose }) {
   const isWRReconBriPath = location.pathname === '/war-room/rekonsiliasi/bri';
   const isWRReconBriBifastPath = location.pathname === '/war-room/rekonsiliasi/bri-bifast';
   const isWRReconBniPath = location.pathname === '/war-room/rekonsiliasi/bni';
+  const isWRReconBcaPath = location.pathname === '/war-room/rekonsiliasi/bca';
   const isWRBalanceCtPath = location.pathname === '/war-room/balance-control-tower';
 
   const [winmeOpen, setWinmeOpen] = useState(isWinmePath || isWinmeTimPath || isWRIqCcPath || isWRQw3Path || isWRIQRawPath || isWRQrisPath || isWRTrxOutPath || isWRQrisCtlPath || isDataRawPath);
@@ -195,7 +196,7 @@ export default function Sidebar({ onClose }) {
   const [paTimOpen, setPATimOpen] = useState(isPATimPath);
   const [ddOpen,    setDDOpen]    = useState(isDDPath || isSCTimPath || isWRSCPath);
   const [scTimOpen, setSCTimOpen] = useState(isSCTimPath);
-  const [rekonOpen, setRekonOpen] = useState(isWRReconOcbcPath || isWRReconMandiriPath || isWRReconBriPath || isWRReconBriBifastPath || isWRReconBniPath || isWRBalanceCtPath);
+  const [rekonOpen, setRekonOpen] = useState(isWRReconOcbcPath || isWRReconMandiriPath || isWRReconBriPath || isWRReconBriBifastPath || isWRReconBniPath || isWRReconBcaPath || isWRBalanceCtPath);
 
   useEffect(() => {
     if (isWinmePath || isWinmeTimPath || isWRIqCcPath || isWRQw3Path || isWRIQRawPath || isDataRawPath || isWRTrxOutPath || isWRQrisCtlPath) setWinmeOpen(true);
@@ -204,7 +205,7 @@ export default function Sidebar({ onClose }) {
     if (isPATimPath) setPATimOpen(true);
     if (isDDPath || isSCTimPath || isWRSCPath) setDDOpen(true);
     if (isSCTimPath) setSCTimOpen(true);
-    if (isWRReconOcbcPath || isWRReconMandiriPath || isWRReconBriPath || isWRReconBriBifastPath || isWRReconBniPath || isWRBalanceCtPath) setRekonOpen(true);
+    if (isWRReconOcbcPath || isWRReconMandiriPath || isWRReconBriPath || isWRReconBriBifastPath || isWRReconBniPath || isWRReconBcaPath || isWRBalanceCtPath) setRekonOpen(true);
   }, [location.pathname, members, membersPA, membersSC]);
 
   const loadAllMembers = () => {
@@ -779,7 +780,7 @@ export default function Sidebar({ onClose }) {
             onClick={() => { setRekonOpen(o => !o); onClose(); }}
             className={({ isActive }) =>
               'sidebar-link sidebar-link-accordion' +
-              (isActive || isWRReconOcbcPath || isWRReconMandiriPath || isWRReconBriPath || isWRReconBriBifastPath || isWRReconBniPath || isWRBalanceCtPath ? ' sidebar-link--active' : '')
+              (isActive || isWRReconOcbcPath || isWRReconMandiriPath || isWRReconBriPath || isWRReconBriBifastPath || isWRReconBniPath || isWRReconBcaPath || isWRBalanceCtPath ? ' sidebar-link--active' : '')
             }
           >
             <i className="ti ti-building-bank" aria-hidden="true" />
@@ -847,6 +848,17 @@ export default function Sidebar({ onClose }) {
                 <i className="ti ti-building-bank" style={{ color: '#F15A23' }} aria-hidden="true" />
                 <span>Rekonsiliasi BNI</span>
                 <span className="sidebar-warroom-badge" style={{ background: '#F15A23' }}>BNI</span>
+              </NavLink>
+              <NavLink
+                to="/war-room/rekonsiliasi/bca"
+                onClick={onClose}
+                className={({ isActive }) =>
+                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                }
+              >
+                <i className="ti ti-building-bank" style={{ color: '#0033A0' }} aria-hidden="true" />
+                <span>Rekonsiliasi BCA</span>
+                <span className="sidebar-warroom-badge" style={{ background: '#0033A0' }}>BCA</span>
               </NavLink>
               <NavLink
                 to="/war-room/balance-control-tower"

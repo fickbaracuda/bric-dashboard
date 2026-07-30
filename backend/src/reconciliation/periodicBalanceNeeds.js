@@ -33,6 +33,7 @@ const BANK_LABELS = {
   BRI: 'BRI',
   BRI_BIFAST: 'BRI BI-FAST',
   BNI: 'BNI',
+  BCA: 'BCA',
 };
 const BANK_ALLOWLIST = Object.keys(BANK_LABELS);
 
@@ -42,6 +43,9 @@ const DEFAULT_FEE_BY_BANK = {
   BRI: Number(process.env.RECON_BRI_FEE_DEFAULT) || 150,
   BRI_BIFAST: Number(process.env.RECON_BRI_BIFAST_FEE_DEFAULT) || 77,
   BNI: Number(process.env.RECON_BNI_FEE_DEFAULT) || 0,
+  // BCA TIDAK punya baris fee terpisah (satu baris debit = satu transaksi
+  // FP, lihat bcaAdapter.js) — default 0, bukan fallback yang dipaksakan.
+  BCA: Number(process.env.RECON_BCA_FEE_DEFAULT) || 0,
 };
 
 /**
@@ -71,6 +75,9 @@ const CROSS_DATE_GUARD_MODE = {
   BRI: 'strict_reversal_carveout',
   BRI_BIFAST: 'none',
   BNI: 'none',
+  // BCA: analyticsHandler/dailyReportHandler BCA JUGA mengecualikan baris
+  // cross-date dari resultsInDate (pola sama dgn OCBC/Mandiri) -- 'strict'.
+  BCA: 'strict',
 };
 
 function isValidBankCode(bankCode) {

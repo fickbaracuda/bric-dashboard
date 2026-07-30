@@ -38,6 +38,7 @@ const reconciliationMandiriRoutes = require('./routes/warroom-reconciliation-man
 const reconciliationBriRoutes = require('./routes/warroom-reconciliation-bri');
 const reconciliationBriBifastRoutes = require('./routes/warroom-reconciliation-bri-bifast');
 const reconciliationBniRoutes = require('./routes/warroom-reconciliation-bni');
+const reconciliationBcaRoutes = require('./routes/warroom-reconciliation-bca');
 const financeBalanceRequestsRoutes = require('./routes/finance-balance-requests');
 const balanceControlTowerRoutes = require('./routes/balance-control-tower');
 const systemRoutes        = require('./routes/system');
@@ -213,6 +214,17 @@ app.get('/api/warroom/reconciliation/bni/resolution-history', requireAuth, recon
 app.get('/api/warroom/reconciliation/bni/export',       requireAuth, reconciliationBniRoutes.exportHandler);
 app.post('/api/warroom/reconciliation/bni/:id/resolve', requireAuth, reconciliationBniRoutes.resolveHandler);
 app.get('/api/warroom/reconciliation/bni/:id/logs',     requireAuth, reconciliationBniRoutes.actionLogsHandler);
+app.post('/api/warroom/reconciliation/bca/sync',        reconciliationBcaRoutes.syncHandler); // token auth (APPS_SCRIPT_TOKEN), no JWT
+app.get('/api/warroom/reconciliation/bca/analytics',    requireAuth, reconciliationBcaRoutes.analyticsHandler);
+app.get('/api/warroom/reconciliation/bca/daily-report', requireAuth, reconciliationBcaRoutes.dailyReportHandler);
+app.get('/api/warroom/reconciliation/bca/balance-needs-periodic', requireAuth, reconciliationBcaRoutes.balanceNeedsPeriodicHandler); // tab "Kebutuhan Saldo"
+app.get('/api/warroom/reconciliation/bca/transactions', requireAuth, reconciliationBcaRoutes.transactionsHandler);
+app.get('/api/warroom/reconciliation/bca/raw-bank',     requireAuth, reconciliationBcaRoutes.rawBankHandler);
+app.get('/api/warroom/reconciliation/bca/raw-fp',       requireAuth, reconciliationBcaRoutes.rawFpHandler);
+app.get('/api/warroom/reconciliation/bca/resolution-history', requireAuth, reconciliationBcaRoutes.resolutionHistoryHandler);
+app.get('/api/warroom/reconciliation/bca/export',       requireAuth, reconciliationBcaRoutes.exportHandler);
+app.post('/api/warroom/reconciliation/bca/:id/resolve', requireAuth, reconciliationBcaRoutes.resolveHandler);
+app.get('/api/warroom/reconciliation/bca/:id/logs',     requireAuth, reconciliationBcaRoutes.actionLogsHandler);
 app.use('/api/warroom',        requireAuth, warroomRoutes);
 
 app.post('/api/data-raw/outlet/sync',    dataRawRoutes.outletSyncHandler);    // token auth, no JWT
