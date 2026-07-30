@@ -553,9 +553,6 @@ function CommandCenterTab({ banks, selectedBankId, onSelectBank }) {
       {!loading && !error && data?.supported && (() => {
         const op = data.operational;
         const sm = ccStatusMeta(data.status);
-        const mv = data.balance_movement;
-        const mvUp = mv?.direction === 'UP';
-        const mvDown = mv?.direction === 'DOWN';
 
         return (
           <>
@@ -568,10 +565,6 @@ function CommandCenterTab({ banks, selectedBankId, onSelectBank }) {
               <KpiCC icon="ti-wallet" iconColor="#FBBF24" iconBg="rgba(251,191,36,.14)" label="Saldo Bisa Digunakan"
                 value={op ? <KpiVal value={op.usable_balance} formatter={fmtRp} reason={op.usable_balance_unavailable_reason} /> : '-'}
                 valueClass={op && Number(op.usable_balance) <= 0 ? 'bctcc-kpi-value--red' : ''} sub="Available - Minimum" />
-              <KpiCC icon={mvDown ? 'ti-trending-down' : 'ti-trending-up'} iconColor={mvDown ? '#F87171' : '#34D399'} iconBg={mvDown ? 'rgba(248,113,113,.16)' : 'rgba(52,211,153,.14)'}
-                label="Δ Saldo" valueClass={mvDown ? 'bctcc-kpi-value--red' : (mvUp ? 'bctcc-kpi-value--green' : '')}
-                value={mv?.delta_amount !== null && mv?.delta_amount !== undefined ? `${mv.delta_amount > 0 ? '+' : ''}${fmtRp(mv.delta_amount)}` : (mv?.reason || 'Belum ada pembanding')}
-                sub={mv?.previous_captured_at ? `Sejak ${fmtHHmm(mv.previous_captured_at)}${mv.delta_percentage !== null && mv.delta_percentage !== undefined ? ` (${mv.delta_amount > 0 ? '+' : ''}${mv.delta_percentage.toFixed(1)}%)` : ''}` : null} />
               <div className="bctcc-card">
                 <div className="bctcc-kpi-top">
                   <div className="bctcc-kpi-label">Status Operasional</div>
