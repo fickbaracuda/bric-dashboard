@@ -40,6 +40,9 @@ const { computeOperationalCalculationForBank, fetchRecentMatchedOutflows } = req
 function isoDateJakarta(date) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(date);
 }
+function round2(n) {
+  return n === null || n === undefined || !Number.isFinite(n) ? n : Math.round(n * 100) / 100;
+}
 
 /**
  * Resolusi status FINAL — SATU tempat, dipakai summary/detail/alert engine
@@ -1030,6 +1033,190 @@ router.post('/banks/:id/forecast/refresh', requireOpsOrFinance, async (req, res)
     res.status(500).json({ error: e.message });
   } finally {
     client.release();
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// COMMAND CENTER — tampilan dark "top-up command center" per-bank (item
+// baru, TIDAK menggantikan tab Monitoring Saldo/FA Action Summary lama).
+// SEMUA angka murni REUSE dari yang sudah ada (operational engine, funding
+// mutations rekonsiliasi) DITAMBAH beberapa query baru yang scoped ke
+// business_date HARI INI SAJA (bank_code + business_date, pola sama dgn
+// runOcbcEngineAndPersist) utk: breakdown status rekonsiliasi (donut),
+// tren outflow per-menit 60 menit terakhir (sparkline), transaksi terbaru,
+// dan anomali. HANYA bank dgn adapter rekonsiliasi (isSupportedBank) yang
+// didukung -- bank lain dapat response `supported: false` yang jelas,
+// TIDAK mencoba mengarang data.
+// ─────────────────────────────────────────────────────────────────────────
+const RECON_STATUS_LABEL_ID = {
+  MATCHED: 'Matched dengan Fee',
+  MATCHED_NO_FEE: 'Matched',
+  PENDING_BANK: 'Menunggu Bank',
+  FP_ONLY: 'FP Belum Keluar di Bank',
+  BANK_ONLY: 'Bank Tidak Ditemukan di FP',
+  NOMINAL_MISMATCH: 'Mismatch Nominal',
+  FEE_MISMATCH: 'Mismatch Fee',
+  DUPLICATE_FP: 'Duplikasi FP',
+  DUPLICATE_BANK: 'Duplikasi Bank',
+  REVERSAL: 'Reversal / Return',
+  NEED_REVIEW: 'Perlu Review',
+};
+
+router.get('/banks/:id/command-center', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'id tidak valid.' });
+
+    const bankRes = await pool.query(`SELECT * FROM bct_bank_accounts WHERE id = $1`, [id]);
+    if (!bankRes.rows.length) return res.status(404).json({ error: 'Bank tidak ditemukan.' });
+    const bank = bankRes.rows[0];
+
+    if (!isSupportedBank(bank.bank_code)) {
+      return res.json({
+        success: true, supported: false, bank,
+        message: `Command Center belum didukung untuk ${bank.bank_code} — memerlukan adapter rekonsiliasi (saat ini hanya OCBC).`,
+      });
+    }
+
+    try { await refreshBankPositionIfNeeded(bank); }
+    catch (e) { console.error(`refresh position (${bank.bank_code}) error:`, e.message); }
+
+    const [policyRes, recentSnapshotsRes] = await Promise.all([
+      pool.query(`SELECT * FROM bct_balance_policies WHERE bank_account_id = $1`, [id]),
+      pool.query(`SELECT * FROM bct_balance_snapshots WHERE bank_account_id = $1 ORDER BY captured_at DESC LIMIT 20`, [id]),
+    ]);
+    const policy = policyRes.rows[0] || null;
+    const { snapshot, previousSnapshot } = pickCurrentAndPrevious(recentSnapshotsRes.rows, true);
+    const now = new Date();
+    const { status, reason: statusReason, operational } = await resolveFinalStatus({ bank, snapshot, previousSnapshot, policy, now });
+    const balanceMovement = computeBalanceMovement({ current: snapshot, previous: previousSnapshot });
+
+    const businessDate = operational?.today_usage?.business_date || isoDateJakarta(now);
+
+    // Seluruh baris recon_results HARI INI (business_date bank ini) -- dasar
+    // utk donut status, transaksi terbaru, tren per-menit, dan anomali.
+    // Query TUNGGAL, hasilnya di-derive jadi 4 widget sekaligus di JS supaya
+    // tidak query recon_results 4x.
+    const reconRes = await pool.query(
+      `SELECT r.recon_status, r.fp_nominal, r.bank_principal, r.bank_fee, r.fp_time_response,
+              r.id_transaksi, r.id_outlet, r.id_produk
+       FROM recon_results r
+       JOIN recon_sync_batches b ON b.id = r.batch_id
+       WHERE b.bank_code = $1 AND b.business_date = $2`,
+      [bank.bank_code, businessDate]
+    );
+    const reconRows = reconRes.rows;
+
+    // Donut "Rekonsiliasi FP vs Bank" — breakdown per recon_status.
+    const statusCounts = new Map();
+    for (const r of reconRows) statusCounts.set(r.recon_status, (statusCounts.get(r.recon_status) || 0) + 1);
+    const totalFp = reconRows.length;
+    const reconciliationToday = {
+      total_fp: totalFp,
+      by_status: [...statusCounts.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .map(([reconStatus, count]) => ({
+          recon_status: reconStatus,
+          label: RECON_STATUS_LABEL_ID[reconStatus] || reconStatus,
+          count,
+          percentage: totalFp > 0 ? round2((count / totalFp) * 100) : null,
+        })),
+    };
+
+    // Anomali & Perhatian — subset non-matched dari donut yang sama (TIDAK query ulang).
+    const anomalyCountFor = (...statuses) => statuses.reduce((s, st) => s + (statusCounts.get(st) || 0), 0);
+    const anomalies = {
+      fp_only: anomalyCountFor('FP_ONLY'),
+      bank_only: anomalyCountFor('BANK_ONLY'),
+      nominal_mismatch: anomalyCountFor('NOMINAL_MISMATCH'),
+      duplicate: anomalyCountFor('DUPLICATE_FP', 'DUPLICATE_BANK'),
+      reversal: anomalyCountFor('REVERSAL'),
+    };
+
+    // Transaksi Terbaru — 20 baris matched (MATCHED/MATCHED_NO_FEE/FEE_MISMATCH)
+    // terakhir berdasarkan fp_time_response, sama definisi "matched" dgn
+    // fetchRecentMatchedOutflows (operationalDataAccess.js) supaya konsisten
+    // dgn angka outflow window di atasnya.
+    const MATCHED_STATUSES = new Set(['MATCHED', 'MATCHED_NO_FEE', 'FEE_MISMATCH']);
+    const recentTransactions = reconRows
+      .filter(r => r.fp_time_response && MATCHED_STATUSES.has(r.recon_status))
+      .sort((a, b) => new Date(b.fp_time_response) - new Date(a.fp_time_response))
+      .slice(0, 20)
+      .map(r => ({
+        waktu: r.fp_time_response,
+        id_transaksi: r.id_transaksi,
+        id_outlet: r.id_outlet,
+        id_produk: r.id_produk,
+        nominal_fp: r.fp_nominal !== null ? Number(r.fp_nominal) : null,
+        debit: r.bank_principal !== null ? Number(r.bank_principal) : null,
+        fee: r.bank_fee !== null ? Number(r.bank_fee) : null,
+        status: r.recon_status,
+        status_label: RECON_STATUS_LABEL_ID[r.recon_status] || r.recon_status,
+      }));
+
+    // Tren Transaksi 60 menit — outflow (bank_principal) matched, dibucket
+    // per-menit Asia/Jakarta, 60 titik penuh (menit tanpa transaksi = 0,
+    // BUKAN diloncat) supaya sparkline tidak menyesatkan.
+    const trendBuckets = new Map(); // key: 'HH:mm' Jakarta -> total
+    const trendStart = new Date(now.getTime() - 60 * 60000);
+    for (const r of reconRows) {
+      if (!r.fp_time_response || !MATCHED_STATUSES.has(r.recon_status)) continue;
+      const t = new Date(r.fp_time_response);
+      if (t < trendStart || t > now) continue;
+      const minuteKey = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit', hour12: false,
+      }).format(t);
+      trendBuckets.set(minuteKey, (trendBuckets.get(minuteKey) || 0) + (Number(r.bank_principal) || 0));
+    }
+    const trend60Min = [];
+    for (let i = 59; i >= 0; i--) {
+      const t = new Date(now.getTime() - i * 60000);
+      const minuteKey = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit', hour12: false,
+      }).format(t);
+      trend60Min.push({ minute: minuteKey, outflow: trendBuckets.get(minuteKey) || 0 });
+    }
+
+    // Funding Monitor & Riwayat Top-up (Funding) — REUSE getConfirmedFundingMutations
+    // yang sama dipakai tab Monitoring Saldo (fundingDetectionService.js),
+    // scoped ke business_date hari ini saja, exclude REVERSAL (funding asli saja).
+    let fundingToday = [];
+    try {
+      const fundingRes = await getConfirmedFundingMutations({ pool, bankCode: bank.bank_code, bankAccountId: bank.id, from: businessDate, to: businessDate });
+      if (fundingRes.available) fundingToday = fundingRes.mutations.filter(m => m.classification === 'FUNDING');
+    } catch (e) { console.error(`command-center funding (${bank.bank_code}) error:`, e.message); }
+    fundingToday.sort((a, b) => new Date(a.transaction_datetime) - new Date(b.transaction_datetime));
+    const fundingMonitor = {
+      total: fundingToday.reduce((s, m) => s + (Number(m.amount) || 0), 0),
+      frequency: fundingToday.length,
+      biggest: fundingToday.length ? Math.max(...fundingToday.map(m => Number(m.amount) || 0)) : 0,
+      events: fundingToday.map(m => ({ waktu: m.transaction_datetime, nominal: Number(m.amount) || 0 })),
+    };
+    const topupRiwayatFunding = [...fundingToday].reverse().slice(0, 10).map(m => ({
+      waktu: m.transaction_datetime, nominal: Number(m.amount) || 0, sumber: 'Internal Funding', status: 'CONFIRMED',
+    }));
+
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      success: true,
+      supported: true,
+      bank,
+      policy,
+      status,
+      status_reason: statusReason,
+      operational,
+      balance_movement: balanceMovement,
+      business_date: businessDate,
+      reconciliation_today: reconciliationToday,
+      anomalies,
+      recent_transactions: recentTransactions,
+      trend_60min: trend60Min,
+      funding_monitor: fundingMonitor,
+      topup_riwayat_funding: topupRiwayatFunding,
+    });
+  } catch (e) {
+    console.error('balance-control-tower command-center error:', e.message);
+    res.status(500).json({ error: e.message });
   }
 });
 

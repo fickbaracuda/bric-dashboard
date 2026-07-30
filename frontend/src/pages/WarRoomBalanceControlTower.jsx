@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import Chart from 'chart.js/auto';
 import Layout from '../components/Layout';
 import { getUser } from '../utils/auth';
 import {
@@ -6,13 +7,14 @@ import {
   createBctTopup, getBctTopups, requestBctTopup, approveBctTopup, rejectBctTopup,
   transferBctTopup, confirmBctTopupBalance, completeBctTopup, cancelBctTopup,
   getBctAlerts, acknowledgeBctAlert, snoozeBctAlert, resolveBctAlert, createBctBank,
-  refreshBctForecast,
+  refreshBctForecast, getBctCommandCenter,
 } from '../services/api';
 
 const COLOR = '#0D9488';
 
 const TABS = [
   { key: 'dashboard', label: 'Dashboard', icon: 'ti-building-bank' },
+  { key: 'command-center', label: 'Command Center', icon: 'ti-radar-2' },
   { key: 'detail', label: 'Monitoring Saldo', icon: 'ti-activity' },
   { key: 'topup', label: 'Top Up', icon: 'ti-transfer-in' },
   { key: 'alerts', label: 'Alert', icon: 'ti-bell-ringing' },
@@ -218,6 +220,14 @@ export default function WarRoomBalanceControlTower() {
             />
           )}
 
+          {tab === 'command-center' && (
+            <CommandCenterTab
+              banks={banks}
+              selectedBankId={selectedBankId}
+              onSelectBank={setSelectedBankId}
+            />
+          )}
+
           {tab === 'detail' && (
             <DetailTab
               banks={banks}
@@ -327,6 +337,399 @@ function DashboardTab({ summary, onSelectBank, isAdmin, onAddBank }) {
         </div>
       </div>
     </>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// COMMAND CENTER — tampilan dark "top-up command center" per-bank. Semua
+// angka murni render dari GET /banks/:id/command-center (backend) — TIDAK
+// ADA kalkulasi status/rekomendasi/threshold di sini, sama prinsipnya dgn
+// FaActionSummary di tab Monitoring Saldo.
+// ─────────────────────────────────────────────────────────────────────────
+const CC_STATUS_META = {
+  SAFE:               { label: 'Aman',              color: '#34D399', bg: 'rgba(52,211,153,.14)' },
+  WATCH:              { label: 'Waspada',            color: '#FBBF24', bg: 'rgba(251,191,36,.14)' },
+  TOP_UP_RECOMMENDED: { label: 'Perlu Top Up',        color: '#FB923C', bg: 'rgba(251,146,60,.14)' },
+  CRITICAL:           { label: 'Kritis',              color: '#F87171', bg: 'rgba(248,113,113,.16)' },
+  EMERGENCY:          { label: 'Darurat',             color: '#FFFFFF', bg: 'rgba(220,38,38,.55)' },
+  SUDDEN_DROP:        { label: 'Penurunan Mendadak',  color: '#FFFFFF', bg: 'rgba(185,28,28,.55)' },
+  EXCESS_BALANCE:     { label: 'Saldo Berlebih',      color: '#60A5FA', bg: 'rgba(96,165,250,.14)' },
+  DATA_STALE:         { label: 'Data Kedaluwarsa',    color: '#C084FC', bg: 'rgba(192,132,252,.14)' },
+  SYNC_ERROR:         { label: 'Gagal Sync',          color: '#F87171', bg: 'rgba(248,113,113,.16)' },
+  CONFIGURATION_REQUIRED: { label: 'Perlu Konfigurasi', color: '#9BAAC9', bg: 'rgba(155,170,201,.14)' },
+};
+function ccStatusMeta(s) { return CC_STATUS_META[s] || { label: s || '-', color: '#9BAAC9', bg: 'rgba(155,170,201,.14)' }; }
+
+const RECON_STATUS_COLOR = {
+  MATCHED_NO_FEE: '#34D399', MATCHED: '#22D3EE', FP_ONLY: '#FBBF24', BANK_ONLY: '#C084FC',
+  NOMINAL_MISMATCH: '#F87171', FEE_MISMATCH: '#FB923C', DUPLICATE_FP: '#F472B6', DUPLICATE_BANK: '#F472B6',
+  REVERSAL: '#94A3B8', NEED_REVIEW: '#6B7A9C', PENDING_BANK: '#818CF8',
+};
+function reconStatusColor(s) { return RECON_STATUS_COLOR[s] || '#6B7A9C'; }
+
+function fmtHHmm(v) {
+  if (!v) return '-';
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return '-';
+  return d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Jakarta' }) + ' WIB';
+}
+function fmtRpShort(v) {
+  const n = Number(v);
+  if (v === null || v === undefined || !Number.isFinite(n)) return '-';
+  const abs = Math.abs(n);
+  const sign = n < 0 ? '-' : '';
+  if (abs >= 1e9) return `${sign}Rp ${(abs / 1e9).toFixed(2)}M`;
+  if (abs >= 1e6) return `${sign}Rp ${(abs / 1e6).toFixed(1)}jt`;
+  return fmtRp(n);
+}
+
+function KpiCC({ icon, iconColor, iconBg, label, value, valueClass, sub }) {
+  return (
+    <div className="bctcc-card">
+      <div className="bctcc-kpi-top">
+        <div className="bctcc-kpi-label">{label}</div>
+        {icon && <div className="bctcc-kpi-icon" style={{ color: iconColor, background: iconBg }}><i className={'ti ' + icon} /></div>}
+      </div>
+      <div className={'bctcc-kpi-value' + (valueClass ? ' ' + valueClass : '')}>{value}</div>
+      {sub && <div className="bctcc-kpi-sub">{sub}</div>}
+    </div>
+  );
+}
+
+function CcStatRow({ icon, iconColor, iconBg, label, value, accent }) {
+  return (
+    <div className="bctcc-stat-row">
+      <div className="bctcc-stat-left">
+        {icon && <div className="bctcc-stat-icon" style={{ color: iconColor, background: iconBg }}><i className={'ti ' + icon} /></div>}
+        <div className="bctcc-stat-label">{label}</div>
+      </div>
+      <div className={'bctcc-stat-value' + (accent ? ' bctcc-stat-value--accent' : '')}>{value}</div>
+    </div>
+  );
+}
+
+function TrendSparkline({ data }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!ref.current) return;
+    const chart = new Chart(ref.current, {
+      type: 'line',
+      data: {
+        labels: data.map(d => d.minute),
+        datasets: [{
+          data: data.map(d => d.outflow),
+          borderColor: '#34D399', borderWidth: 2, pointRadius: 0, tension: 0.35, fill: true,
+          backgroundColor: (ctx) => {
+            const g = ctx.chart.ctx.createLinearGradient(0, 0, 0, 130);
+            g.addColorStop(0, 'rgba(52,211,153,.35)'); g.addColorStop(1, 'rgba(52,211,153,0)');
+            return g;
+          },
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => fmtRp(c.parsed.y) } } },
+        scales: {
+          x: { display: false },
+          y: { display: false, beginAtZero: true },
+        },
+      },
+    });
+    return () => chart.destroy();
+  }, [JSON.stringify(data)]);
+  return <canvas ref={ref} />;
+}
+
+function ReconDonut({ byStatus, total }) {
+  const ref = useRef(null);
+  const top = byStatus.slice(0, 6);
+  useEffect(() => {
+    if (!ref.current || !top.length) return;
+    const chart = new Chart(ref.current, {
+      type: 'doughnut',
+      data: {
+        labels: top.map(s => s.label),
+        datasets: [{ data: top.map(s => s.count), backgroundColor: top.map(s => reconStatusColor(s.recon_status)), borderWidth: 0 }],
+      },
+      options: { responsive: true, maintainAspectRatio: false, cutout: '72%', plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => `${c.label}: ${fmtRpInt(c.parsed)}` } } } },
+    });
+    return () => chart.destroy();
+  }, [JSON.stringify(top)]);
+  function fmtRpInt(n) { return Number(n).toLocaleString('id-ID'); }
+  return (
+    <div className="bctcc-donut-layout">
+      <div className="bctcc-donut-chart">
+        <canvas ref={ref} />
+        <div className="bctcc-donut-center"><b>{total.toLocaleString('id-ID')}</b><span>Total FP</span></div>
+      </div>
+      <div className="bctcc-donut-legend">
+        {top.map(s => (
+          <div key={s.recon_status} className="bctcc-donut-legend-row">
+            <span className="bctcc-donut-dot" style={{ background: reconStatusColor(s.recon_status) }} />
+            <span className="bctcc-donut-legend-label">{s.label}</span>
+            <span className="bctcc-donut-legend-value">{s.count.toLocaleString('id-ID')} ({s.percentage ?? 0}%)</span>
+          </div>
+        ))}
+        {top.length === 0 && <div className="bctcc-table-empty">Belum ada data rekonsiliasi hari ini.</div>}
+      </div>
+    </div>
+  );
+}
+
+function FundingBarChart({ events }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!ref.current || !events.length) return;
+    const chart = new Chart(ref.current, {
+      type: 'bar',
+      data: {
+        labels: events.map(e => fmtHHmm(e.waktu).replace(' WIB', '')),
+        datasets: [{ data: events.map(e => e.nominal), backgroundColor: '#60A5FA', borderRadius: 4, maxBarThickness: 40 }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => fmtRp(c.parsed.y) } } },
+        scales: {
+          x: { grid: { display: false }, ticks: { color: '#6B7A9C', font: { size: 10 } } },
+          y: { display: false, beginAtZero: true },
+        },
+      },
+    });
+    return () => chart.destroy();
+  }, [JSON.stringify(events)]);
+  if (!events.length) return <div className="bctcc-table-empty">Belum ada funding hari ini.</div>;
+  return <canvas ref={ref} />;
+}
+
+function CommandCenterTab({ banks, selectedBankId, onSelectBank }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [now, setNow] = useState(new Date());
+
+  const load = useCallback((bankId) => {
+    if (!bankId) return;
+    setLoading(true); setError(null);
+    getBctCommandCenter(bankId)
+      .then(d => { setData(d); setNow(new Date()); })
+      .catch(e => setError(e.response?.data?.error || 'Gagal memuat Command Center.'))
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => { if (selectedBankId) load(selectedBankId); }, [selectedBankId, load]);
+
+  if (!selectedBankId) {
+    return <div className="empty-state"><div className="empty-icon">🏦</div><div className="empty-title">Pilih bank untuk melihat Command Center.</div></div>;
+  }
+
+  return (
+    <div className="bctcc">
+      <div className="bctcc-header">
+        <div>
+          <div className="bctcc-header-title">
+            <i className="ti ti-radar-2" style={{ color: '#34D399' }} />
+            {data?.bank ? `${data.bank.bank_name} Command Center` : 'Command Center'}
+          </div>
+          <div className="bctcc-header-sub">Monitoring likuiditas rekening {data?.bank?.bank_name || ''} secara real-time (refresh saat halaman dimuat / tombol refresh)</div>
+        </div>
+        <div className="bctcc-header-right">
+          <select className="bctcc-select" value={selectedBankId} onChange={e => onSelectBank(Number(e.target.value))}>
+            {banks.map(b => <option key={b.id} value={b.id}>{b.bank_name} - {b.account_number}</option>)}
+          </select>
+          <div className="bctcc-updated">Terakhir diperbarui<b>{fmtDateTime(now)}</b></div>
+          <button className="bctcc-icon-btn" onClick={() => load(selectedBankId)} disabled={loading} title="Refresh Data">
+            <i className={'ti ti-refresh' + (loading ? ' spin' : '')} />
+          </button>
+        </div>
+      </div>
+
+      {loading && !data && <div className="bctcc-loading"><i className="ti ti-loader-2" />Memuat Command Center…</div>}
+      {error && !loading && <div className="bctcc-loading"><i className="ti ti-alert-circle" />{error}</div>}
+
+      {!loading && !error && data && !data.supported && (
+        <div className="bctcc-empty"><i className="ti ti-plug-connected-x" />{data.message}</div>
+      )}
+
+      {!loading && !error && data?.supported && (() => {
+        const op = data.operational;
+        const sm = ccStatusMeta(data.status);
+        const mv = data.balance_movement;
+        const mvUp = mv?.direction === 'UP';
+        const mvDown = mv?.direction === 'DOWN';
+
+        return (
+          <>
+            {/* Row 1 — KPI utama */}
+            <div className="bctcc-kpi-grid">
+              <KpiCC icon="ti-building-bank" iconColor="#60A5FA" iconBg="rgba(96,165,250,.14)" label="Available Balance"
+                value={op ? fmtRp(op.available_balance) : fmtRp(data.bank?.available_balance)} sub={`Sumber: Rekening Bank ${data.bank?.bank_code}`} />
+              <KpiCC icon="ti-shield-lock" iconColor="#60A5FA" iconBg="rgba(96,165,250,.14)" label="Batas Minimum"
+                value={op ? <KpiVal value={op.absolute_minimum_balance} formatter={fmtRp} reason={op.absolute_minimum_balance_unavailable_reason} /> : '-'} sub="Policy Finance" />
+              <KpiCC icon="ti-wallet" iconColor="#FBBF24" iconBg="rgba(251,191,36,.14)" label="Saldo Bisa Digunakan"
+                value={op ? <KpiVal value={op.usable_balance} formatter={fmtRp} reason={op.usable_balance_unavailable_reason} /> : '-'}
+                valueClass={op && Number(op.usable_balance) <= 0 ? 'bctcc-kpi-value--red' : ''} sub="Available - Minimum" />
+              <KpiCC icon={mvDown ? 'ti-trending-down' : 'ti-trending-up'} iconColor={mvDown ? '#F87171' : '#34D399'} iconBg={mvDown ? 'rgba(248,113,113,.16)' : 'rgba(52,211,153,.14)'}
+                label="Δ Saldo" valueClass={mvDown ? 'bctcc-kpi-value--red' : (mvUp ? 'bctcc-kpi-value--green' : '')}
+                value={mv?.delta_amount !== null && mv?.delta_amount !== undefined ? `${mv.delta_amount > 0 ? '+' : ''}${fmtRp(mv.delta_amount)}` : (mv?.reason || 'Belum ada pembanding')}
+                sub={mv?.previous_captured_at ? `Sejak ${fmtHHmm(mv.previous_captured_at)}${mv.delta_percentage !== null && mv.delta_percentage !== undefined ? ` (${mv.delta_amount > 0 ? '+' : ''}${mv.delta_percentage.toFixed(1)}%)` : ''}` : null} />
+              <div className="bctcc-card">
+                <div className="bctcc-kpi-top">
+                  <div className="bctcc-kpi-label">Status Operasional</div>
+                  <div className="bctcc-kpi-icon" style={{ color: sm.color, background: sm.bg }}><i className="ti ti-shield-check" /></div>
+                </div>
+                <div><span className="bctcc-status-pill" style={{ color: sm.color, background: sm.bg }}>{sm.label}</span></div>
+                <div className="bctcc-kpi-sub">{data.status_reason || (op?.status_reason ?? '-')}</div>
+              </div>
+            </div>
+
+            {/* Row 2 — Outflow / Tren Transaksi / Runway & Decision */}
+            <div className="bctcc-row2">
+              <div className="bctcc-card">
+                <div className="bctcc-panel-title"><i className="ti ti-arrow-bar-to-down" />Outflow (Berdasarkan Data FP)</div>
+                <div className="bctcc-outflow-grid">
+                  <div className="bctcc-outflow-cell">
+                    <div className="bctcc-outflow-label">5 Menit Terakhir</div>
+                    <div className="bctcc-outflow-value">{op ? fmtRp(op.burn_rate_per_5_minutes !== null ? op.burn_rate_per_5_minutes * 5 : null) : '-'}</div>
+                    <div className="bctcc-outflow-sub">{op?.burn_rate_per_5_minutes !== null && op?.burn_rate_per_5_minutes !== undefined ? `${fmtRp(op.burn_rate_per_5_minutes)}/menit` : 'tidak ada transaksi'}</div>
+                  </div>
+                  <div className="bctcc-outflow-cell">
+                    <div className="bctcc-outflow-label">15 Menit Terakhir</div>
+                    <div className="bctcc-outflow-value">{op ? fmtRp(op.burn_rate_per_15_minutes !== null ? op.burn_rate_per_15_minutes * 15 : null) : '-'}</div>
+                    <div className="bctcc-outflow-sub">{op?.burn_rate_per_15_minutes !== null && op?.burn_rate_per_15_minutes !== undefined ? `${fmtRp(op.burn_rate_per_15_minutes)}/menit` : 'tidak ada transaksi'}</div>
+                  </div>
+                  <div className="bctcc-outflow-cell">
+                    <div className="bctcc-outflow-label">30 Menit Terakhir</div>
+                    <div className="bctcc-outflow-value">{op ? fmtRp(op.burn_rate_per_30_minutes !== null ? op.burn_rate_per_30_minutes * 30 : null) : '-'}</div>
+                    <div className="bctcc-outflow-sub">{op?.burn_rate_per_30_minutes !== null && op?.burn_rate_per_30_minutes !== undefined ? `${fmtRp(op.burn_rate_per_30_minutes)}/menit` : 'tidak ada transaksi'}</div>
+                  </div>
+                  <div className="bctcc-outflow-cell">
+                    <div className="bctcc-outflow-label">60 Menit Terakhir</div>
+                    <div className="bctcc-outflow-value">{op ? fmtRp(op.burn_rate_per_60_minutes !== null ? op.burn_rate_per_60_minutes * 60 : null) : '-'}</div>
+                    <div className="bctcc-outflow-sub">{op?.burn_rate_per_60_minutes !== null && op?.burn_rate_per_60_minutes !== undefined ? `${fmtRp(op.burn_rate_per_60_minutes)}/menit` : 'tidak ada transaksi'}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bctcc-card">
+                <div className="bctcc-panel-title"><i className="ti ti-chart-line" />Tren Transaksi (60 Menit)</div>
+                <div className="bctcc-chart-wrap"><TrendSparkline data={data.trend_60min} /></div>
+              </div>
+
+              <div className="bctcc-card">
+                <div className="bctcc-panel-title"><i className="ti ti-gauge" />Runway &amp; Top-up Decision</div>
+                <div className="bctcc-stat-list">
+                  <CcStatRow icon="ti-hourglass" iconColor="#60A5FA" iconBg="rgba(96,165,250,.14)" label="Runway (ke Minimum)"
+                    value={op ? <KpiVal value={op.usable_runway_minutes} formatter={fmtMinutes} reason={op.runway_unavailable_reason} /> : '-'} accent />
+                  <CcStatRow icon="ti-calendar-time" iconColor="#9BAAC9" iconBg="rgba(155,170,201,.14)" label="Perkiraan Sentuh Minimum"
+                    value={op?.minimum_balance_breach_time ? fmtHHmm(op.minimum_balance_breach_time) : '-'} />
+                  <CcStatRow icon="ti-clock-exclamation" iconColor="#FBBF24" iconBg="rgba(251,191,36,.14)" label="Top-up Paling Lambat Diproses"
+                    value={op?.topup_deadline ? fmtHHmm(op.topup_deadline) : '-'} />
+                  <CcStatRow icon="ti-shopping-cart" iconColor="#34D399" iconBg="rgba(52,211,153,.14)" label="Rekomendasi Top-up"
+                    value={op ? <KpiVal value={op.recommended_topup} formatter={fmtRp} reason={op.recommended_topup_unavailable_reason} fallback="Tidak diperlukan saat ini" /> : '-'} accent />
+                  <CcStatRow icon="ti-target-arrow" iconColor="#C084FC" iconBg="rgba(192,132,252,.14)" label="Safe Target Balance"
+                    value={op ? <KpiVal value={op.safe_target_balance} formatter={fmtRp} reason="Belum dapat dihitung" /> : '-'} />
+                </div>
+              </div>
+            </div>
+
+            {/* Row 3 — Rekonsiliasi / Funding Monitor / Penggunaan Saldo */}
+            <div className="bctcc-row3">
+              <div className="bctcc-card">
+                <div className="bctcc-panel-title"><i className="ti ti-chart-donut" />Rekonsiliasi FP vs Bank (Hari Ini)</div>
+                <ReconDonut byStatus={data.reconciliation_today.by_status} total={data.reconciliation_today.total_fp} />
+              </div>
+
+              <div className="bctcc-card">
+                <div className="bctcc-panel-title"><i className="ti ti-transfer-in" />Funding Monitor (Hari Ini)</div>
+                <div className="bctcc-funding-stats">
+                  <div><div className="bctcc-funding-stat-label">Total Funding</div><div className="bctcc-funding-stat-value">{fmtRpShort(data.funding_monitor.total)}</div></div>
+                  <div><div className="bctcc-funding-stat-label">Frekuensi</div><div className="bctcc-funding-stat-value">{data.funding_monitor.frequency} kali</div></div>
+                  <div><div className="bctcc-funding-stat-label">Terbesar</div><div className="bctcc-funding-stat-value">{fmtRpShort(data.funding_monitor.biggest)}</div></div>
+                </div>
+                <div className="bctcc-chart-wrap bctcc-chart-wrap--bar"><FundingBarChart events={data.funding_monitor.events} /></div>
+              </div>
+
+              <div className="bctcc-card">
+                <div className="bctcc-panel-title"><i className="ti ti-receipt" />Penggunaan Saldo Hari Ini</div>
+                {op?.today_usage ? (
+                  <div className="bctcc-stat-list">
+                    <CcStatRow label="FP Principal (Matched)" value={fmtRp(op.today_usage.matched_principal_outflow_today)} accent />
+                    <CcStatRow label="Fee Bank" value={fmtRp(op.today_usage.verified_fee_outflow_today)} />
+                    <CcStatRow label="Operational Lain" value={fmtRp(op.today_usage.other_verified_operational_outflow_today)} />
+                    <CcStatRow label="Unmatched / Anomali" value={op.today_usage.unmatched_or_anomaly_debit_today === null ? 'Belum tersedia' : fmtRp(op.today_usage.unmatched_or_anomaly_debit_today)} />
+                    <CcStatRow label="Total Debit Bank" value={op.today_usage.total_bank_debit_today === null ? 'Belum tersedia' : <b>{fmtRp(op.today_usage.total_bank_debit_today)}</b>} accent />
+                  </div>
+                ) : <div className="bctcc-table-empty">Belum ada data penggunaan saldo hari ini.</div>}
+              </div>
+            </div>
+
+            {/* Row 4 — Transaksi Terbaru / Anomali / Riwayat Top-up */}
+            <div className="bctcc-row4">
+              <div className="bctcc-card">
+                <div className="bctcc-panel-title"><i className="ti ti-list-details" />Transaksi Terbaru (FP vs Bank)</div>
+                <div className="bctcc-table-wrap">
+                  <table className="bctcc-table">
+                    <thead><tr><th>Waktu</th><th>ID Transaksi</th><th>Outlet</th><th>Produk</th><th>Nominal FP</th><th>Debit</th><th>Fee</th><th>Status</th></tr></thead>
+                    <tbody>
+                      {data.recent_transactions.length === 0 ? (
+                        <tr><td colSpan={8} className="bctcc-table-empty">Belum ada transaksi matched hari ini.</td></tr>
+                      ) : data.recent_transactions.map((t, i) => (
+                        <tr key={i}>
+                          <td>{fmtHHmm(t.waktu)}</td>
+                          <td className="bctcc-td-strong">{t.id_transaksi || '-'}</td>
+                          <td>{t.id_outlet || '-'}</td>
+                          <td>{t.id_produk || '-'}</td>
+                          <td className="bctcc-td-strong">{fmtRp(t.nominal_fp)}</td>
+                          <td>{fmtRp(t.debit)}</td>
+                          <td>{fmtRp(t.fee)}</td>
+                          <td><span className="bctcc-mini-badge" style={{ color: reconStatusColor(t.status), background: reconStatusColor(t.status) + '26' }}>{t.status_label}</span></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="bctcc-card">
+                <div className="bctcc-panel-title"><i className="ti ti-alert-triangle" />Anomali &amp; Perhatian</div>
+                <div className="bctcc-anomaly-list">
+                  <div className="bctcc-anomaly-row"><div className="bctcc-anomaly-icon" style={{ color: '#FBBF24', background: 'rgba(251,191,36,.14)' }}><i className="ti ti-clock-exclamation" /></div><div className="bctcc-anomaly-label">FP belum keluar di Bank</div><div className="bctcc-anomaly-count">{data.anomalies.fp_only}</div></div>
+                  <div className="bctcc-anomaly-row"><div className="bctcc-anomaly-icon" style={{ color: '#C084FC', background: 'rgba(192,132,252,.14)' }}><i className="ti ti-building-bank" /></div><div className="bctcc-anomaly-label">Bank tidak ditemukan di FP</div><div className="bctcc-anomaly-count">{data.anomalies.bank_only}</div></div>
+                  <div className="bctcc-anomaly-row"><div className="bctcc-anomaly-icon" style={{ color: '#F87171', background: 'rgba(248,113,113,.16)' }}><i className="ti ti-scale" /></div><div className="bctcc-anomaly-label">Mismatch nominal</div><div className="bctcc-anomaly-count">{data.anomalies.nominal_mismatch}</div></div>
+                  <div className="bctcc-anomaly-row"><div className="bctcc-anomaly-icon" style={{ color: '#F472B6', background: 'rgba(244,114,182,.16)' }}><i className="ti ti-copy" /></div><div className="bctcc-anomaly-label">Duplikasi transaksi</div><div className="bctcc-anomaly-count">{data.anomalies.duplicate}</div></div>
+                  <div className="bctcc-anomaly-row"><div className="bctcc-anomaly-icon" style={{ color: '#94A3B8', background: 'rgba(148,163,184,.16)' }}><i className="ti ti-rotate-2" /></div><div className="bctcc-anomaly-label">Reversal / Return</div><div className="bctcc-anomaly-count">{data.anomalies.reversal}</div></div>
+                </div>
+              </div>
+
+              <div className="bctcc-card">
+                <div className="bctcc-panel-title"><i className="ti ti-history" />Riwayat Top-up (Funding)</div>
+                <div className="bctcc-table-wrap">
+                  <table className="bctcc-table">
+                    <thead><tr><th>Waktu</th><th>Nominal</th><th>Sumber</th><th>Status</th></tr></thead>
+                    <tbody>
+                      {data.topup_riwayat_funding.length === 0 ? (
+                        <tr><td colSpan={4} className="bctcc-table-empty">Belum ada funding hari ini.</td></tr>
+                      ) : data.topup_riwayat_funding.map((t, i) => (
+                        <tr key={i}>
+                          <td>{fmtHHmm(t.waktu)}</td>
+                          <td className="bctcc-td-strong">{fmtRp(t.nominal)}</td>
+                          <td>{t.sumber}</td>
+                          <td><span className="bctcc-mini-badge" style={{ color: '#34D399', background: 'rgba(52,211,153,.16)' }}>{t.status}</span></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            <div className="bctcc-footer">
+              Data bersumber dari rekonsiliasi {data.bank?.bank_code} (business date {data.business_date}) · calculation_version {op?.calculation_version ?? '-'} · dihitung {fmtDateTime(op?.calculation_timestamp)}
+            </div>
+          </>
+        );
+      })()}
+    </div>
   );
 }
 

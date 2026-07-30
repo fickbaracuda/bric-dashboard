@@ -5799,3 +5799,133 @@ body {
   .bct-kpi-grid { grid-template-columns: repeat(2, 1fr); }
 }
 
+/* ══════════════════════════════════════════════════════════════════════
+   Balance Control Tower — COMMAND CENTER tab (bctcc-*)
+   Gaya "dark ops command center" SENGAJA fixed-dark (bukan mengikuti
+   [data-theme] toggle app) — dipakai HANYA di tab ini, tab lain BCT
+   (Dashboard/Monitoring Saldo/Top Up/Alert) tetap terang seperti biasa.
+   ══════════════════════════════════════════════════════════════════════ */
+.bctcc {
+  --cc-bg: #0A1120; --cc-card: #121B2E; --cc-card-2: #0E1626; --cc-border: #223050;
+  --cc-text-1: #EAF0FB; --cc-text-2: #9BAAC9; --cc-text-3: #6B7A9C; --cc-text-4: #4C5A78;
+  --cc-green: #34D399; --cc-green-bg: rgba(52,211,153,.12);
+  --cc-red: #F87171; --cc-red-bg: rgba(248,113,113,.12);
+  --cc-amber: #FBBF24; --cc-amber-bg: rgba(251,191,36,.12);
+  --cc-blue: #60A5FA; --cc-blue-bg: rgba(96,165,250,.12);
+  --cc-purple: #C084FC; --cc-purple-bg: rgba(192,132,252,.12);
+  background: var(--cc-bg); border-radius: 14px; padding: 20px; color: var(--cc-text-1);
+  font-variant-numeric: tabular-nums;
+}
+.bctcc-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 18px; }
+.bctcc-header-title { font-size: 19px; font-weight: 800; color: var(--cc-text-1); display: flex; align-items: center; gap: 10px; }
+.bctcc-header-sub { font-size: 12.5px; color: var(--cc-text-2); margin-top: 4px; }
+.bctcc-header-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.bctcc-updated { text-align: right; font-size: 11px; color: var(--cc-text-3); }
+.bctcc-updated b { display: block; font-size: 12.5px; color: var(--cc-text-1); font-weight: 700; }
+.bctcc-icon-btn {
+  width: 34px; height: 34px; border-radius: 9px; background: var(--cc-card-2); border: 1px solid var(--cc-border);
+  color: var(--cc-text-1); display: flex; align-items: center; justify-content: center; cursor: pointer;
+}
+.bctcc-icon-btn:hover { background: var(--cc-border); }
+.bctcc-icon-btn:disabled { opacity: .5; cursor: default; }
+.bctcc-select {
+  background: var(--cc-card-2); border: 1px solid var(--cc-border); color: var(--cc-text-1);
+  border-radius: 9px; padding: 8px 12px; font-size: 12.5px; font-weight: 600;
+}
+
+.bctcc-kpi-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 14px; }
+.bctcc-card {
+  background: var(--cc-card); border: 1px solid var(--cc-border); border-radius: 12px; padding: 14px 16px;
+  display: flex; flex-direction: column;
+}
+.bctcc-kpi-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.bctcc-kpi-label { font-size: 10.5px; font-weight: 700; color: var(--cc-text-3); text-transform: uppercase; letter-spacing: .05em; }
+.bctcc-kpi-icon {
+  width: 26px; height: 26px; border-radius: 7px; display: flex; align-items: center; justify-content: center;
+  font-size: 13px; flex-shrink: 0;
+}
+.bctcc-kpi-value { font-size: 19px; font-weight: 800; color: var(--cc-text-1); line-height: 1.2; }
+.bctcc-kpi-value--sm { font-size: 15px; }
+.bctcc-kpi-sub { font-size: 11px; color: var(--cc-text-3); margin-top: 5px; }
+.bctcc-kpi-value--green { color: var(--cc-green); }
+.bctcc-kpi-value--red { color: var(--cc-red); }
+.bctcc-kpi-value--amber { color: var(--cc-amber); }
+
+.bctcc-status-pill { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 999px; font-size: 12.5px; font-weight: 800; }
+
+.bctcc-panel-title {
+  font-size: 11px; font-weight: 800; color: var(--cc-text-2); text-transform: uppercase; letter-spacing: .05em;
+  margin-bottom: 10px; display: flex; align-items: center; gap: 6px;
+}
+.bctcc-panel-title i { font-size: 13px; }
+
+.bctcc-row2 { display: grid; grid-template-columns: 1.15fr 1fr 0.85fr; gap: 12px; margin-bottom: 12px; align-items: stretch; }
+.bctcc-row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-bottom: 12px; align-items: stretch; }
+.bctcc-row4 { display: grid; grid-template-columns: 1.6fr 1fr 1fr; gap: 12px; margin-bottom: 12px; align-items: stretch; }
+@media (max-width: 1300px) {
+  .bctcc-kpi-grid { grid-template-columns: repeat(3, 1fr); }
+  .bctcc-row2, .bctcc-row3, .bctcc-row4 { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 760px) {
+  .bctcc-kpi-grid { grid-template-columns: 1fr 1fr; }
+  .bctcc-row2, .bctcc-row3, .bctcc-row4 { grid-template-columns: 1fr; }
+}
+
+.bctcc-outflow-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.bctcc-outflow-cell { background: var(--cc-card-2); border: 1px solid var(--cc-border); border-radius: 9px; padding: 10px 12px; }
+.bctcc-outflow-label { font-size: 10px; font-weight: 700; color: var(--cc-text-3); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 5px; }
+.bctcc-outflow-value { font-size: 15px; font-weight: 800; color: var(--cc-text-1); }
+.bctcc-outflow-sub { font-size: 10.5px; color: var(--cc-text-3); margin-top: 3px; }
+
+.bctcc-trend-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 700; color: var(--cc-green); background: var(--cc-green-bg); padding: 3px 8px; border-radius: 6px; }
+.bctcc-trend-badge--down { color: var(--cc-red); background: var(--cc-red-bg); }
+.bctcc-chart-wrap { position: relative; height: 130px; }
+
+.bctcc-stat-list { display: flex; flex-direction: column; gap: 12px; }
+.bctcc-stat-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.bctcc-stat-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.bctcc-stat-icon { width: 24px; height: 24px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 12px; flex-shrink: 0; }
+.bctcc-stat-label { font-size: 11.5px; color: var(--cc-text-2); font-weight: 600; }
+.bctcc-stat-value { font-size: 13.5px; font-weight: 800; color: var(--cc-text-1); text-align: right; white-space: nowrap; }
+.bctcc-stat-value--accent { color: var(--cc-blue); }
+
+.bctcc-donut-layout { display: flex; align-items: center; gap: 14px; }
+.bctcc-donut-chart { position: relative; width: 108px; height: 108px; flex-shrink: 0; }
+.bctcc-donut-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.bctcc-donut-center b { font-size: 17px; color: var(--cc-text-1); }
+.bctcc-donut-center span { font-size: 9.5px; color: var(--cc-text-3); text-transform: uppercase; }
+.bctcc-donut-legend { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 0; }
+.bctcc-donut-legend-row { display: flex; align-items: center; gap: 7px; font-size: 11px; }
+.bctcc-donut-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.bctcc-donut-legend-label { color: var(--cc-text-2); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bctcc-donut-legend-value { color: var(--cc-text-1); font-weight: 700; }
+
+.bctcc-funding-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 10px; }
+.bctcc-funding-stat-label { font-size: 9.5px; color: var(--cc-text-3); text-transform: uppercase; letter-spacing: .03em; margin-bottom: 3px; }
+.bctcc-funding-stat-value { font-size: 13px; font-weight: 800; color: var(--cc-text-1); }
+.bctcc-chart-wrap--bar { height: 110px; }
+
+.bctcc-table-wrap { overflow-x: auto; }
+.bctcc-table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+.bctcc-table th {
+  text-align: left; color: var(--cc-text-3); font-weight: 700; text-transform: uppercase; font-size: 9.5px;
+  letter-spacing: .03em; padding: 6px 8px; border-bottom: 1px solid var(--cc-border); white-space: nowrap;
+}
+.bctcc-table td { padding: 7px 8px; border-bottom: 1px solid var(--cc-card-2); color: var(--cc-text-2); white-space: nowrap; }
+.bctcc-table tr:last-child td { border-bottom: none; }
+.bctcc-table td.bctcc-td-strong { color: var(--cc-text-1); font-weight: 700; }
+.bctcc-table-empty { padding: 20px; text-align: center; color: var(--cc-text-3); font-size: 12px; }
+
+.bctcc-mini-badge { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 10px; font-weight: 800; }
+
+.bctcc-anomaly-list { display: flex; flex-direction: column; gap: 10px; }
+.bctcc-anomaly-row { display: flex; align-items: center; gap: 10px; }
+.bctcc-anomaly-icon { width: 26px; height: 26px; border-radius: 7px; display: flex; align-items: center; justify-content: center; font-size: 13px; flex-shrink: 0; }
+.bctcc-anomaly-label { font-size: 11.5px; color: var(--cc-text-2); font-weight: 600; flex: 1; }
+.bctcc-anomaly-count { font-size: 14px; font-weight: 800; color: var(--cc-text-1); }
+.bctcc-anomaly-link { margin-top: 4px; font-size: 11px; color: var(--cc-blue); font-weight: 700; cursor: default; }
+
+.bctcc-footer { margin-top: 4px; font-size: 10.5px; color: var(--cc-text-4); text-align: center; }
+.bctcc-loading, .bctcc-empty { padding: 60px 20px; text-align: center; color: var(--cc-text-3); font-size: 13px; }
+.bctcc-loading i, .bctcc-empty i { font-size: 26px; display: block; margin-bottom: 10px; color: var(--cc-text-3); }
+

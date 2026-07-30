@@ -16,6 +16,11 @@ MODE EXECUTE (baru dipakai nanti, setelah disetujui):
   python scripts/safe_deploy.py --execute
   -> Akan diminta mengetik "DEPLOY" dulu sebagai konfirmasi terakhir.
   -> Baru setelah itu benar-benar menyambung ke server dan menjalankan langkah.
+  -> Kalau git pull di server menarik commit BARU (bukan "deploy kosong"),
+     proses BERHENTI dan menampilkan diff HEAD lama->baru untuk diverifikasi
+     manual dulu. Setelah commit itu diverifikasi & disetujui, jalankan ulang
+     dengan tambahan --confirm-new-commit untuk melanjutkan ke build/deploy:
+       python scripts/safe_deploy.py --execute --confirm-new-commit
 
 URUTAN 8 LANGKAH INTI (sesuai kesepakatan keamanan):
   1. Cek status Git di server (+ tarik kode terbaru / git pull) — kalau ada
@@ -94,6 +99,10 @@ USER_CONFIRMED_PREEXISTING_PATHS = (
     "frontend/src/pages/WarRoomPaLpd.jsx",
     "frontend/src/pages/WarRoomQrisControlTower.jsx",
     "frontend/src/components/qris/",
+    # Dikonfirmasi pemilik project (2026-07-30): hasil npm install manual
+    # di server sebelumnya, wajar, bukan perubahan kode fitur.
+    "backend/package-lock.json",
+    "frontend/package-lock.json",
 )
 
 
@@ -190,7 +199,7 @@ def backup_frontend(client, remote_frontend_path: str) -> str:
     return backup_path
 
 
-def run_deploy(config: dict):
+def run_deploy(config: dict, confirm_new_commit: bool = False):
     remote_project = config["REMOTE_PROJECT_PATH"]
     remote_frontend = config["REMOTE_FRONTEND_PATH"]
 
@@ -266,9 +275,13 @@ def run_deploy(config: dict):
         if head_after != head_before:
             print(f"\n[PERINGATAN] git pull menarik commit BARU (HEAD berubah dari {head_before[:12]} ke {head_after[:12]}).")
             print("Ini BUKAN 'deploy kosong' lagi — ada kode baru yang belum pernah diuji lewat alur ini.")
-            print("Proses DIHENTIKAN untuk konfirmasi manual sebelum melanjutkan build & deploy.")
-            return False
-        print(f"[OK] HEAD tidak berubah ({head_after[:12]}...) — benar-benar 'deploy kosong', tidak ada kode baru.")
+            if not confirm_new_commit:
+                print("Proses DIHENTIKAN untuk konfirmasi manual sebelum melanjutkan build & deploy.")
+                print("(Kalau sudah diverifikasi & disetujui, jalankan ulang dengan tambahan --confirm-new-commit.)")
+                return False
+            print("[INFO] --confirm-new-commit diberikan — commit baru ini SUDAH diverifikasi/disetujui sebelumnya, lanjut.")
+        else:
+            print(f"[OK] HEAD tidak berubah ({head_after[:12]}...) — benar-benar 'deploy kosong', tidak ada kode baru.")
 
         # 2) Preflight check (mode production) di server
         print("\n>>> [2/8] Menjalankan preflight check di server ...")
@@ -368,6 +381,7 @@ def run_deploy(config: dict):
 def main():
     execute_mode = "--execute" in sys.argv
     explicit_dry_run = "--dry-run" in sys.argv
+    confirm_new_commit = "--confirm-new-commit" in sys.argv
 
     print_plan()
 
@@ -385,7 +399,7 @@ def main():
         return
 
     config = get_deploy_config(interactive=True)
-    success = run_deploy(config)
+    success = run_deploy(config, confirm_new_commit=confirm_new_commit)
 
     print()
     print("=== Deploy SELESAI (sukses) ===" if success else "=== Deploy DIHENTIKAN / GAGAL — lihat pesan di atas ===")
