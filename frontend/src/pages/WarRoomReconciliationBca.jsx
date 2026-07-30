@@ -23,8 +23,8 @@ const COLOR = '#0033A0';
 const TABS = [
   { key: 'summary', label: 'Ringkasan', icon: 'ti-report-money' },
   { key: 'matched', label: 'Matched', icon: 'ti-circle-check' },
-  { key: 'fp-not-found', label: 'FP Tidak Ditemukan di Bank', icon: 'ti-file-off' },
-  { key: 'bank-not-found', label: 'Bank Tidak Ditemukan di FP', icon: 'ti-building-bank' },
+  { key: 'fp-not-found', label: 'FP Only', icon: 'ti-file-off' },
+  { key: 'bank-not-found', label: 'Bank Only', icon: 'ti-building-bank' },
   { key: 'mismatch', label: 'Amount Mismatch', icon: 'ti-alert-triangle' },
   { key: 'duplicate', label: 'Duplicate', icon: 'ti-copy' },
   { key: 'credit', label: 'Credit & Reversal', icon: 'ti-cash' },
@@ -109,8 +109,8 @@ function downloadBlob(blob, filename) {
 const STATUS_META = {
   MATCHED:                       { label: 'Matched',                    color: '#059669', bg: '#DCFCE7' },
   MATCHED_AMOUNT_EXACT:          { label: 'Matched (Amount Exact)',      color: '#059669', bg: '#DCFCE7' },
-  FP_NOT_FOUND_IN_BANK:          { label: 'FP Tidak Ditemukan di Bank',  color: '#B45309', bg: '#FEF3C7' },
-  BANK_NOT_FOUND_IN_FP:          { label: 'Bank Tidak Ditemukan di FP',  color: '#EA580C', bg: '#FFEDD5' },
+  FP_NOT_FOUND_IN_BANK:          { label: 'FP Only',                     color: '#B45309', bg: '#FEF3C7' },
+  BANK_NOT_FOUND_IN_FP:          { label: 'Bank Only',                   color: '#EA580C', bg: '#FFEDD5' },
   AMOUNT_MISMATCH:               { label: 'Amount Mismatch',             color: '#DC2626', bg: '#FEE2E2' },
   DUPLICATE_FP_TRANSACTION_ID:   { label: 'Duplicate FP Transaction ID', color: '#BE123C', bg: '#FFE4E6' },
   DUPLICATE_BANK_TRANSACTION_ID: { label: 'Duplicate Bank Transaction ID', color: '#BE123C', bg: '#FFE4E6' },
@@ -228,8 +228,8 @@ function SummaryTab({ analytics, date }) {
         <KPICard label="Total Data FP" value={fmtN(s?.total_data_fp)} />
         <KPICard label="Total Mutasi BCA" value={fmtN(s?.total_mutasi_bca)} />
         <KPICard label="Matched" value={fmtN(s?.matched)} />
-        <KPICard label="FP Tidak Ditemukan di Bank" value={fmtN(s?.fp_not_found_in_bank_count)} alert={(s?.fp_not_found_in_bank_count || 0) > 0} />
-        <KPICard label="Bank Tidak Ditemukan di FP" value={fmtN(s?.bank_not_found_in_fp_count)} alert={(s?.bank_not_found_in_fp_count || 0) > 0} />
+        <KPICard label="FP Only" value={fmtN(s?.fp_not_found_in_bank_count)} alert={(s?.fp_not_found_in_bank_count || 0) > 0} />
+        <KPICard label="Bank Only" value={fmtN(s?.bank_not_found_in_fp_count)} alert={(s?.bank_not_found_in_fp_count || 0) > 0} />
         <KPICard label="Amount Mismatch" value={fmtN(s?.amount_mismatch_count)} alert={(s?.amount_mismatch_count || 0) > 0} />
         <KPICard label="Duplicate" value={fmtN(s?.duplicate_count)} alert={(s?.duplicate_count || 0) > 0} />
         <KPICard label="Unparseable" value={fmtN(s?.unparseable_count)} alert={(s?.unparseable_count || 0) > 0} />
@@ -296,8 +296,8 @@ function SummaryTab({ analytics, date }) {
       </div>
 
       <div className="wrr-mini-panel-row">
-        <MiniExceptionTable title="FP Tidak Ditemukan di Bank" statuses={['FP_NOT_FOUND_IN_BANK']} date={date} />
-        <MiniExceptionTable title="Bank Tidak Ditemukan di FP" statuses={['BANK_NOT_FOUND_IN_FP']} date={date} />
+        <MiniExceptionTable title="FP Only" statuses={['FP_NOT_FOUND_IN_BANK']} date={date} />
+        <MiniExceptionTable title="Bank Only" statuses={['BANK_NOT_FOUND_IN_FP']} date={date} />
         <MiniExceptionTable title="Amount Mismatch" statuses={['AMOUNT_MISMATCH']} date={date} />
       </div>
     </>
@@ -305,9 +305,9 @@ function SummaryTab({ analytics, date }) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
-   Tabel bersama — dipakai oleh tab Matched/FP Tidak Ditemukan/Bank Tidak
-   Ditemukan/Amount Mismatch/Duplicate/Credit & Reversal/Unparseable/Semua
-   Transaksi (parameterized by fixedStatuses).
+   Tabel bersama — dipakai oleh tab Matched/FP Only/Bank Only/Amount
+   Mismatch/Duplicate/Credit & Reversal/Unparseable/Semua Transaksi
+   (parameterized by fixedStatuses).
    ═══════════════════════════════════════════════════════════════════════ */
 function ReconTable({ date, fixedStatuses, allowFilter, onOpenAudit }) {
   const [statusFilter, setStatusFilter] = useState('semua');
