@@ -2,7 +2,9 @@ const express = require('express');
 const router  = express.Router();
 const pool    = require('../db');
 
-const SECRET_TOKEN = 'bric2026bimasaktisecret';
+// Part 2A: baca dari env dulu, fallback ke nilai lama agar Apps Script existing tidak putus.
+// TODO Part 2B/2C: hapus fallback literal setelah APPS_SCRIPT_TOKEN dipastikan di-set di server.
+const SECRET_TOKEN = process.env.APPS_SCRIPT_TOKEN || 'bric2026bimasaktisecret';
 
 /* ── Sync handler (no JWT, uses own token) — export untuk app.js ── */
 async function syncHandler(req, res) {
@@ -533,10 +535,25 @@ router.get('/speedcash/analytics', async (req, res) => {
    PA PRODUK — Sync + Analytics
 ══════════════════════════════════════════════ */
 
+/**
+ * bulan CURR wajib eksplisit di body ('YYYY-MM') -- root cause fix (sama
+ * kategori dgn Fastpay/OCBC/BCA): versi lama menyimpan ke kolom hardcode
+ * mat_apr/mat_mei/mat_jun, sehingga bulan baru (mis. Juli) SELALU tertimpa
+ * ke kolom "jun" & tetap berlabel "Juni" di frontend. bulan_m1/bulan_m2
+ * TIDAK perlu dikirim client -- selalu diturunkan dari bulan (m1 = bulan-1,
+ * m2 = bulan-2), supaya jendela 3-bulan konsisten & tidak bisa salah kirim.
+ */
+function shiftBulan(bulan, delta) {
+  const [y, m] = bulan.split('-').map(Number);
+  const d = new Date(Date.UTC(y, m - 1 + delta, 1));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
 async function paProdukSyncHandler(req, res) {
-  const { token, tanggal, periode_start, periode_end, rows, mat_totals } = req.body;
+  const { token, bulan, tanggal, periode_start, periode_end, rows, mat_totals } = req.body;
   if (token !== SECRET_TOKEN) return res.status(401).json({ error: 'Unauthorized' });
-  if (!tanggal || !rows || !Array.isArray(rows)) return res.status(400).json({ error: 'tanggal + rows required' });
+  if (!bulan || !/^\d{4}-\d{2}$/.test(bulan)) return res.status(400).json({ error: 'bulan wajib diisi, format YYYY-MM' });
+  if (!rows || !Array.isArray(rows)) return res.status(400).json({ error: 'rows required' });
 
   const client = await pool.connect();
   try {
@@ -546,40 +563,40 @@ async function paProdukSyncHandler(req, res) {
       const produk = String(r.produk || '').trim();
       if (!produk || /^total$/i.test(produk)) continue;
       await client.query(`
-        INSERT INTO pa_produk_snapshot
-          (tanggal, periode_start, periode_end, produk,
-           mat_apr, trx_apr, rev_apr,
-           mat_mei, trx_mei, rev_mei,
-           mat_jun, trx_jun, rev_jun, synced_at)
+        INSERT INTO warroom_pa_produk_periode
+          (bulan, periode_start, periode_end, produk,
+           mat_m2, trx_m2, rev_m2,
+           mat_m1, trx_m1, rev_m1,
+           mat_curr, trx_curr, rev_curr, synced_at)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW())
-        ON CONFLICT (tanggal, produk) DO UPDATE SET
+        ON CONFLICT (bulan, produk) DO UPDATE SET
           periode_start=EXCLUDED.periode_start, periode_end=EXCLUDED.periode_end,
-          mat_apr=EXCLUDED.mat_apr, trx_apr=EXCLUDED.trx_apr, rev_apr=EXCLUDED.rev_apr,
-          mat_mei=EXCLUDED.mat_mei, trx_mei=EXCLUDED.trx_mei, rev_mei=EXCLUDED.rev_mei,
-          mat_jun=EXCLUDED.mat_jun, trx_jun=EXCLUDED.trx_jun, rev_jun=EXCLUDED.rev_jun,
+          mat_m2=EXCLUDED.mat_m2, trx_m2=EXCLUDED.trx_m2, rev_m2=EXCLUDED.rev_m2,
+          mat_m1=EXCLUDED.mat_m1, trx_m1=EXCLUDED.trx_m1, rev_m1=EXCLUDED.rev_m1,
+          mat_curr=EXCLUDED.mat_curr, trx_curr=EXCLUDED.trx_curr, rev_curr=EXCLUDED.rev_curr,
           synced_at=NOW()
       `, [
-        tanggal, periode_start || tanggal, periode_end || tanggal, produk,
-        r.mat_apr || 0, r.trx_apr || 0, r.rev_apr || 0,
-        r.mat_mei || 0, r.trx_mei || 0, r.rev_mei || 0,
-        r.mat_jun || 0, r.trx_jun || 0, r.rev_jun || 0,
+        bulan, periode_start || (tanggal || null), periode_end || (tanggal || null), produk,
+        r.mat_m2 || 0, r.trx_m2 || 0, r.rev_m2 || 0,
+        r.mat_m1 || 0, r.trx_m1 || 0, r.rev_m1 || 0,
+        r.mat_curr || 0, r.trx_curr || 0, r.rev_curr || 0,
       ]);
       count++;
     }
 
     // Simpan MAT resmi dari baris TOTAL sheet (row 24)
-    if (mat_totals && (mat_totals.mat_jun || mat_totals.mat_mei || mat_totals.mat_apr)) {
+    if (mat_totals && (mat_totals.mat_curr || mat_totals.mat_m1 || mat_totals.mat_m2)) {
       await client.query(`
-        INSERT INTO pa_produk_totals (tanggal, mat_apr, mat_mei, mat_jun, synced_at)
+        INSERT INTO warroom_pa_produk_totals (bulan, mat_m2, mat_m1, mat_curr, synced_at)
         VALUES ($1, $2, $3, $4, NOW())
-        ON CONFLICT (tanggal) DO UPDATE SET
-          mat_apr=EXCLUDED.mat_apr, mat_mei=EXCLUDED.mat_mei,
-          mat_jun=EXCLUDED.mat_jun, synced_at=NOW()
-      `, [tanggal, mat_totals.mat_apr || 0, mat_totals.mat_mei || 0, mat_totals.mat_jun || 0]);
+        ON CONFLICT (bulan) DO UPDATE SET
+          mat_m2=EXCLUDED.mat_m2, mat_m1=EXCLUDED.mat_m1,
+          mat_curr=EXCLUDED.mat_curr, synced_at=NOW()
+      `, [bulan, mat_totals.mat_m2 || 0, mat_totals.mat_m1 || 0, mat_totals.mat_curr || 0]);
     }
 
     await client.query('COMMIT');
-    res.json({ success: true, rows: count, tanggal, mat_totals: mat_totals || null });
+    res.json({ success: true, rows: count, bulan, mat_totals: mat_totals || null });
   } catch (e) {
     await client.query('ROLLBACK');
     console.error('pa-produk sync error:', e.message);
@@ -593,101 +610,106 @@ router.post('/pa-produk/sync', paProdukSyncHandler);
 
 router.get('/pa-produk/analytics', async (req, res) => {
   try {
-    const latestRes = await pool.query(
-      'SELECT MAX(tanggal) AS t FROM pa_produk_snapshot'
-    );
-    const tanggal = latestRes.rows[0]?.t;
-    if (!tanggal) return res.json({ meta: null, total: {}, data: [] });
+    const blRes = await pool.query('SELECT DISTINCT bulan FROM warroom_pa_produk_periode ORDER BY bulan DESC');
+    const bulanList = blRes.rows.map(r => r.bulan);
+    if (!bulanList.length) return res.json({ meta: null, total: {}, data: [], bulan_list: [] });
+
+    let { bulan } = req.query;
+    if (!bulan || !bulanList.includes(bulan)) bulan = bulanList[0];
 
     // Reusable computed cols (inline for all queries)
     const COMPUTED = `
-      (trx_jun - trx_mei) AS dev_trx_mei_jun,
-      (rev_jun - rev_mei) AS dev_rev_mei_jun,
-      CASE WHEN trx_mei > 0 THEN ROUND(((trx_jun - trx_mei)::numeric / trx_mei * 100), 1)
+      (trx_curr - trx_m1) AS dev_trx_m1_curr,
+      (rev_curr - rev_m1) AS dev_rev_m1_curr,
+      CASE WHEN trx_m1 > 0 THEN ROUND(((trx_curr - trx_m1)::numeric / trx_m1 * 100), 1)
            ELSE NULL END AS pct_trx_growth,
-      CASE WHEN rev_mei > 0 THEN ROUND(((rev_jun - rev_mei)::numeric / rev_mei * 100), 1)
+      CASE WHEN rev_m1 > 0 THEN ROUND(((rev_curr - rev_m1)::numeric / rev_m1 * 100), 1)
            ELSE NULL END AS pct_rev_growth,
-      CASE WHEN trx_jun > 0 THEN ROUND(rev_jun::numeric / trx_jun) ELSE 0 END AS arpt_jun,
-      CASE WHEN trx_mei > 0 THEN ROUND(rev_mei::numeric / trx_mei) ELSE 0 END AS arpt_mei,
-      CASE WHEN trx_apr > 0 THEN ROUND(rev_apr::numeric / trx_apr) ELSE 0 END AS arpt_apr`;
+      CASE WHEN trx_curr > 0 THEN ROUND(rev_curr::numeric / trx_curr) ELSE 0 END AS arpt_curr,
+      CASE WHEN trx_m1 > 0 THEN ROUND(rev_m1::numeric / trx_m1) ELSE 0 END AS arpt_m1,
+      CASE WHEN trx_m2 > 0 THEN ROUND(rev_m2::numeric / trx_m2) ELSE 0 END AS arpt_m2`;
 
     const [metaRes, totalRes, dataRes, totalsRes, statsRes, growthRes, declineRes] = await Promise.all([
       pool.query(
-        'SELECT tanggal, periode_start, periode_end FROM pa_produk_snapshot WHERE tanggal=$1 LIMIT 1',
-        [tanggal]
+        'SELECT bulan, periode_start, periode_end, MAX(synced_at) AS last_sync FROM warroom_pa_produk_periode WHERE bulan=$1 GROUP BY bulan, periode_start, periode_end',
+        [bulan]
       ),
       pool.query(`
         SELECT
-          SUM(mat_apr) AS mat_apr, SUM(trx_apr) AS trx_apr, SUM(rev_apr) AS rev_apr,
-          SUM(mat_mei) AS mat_mei, SUM(trx_mei) AS trx_mei, SUM(rev_mei) AS rev_mei,
-          SUM(mat_jun) AS mat_jun, SUM(trx_jun) AS trx_jun, SUM(rev_jun) AS rev_jun
-        FROM pa_produk_snapshot WHERE tanggal=$1
-      `, [tanggal]),
+          SUM(mat_m2) AS mat_m2, SUM(trx_m2) AS trx_m2, SUM(rev_m2) AS rev_m2,
+          SUM(mat_m1) AS mat_m1, SUM(trx_m1) AS trx_m1, SUM(rev_m1) AS rev_m1,
+          SUM(mat_curr) AS mat_curr, SUM(trx_curr) AS trx_curr, SUM(rev_curr) AS rev_curr
+        FROM warroom_pa_produk_periode WHERE bulan=$1
+      `, [bulan]),
       // Top 100 by revenue — sufficient for all charts & tables
       pool.query(`
         SELECT produk,
-          mat_apr, trx_apr, rev_apr,
-          mat_mei, trx_mei, rev_mei,
-          mat_jun, trx_jun, rev_jun,
+          mat_m2, trx_m2, rev_m2,
+          mat_m1, trx_m1, rev_m1,
+          mat_curr, trx_curr, rev_curr,
           ${COMPUTED}
-        FROM pa_produk_snapshot
-        WHERE tanggal=$1
-        ORDER BY rev_jun DESC
+        FROM warroom_pa_produk_periode
+        WHERE bulan=$1
+        ORDER BY rev_curr DESC
         LIMIT 100
-      `, [tanggal]),
+      `, [bulan]),
       pool.query(
-        'SELECT mat_apr, mat_mei, mat_jun FROM pa_produk_totals WHERE tanggal=$1',
-        [tanggal]
+        'SELECT mat_m2, mat_m1, mat_curr FROM warroom_pa_produk_totals WHERE bulan=$1',
+        [bulan]
       ).catch(() => ({ rows: [] })),
-      // Server-side aggregate stats across all 90K outlets
+      // Server-side aggregate stats across all outlets
       pool.query(`
         SELECT
           COUNT(*) AS total_outlets,
-          COUNT(CASE WHEN trx_jun > 0 OR rev_jun > 0 THEN 1 END) AS active_jun,
-          COUNT(CASE WHEN trx_mei > 0 AND rev_mei > 0 AND rev_jun > rev_mei THEN 1 END) AS growing,
-          COUNT(CASE WHEN trx_mei > 0 AND rev_mei > 0 AND rev_jun < rev_mei THEN 1 END) AS declining,
-          COUNT(CASE WHEN trx_mei = 0 AND trx_jun > 0 THEN 1 END) AS new_active,
-          COUNT(CASE WHEN trx_mei > 0 AND trx_jun = 0 THEN 1 END) AS churned,
-          COUNT(CASE WHEN rev_jun < rev_mei AND rev_mei < rev_apr THEN 1 END) AS kritis_2period
-        FROM pa_produk_snapshot WHERE tanggal=$1
-      `, [tanggal]),
+          COUNT(CASE WHEN trx_curr > 0 OR rev_curr > 0 THEN 1 END) AS active_curr,
+          COUNT(CASE WHEN trx_m1 > 0 AND rev_m1 > 0 AND rev_curr > rev_m1 THEN 1 END) AS growing,
+          COUNT(CASE WHEN trx_m1 > 0 AND rev_m1 > 0 AND rev_curr < rev_m1 THEN 1 END) AS declining,
+          COUNT(CASE WHEN trx_m1 = 0 AND trx_curr > 0 THEN 1 END) AS new_active,
+          COUNT(CASE WHEN trx_m1 > 0 AND trx_curr = 0 THEN 1 END) AS churned,
+          COUNT(CASE WHEN rev_curr < rev_m1 AND rev_m1 < rev_m2 THEN 1 END) AS kritis_2period
+        FROM warroom_pa_produk_periode WHERE bulan=$1
+      `, [bulan]),
       // Top 15 by TRX growth (for Trend & Growth tab)
       pool.query(`
-        SELECT produk, mat_mei, trx_mei, rev_mei, mat_jun, trx_jun, rev_jun,
-          ROUND(((trx_jun - trx_mei)::numeric / trx_mei * 100), 1) AS pct_trx_growth,
-          ROUND(((rev_jun - rev_mei)::numeric / rev_mei * 100), 1) AS pct_rev_growth
-        FROM pa_produk_snapshot
-        WHERE tanggal=$1 AND trx_mei > 0 AND trx_jun > 0
-        ORDER BY ((trx_jun - trx_mei)::numeric / trx_mei) DESC
+        SELECT produk, mat_m1, trx_m1, rev_m1, mat_curr, trx_curr, rev_curr,
+          ROUND(((trx_curr - trx_m1)::numeric / trx_m1 * 100), 1) AS pct_trx_growth,
+          ROUND(((rev_curr - rev_m1)::numeric / rev_m1 * 100), 1) AS pct_rev_growth
+        FROM warroom_pa_produk_periode
+        WHERE bulan=$1 AND trx_m1 > 0 AND trx_curr > 0
+        ORDER BY ((trx_curr - trx_m1)::numeric / trx_m1) DESC
         LIMIT 15
-      `, [tanggal]),
+      `, [bulan]),
       // Bottom 15 by TRX growth (for Trend & Growth tab)
       pool.query(`
-        SELECT produk, mat_mei, trx_mei, rev_mei, mat_jun, trx_jun, rev_jun,
-          ROUND(((trx_jun - trx_mei)::numeric / trx_mei * 100), 1) AS pct_trx_growth
-        FROM pa_produk_snapshot
-        WHERE tanggal=$1 AND trx_mei > 0
-        ORDER BY ((trx_jun - trx_mei)::numeric / trx_mei) ASC
+        SELECT produk, mat_m1, trx_m1, rev_m1, mat_curr, trx_curr, rev_curr,
+          ROUND(((trx_curr - trx_m1)::numeric / trx_m1 * 100), 1) AS pct_trx_growth
+        FROM warroom_pa_produk_periode
+        WHERE bulan=$1 AND trx_m1 > 0
+        ORDER BY ((trx_curr - trx_m1)::numeric / trx_m1) ASC
         LIMIT 15
-      `, [tanggal]),
+      `, [bulan]),
     ]);
 
-    const meta  = metaRes.rows[0] || { tanggal, periode_start: tanggal, periode_end: tanggal };
+    const meta  = metaRes.rows[0] || { bulan, periode_start: null, periode_end: null };
     const total = totalRes.rows[0] || {};
     for (const k of Object.keys(total)) total[k] = Number(total[k]) || 0;
 
     // Override MAT dengan nilai resmi dari baris TOTAL sheet (row 24)
     const officialTotals = totalsRes.rows[0];
     if (officialTotals) {
-      if (officialTotals.mat_apr > 0) total.mat_apr = Number(officialTotals.mat_apr);
-      if (officialTotals.mat_mei > 0) total.mat_mei = Number(officialTotals.mat_mei);
-      if (officialTotals.mat_jun > 0) total.mat_jun = Number(officialTotals.mat_jun);
+      if (officialTotals.mat_m2 > 0) total.mat_m2 = Number(officialTotals.mat_m2);
+      if (officialTotals.mat_m1 > 0) total.mat_m1 = Number(officialTotals.mat_m1);
+      if (officialTotals.mat_curr > 0) total.mat_curr = Number(officialTotals.mat_curr);
     }
 
     const stats = statsRes.rows[0] || {};
     for (const k of Object.keys(stats)) stats[k] = Number(stats[k]) || 0;
 
     res.json({
+      bulan,
+      bulan_list: bulanList,
+      bulan_m1: shiftBulan(bulan, -1),
+      bulan_m2: shiftBulan(bulan, -2),
       meta, total, data: dataRes.rows,
       stats,
       top15_growth_trx:  growthRes.rows,
@@ -702,24 +724,26 @@ router.get('/pa-produk/analytics', async (req, res) => {
 router.get('/pa-produk/trendline', async (req, res) => {
   try {
     const days = Math.min(Math.max(parseInt(req.query.days) || 30, 3), 90);
-    // Get latest tanggal first to seed the top-20 filter
-    const latestRow = await pool.query('SELECT MAX(tanggal) AS t FROM pa_produk_snapshot');
-    const latestTanggal = latestRow.rows[0]?.t;
-    if (!latestTanggal) return res.json({ dates: [], byProduk: {}, products: [], days });
+    const blRes = await pool.query('SELECT DISTINCT bulan FROM warroom_pa_produk_periode ORDER BY bulan DESC');
+    const bulanList = blRes.rows.map(r => r.bulan);
+    if (!bulanList.length) return res.json({ dates: [], byProduk: {}, products: [], days });
 
-    // Only top 20 outlets by latest rev_jun — enough for chart with all interactions
+    let { bulan } = req.query;
+    if (!bulan || !bulanList.includes(bulan)) bulan = bulanList[0];
+
+    // Only top 20 produk by latest rev_curr in this bulan — enough for chart with all interactions
     const result = await pool.query(
       `WITH top20 AS (
-         SELECT produk FROM pa_produk_snapshot
-         WHERE tanggal = $2
-         ORDER BY rev_jun DESC LIMIT 20
+         SELECT produk FROM warroom_pa_produk_periode
+         WHERE bulan = $2
+         ORDER BY rev_curr DESC LIMIT 20
        )
-       SELECT p.tanggal, p.produk, p.mat_jun, p.trx_jun, p.rev_jun
-       FROM pa_produk_snapshot p
+       SELECT p.synced_at, p.produk, p.mat_curr, p.trx_curr, p.rev_curr
+       FROM warroom_pa_produk_periode p
        JOIN top20 ON p.produk = top20.produk
-       WHERE p.tanggal >= CURRENT_DATE - ($1 * interval '1 day')
-       ORDER BY p.tanggal ASC, p.rev_jun DESC`,
-      [days, latestTanggal]
+       WHERE p.bulan = $2 AND p.synced_at >= NOW() - ($1 * interval '1 day')
+       ORDER BY p.synced_at ASC, p.rev_curr DESC`,
+      [days, bulan]
     );
 
     const byProduk = {};
@@ -727,21 +751,21 @@ router.get('/pa-produk/trendline', async (req, res) => {
       const p = row.produk;
       if (!byProduk[p]) byProduk[p] = [];
       byProduk[p].push({
-        tanggal: String(row.tanggal).substring(0, 10),
-        mat_jun: Number(row.mat_jun) || 0,
-        trx_jun: Number(row.trx_jun) || 0,
-        rev_jun: Number(row.rev_jun) || 0,
+        tanggal: String(row.synced_at).substring(0, 10),
+        mat_curr: Number(row.mat_curr) || 0,
+        trx_curr: Number(row.trx_curr) || 0,
+        rev_curr: Number(row.rev_curr) || 0,
       });
     }
 
-    const dates    = [...new Set(result.rows.map(r => String(r.tanggal).substring(0, 10)))].sort();
+    const dates    = [...new Set(result.rows.map(r => String(r.synced_at).substring(0, 10)))].sort();
     const products = Object.keys(byProduk).sort((a, b) => {
-      const lastA = byProduk[a][byProduk[a].length - 1]?.rev_jun || 0;
-      const lastB = byProduk[b][byProduk[b].length - 1]?.rev_jun || 0;
+      const lastA = byProduk[a][byProduk[a].length - 1]?.rev_curr || 0;
+      const lastB = byProduk[b][byProduk[b].length - 1]?.rev_curr || 0;
       return lastB - lastA;
     });
 
-    res.json({ dates, byProduk, products, days });
+    res.json({ dates, byProduk, products, days, bulan, bulan_list: bulanList });
   } catch (e) {
     console.error('pa-produk trendline error:', e.message);
     res.status(500).json({ error: e.message });
@@ -848,7 +872,9 @@ router.get('/pa-arpu/analytics', async (req, res) => {
 });
 
 // ─── MGM PA SYNC ────────────────────────────────────────────────
-const MGM_SYNC_TOKEN = 'bric2026mgmpasecret';
+// Part 2A: baca dari env dulu, fallback ke nilai lama agar Apps Script existing tidak putus.
+// TODO Part 2B/2C: hapus fallback literal setelah MGM_PA_SYNC_TOKEN dipastikan di-set di server.
+const MGM_SYNC_TOKEN = process.env.MGM_PA_SYNC_TOKEN || 'bric2026mgmpasecret';
 
 async function mgmSyncHandler(req, res) {
   const token = req.headers['x-sync-token'] || req.body?.token;

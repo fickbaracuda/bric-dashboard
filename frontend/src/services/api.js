@@ -283,8 +283,8 @@ export const getFarmingOutlets = (params = {}) =>
 export const getPAProdukAnalytics = (params = {}) =>
   withCache(`pa-produk-analytics-${JSON.stringify(params)}`, () =>
     axios.get(`${API_URL}/api/warroom/pa-produk/analytics`, { params, headers: authHeaders() }).then(r => r.data));
-export const getPAProdukTrendline = async (days = 30) => {
-  const res = await axios.get(`${API_URL}/api/warroom/pa-produk/trendline`, { params: { days }, headers: authHeaders() });
+export const getPAProdukTrendline = async (days = 30, bulan = undefined) => {
+  const res = await axios.get(`${API_URL}/api/warroom/pa-produk/trendline`, { params: { days, bulan }, headers: authHeaders() });
   return res.data;
 };
 export const getPAArpuAnalytics = () =>
