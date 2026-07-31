@@ -454,7 +454,7 @@ function ExecutiveOverviewTab({ data, onSelectOutlet }) {
   const avgTrxPerOutlet = summary.totalOutletActive > 0 ? summary.totalTrxCurrent / summary.totalOutletActive : 0;
   const avgRevenuePerOutlet = summary.totalOutletActive > 0 ? summary.totalRevenueCurrent / summary.totalOutletActive : 0;
   const latestSummary = monthlySummary.find(m => m.bulan === meta.latestMonth) || monthlySummary[monthlySummary.length - 1] || {};
-  const dailyRevenue = latestSummary.dayCutoff > 0 ? latestSummary.totalRevenue / latestSummary.dayCutoff : null;
+  const dailyRevenue = meta.dayCutoff > 0 ? latestSummary.totalRevenue / meta.dayCutoff : null;
   const health = buildHealthSummary(businessMetrics, summary);
   const trendLabels = monthlySummary.map(m => m.monthLabel);
   const p0Base = useMemo(() => [...outletPerformance].filter(o => o.priority === 'P0')
@@ -476,7 +476,7 @@ function ExecutiveOverviewTab({ data, onSelectOutlet }) {
           color={momActiveOutletGrowth == null ? '#6B7280' : (momActiveOutletGrowth >= 0 ? '#059669' : '#DC2626')} />
         <KPICard title="Projected EOM TRX" value={fmtNum(latestSummary.projectedEomTrx)} sub={`Bulan ${latestSummary.monthLabel || '-'} berjalan`} icon="calendar-stats" color="#0EA5E9" />
         <KPICard title="Projected EOM Revenue" value={fmtRp(latestSummary.projectedEomRevenue)} sub={`Bulan ${latestSummary.monthLabel || '-'} berjalan`} icon="calendar-stats" color="#0EA5E9" />
-        <KPICard title="Daily Revenue" value={dailyRevenue == null ? '-' : fmtRp(dailyRevenue)} sub={`Rata-rata per hari · Day ${latestSummary.dayCutoff ?? '-'}`} icon="calendar-dollar" color="#0EA5E9" />
+        <KPICard title="Daily Revenue" value={dailyRevenue == null ? '-' : fmtRp(dailyRevenue)} sub={`Rata-rata per hari · Day ${meta.dayCutoff ?? '-'}`} icon="calendar-dollar" color="#0EA5E9" />
       </div>
 
       <div className="wre-health-summary" style={{ borderLeftColor: health.color }}>
