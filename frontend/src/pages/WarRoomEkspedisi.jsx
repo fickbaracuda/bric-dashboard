@@ -455,6 +455,9 @@ function ExecutiveOverviewTab({ data, onSelectOutlet }) {
   const avgRevenuePerOutlet = summary.totalOutletActive > 0 ? summary.totalRevenueCurrent / summary.totalOutletActive : 0;
   const latestSummary = monthlySummary.find(m => m.bulan === meta.latestMonth) || monthlySummary[monthlySummary.length - 1] || {};
   const dailyRevenue = meta.dayCutoff > 0 ? latestSummary.totalRevenue / meta.dayCutoff : null;
+  const lastDayDateFmt = meta.lastDayDate
+    ? new Date(meta.lastDayDate).toLocaleDateString('id-ID', { day: '2-digit', month: 'short' })
+    : '-';
   const health = buildHealthSummary(businessMetrics, summary);
   const trendLabels = monthlySummary.map(m => m.monthLabel);
   const p0Base = useMemo(() => [...outletPerformance].filter(o => o.priority === 'P0')
@@ -477,6 +480,9 @@ function ExecutiveOverviewTab({ data, onSelectOutlet }) {
         <KPICard title="Projected EOM TRX" value={fmtNum(latestSummary.projectedEomTrx)} sub={`Bulan ${latestSummary.monthLabel || '-'} berjalan`} icon="calendar-stats" color="#0EA5E9" />
         <KPICard title="Projected EOM Revenue" value={fmtRp(latestSummary.projectedEomRevenue)} sub={`Bulan ${latestSummary.monthLabel || '-'} berjalan`} icon="calendar-stats" color="#0EA5E9" />
         <KPICard title="Daily Revenue" value={dailyRevenue == null ? '-' : fmtRp(dailyRevenue)} sub={`Rata-rata per hari · Day ${meta.dayCutoff ?? '-'}`} icon="calendar-dollar" color="#0EA5E9" />
+        <KPICard title="Revenue Hari Terakhir" value={meta.lastDayRevenue == null ? '-' : fmtRp(meta.lastDayRevenue)}
+          sub={meta.lastDayPrevDate ? `Tanggal ${lastDayDateFmt} · vs sync sebelumnya` : `Tanggal ${lastDayDateFmt} · sync pertama bulan ini`}
+          icon="calendar-event" color="#F59E0B" />
       </div>
 
       <div className="wre-health-summary" style={{ borderLeftColor: health.color }}>

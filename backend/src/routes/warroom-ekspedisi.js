@@ -611,6 +611,29 @@ async function analyticsHandler(req, res) {
     };
 
     const lastSyncRes = await pool.query('SELECT MAX(synced_at) AS t FROM ekspedisi_monthly WHERE tanggal=$1', [tanggal]);
+
+    // ── revenue/trx hari terakhir — ekspedisi_monthly menyimpan kumulatif
+    //    month-to-date per tanggal sync, jadi "hari terakhir" = delta antara
+    //    sync tanggal ini vs sync sebelumnya (bukan nilai kumulatif itu sendiri).
+    //    Selalu terikat ke latestBulan (bulan yang sungguhan sedang berjalan),
+    //    sama seperti Projected EOM & Daily Revenue di atas.
+    const prevSyncRes = await pool.query(
+      "SELECT TO_CHAR(MAX(tanggal), 'YYYY-MM-DD') AS t FROM ekspedisi_monthly WHERE bulan=$1 AND tanggal < $2",
+      [latestBulan, tanggal]
+    );
+    const prevSyncTanggal = prevSyncRes.rows[0]?.t || null;
+    const latestAgg = monthAgg[latestBulan] || { totalTrx: 0, totalRevenue: 0 };
+    let lastDayRevenue = latestAgg.totalRevenue;
+    let lastDayTrx = latestAgg.totalTrx;
+    if (prevSyncTanggal) {
+      const prevSyncAgg = await pool.query(
+        'SELECT COALESCE(SUM(revenue),0) AS revenue, COALESCE(SUM(trx),0) AS trx FROM ekspedisi_monthly WHERE tanggal=$1 AND bulan=$2',
+        [prevSyncTanggal, latestBulan]
+      );
+      lastDayRevenue = latestAgg.totalRevenue - Number(prevSyncAgg.rows[0]?.revenue || 0);
+      lastDayTrx = latestAgg.totalTrx - Number(prevSyncAgg.rows[0]?.trx || 0);
+    }
+
     const meta = {
       source: 'ekspedisi_monthly',
       dayCutoff,
@@ -619,6 +642,10 @@ async function analyticsHandler(req, res) {
       previousMonth: bPrev,
       latestMonth: latestBulan, // bulan yang sungguhan sedang berjalan (proyeksi EOM selalu terikat ke ini, terlepas dari currentMonth pilihan user)
       lastUpdated: lastSyncRes.rows[0]?.t || null,
+      lastDayDate: tanggal,
+      lastDayPrevDate: prevSyncTanggal, // null kalau tanggal ini sync pertama utk latestBulan (belum ada pembanding)
+      lastDayRevenue,
+      lastDayTrx,
     };
 
     res.json({
