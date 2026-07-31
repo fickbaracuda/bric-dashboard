@@ -263,6 +263,17 @@ export const getEkspedisiProdukProductDetail = (params = {}) =>
 export const getEkspedisiProdukOutletDetail = (params = {}) =>
   axios.get(`${API_URL}/api/warroom/ekspedisi-produk/outlet-detail`, { params, headers: authHeaders() }).then(r => r.data);
 
+/* WAR-ROOM Payment Agent — Produk (Marketing Decision Dashboard, domain terpisah dari PA Produk legacy) */
+export const getPaymentAgentProdukSnapshots = () =>
+  axios.get(`${API_URL}/api/warroom/payment-agent/produk/snapshots`, { headers: authHeaders() }).then(r => r.data);
+export const getPaymentAgentProdukAnalytics = (snapshotDate) =>
+  withCache(`payment-agent-produk-analytics-${snapshotDate || 'latest'}`, () =>
+    axios.get(`${API_URL}/api/warroom/payment-agent/produk/analytics`, { params: { snapshot_date: snapshotDate || 'latest' }, headers: authHeaders() }).then(r => r.data));
+export const getPaymentAgentProdukDetail = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/payment-agent/produk/detail`, { params, headers: authHeaders() }).then(r => r.data);
+export const getPaymentAgentProdukTable = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/payment-agent/produk/table`, { params, headers: authHeaders() }).then(r => r.data);
+
 /* WAR-ROOM — Fastpay Global */
 export const getFastpayAnalytics = (params = {}) =>
   withCache(`fastpay-analytics-${JSON.stringify(params)}`, () =>

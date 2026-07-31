@@ -22,6 +22,7 @@ import WarRoomBalanceControlTower from './pages/WarRoomBalanceControlTower';
 import WarRoomFastpay from './pages/WarRoomFastpay';
 import WarRoomFarming from './pages/WarRoomFarming';
 import WarRoomPAProduk from './pages/WarRoomPAProduk';
+import WarRoomPaymentAgentProduk from './pages/WarRoomPaymentAgentProduk';
 import WarRoomMgmPa from './pages/WarRoomMgmPa';
 import WarRoomDmFastpay from './pages/WarRoomDmFastpay';
 import WarRoomDmControlTower from './pages/WarRoomDmControlTower';
@@ -86,6 +87,7 @@ export default function App() {
         <Route path="/war-room/fastpayglobal" element={<ProtectedRoute><WarRoomFastpay /></ProtectedRoute>} />
         <Route path="/war-room/farming"       element={<ProtectedRoute><WarRoomFarming /></ProtectedRoute>} />
         <Route path="/war-room/pa-produk"    element={<ProtectedRoute><WarRoomPAProduk /></ProtectedRoute>} />
+        <Route path="/war-room/payment-agent/produk" element={<ProtectedRoute><WarRoomPaymentAgentProduk /></ProtectedRoute>} />
         <Route path="/war-room/mgm-pa"        element={<ProtectedRoute><WarRoomMgmPa /></ProtectedRoute>} />
         <Route path="/war-room/dm-fastpay"     element={<ProtectedRoute><WarRoomDmFastpay /></ProtectedRoute>} />
         <Route path="/war-room/dm-control-tower" element={<ProtectedRoute><WarRoomDmControlTower /></ProtectedRoute>} />

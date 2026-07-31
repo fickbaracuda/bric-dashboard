@@ -30,6 +30,7 @@ const lpdRoutes           = require('./routes/warroom-lpd');
 const dataRawRoutes       = require('./routes/data-raw');
 const hunterRoutes        = require('./routes/warroom-hunter');
 const qrisCtrlRoutes      = require('./routes/warroom-qris-control-tower');
+const paymentAgentProdukRoutes = require('./routes/warroom-payment-agent-produk');
 const dmCtRoutes          = require('./routes/warroom-dm-control-tower');
 const iqCcRoutes          = require('./routes/warroom-instaqris-command-center');
 const quickWinQ3Routes    = require('./routes/warroom-quick-win-q3');
@@ -148,6 +149,11 @@ app.post('/api/warroom/qris-ctrl/kyckym/sync',        qrisCtrlRoutes.syncKycHand
 app.post('/api/warroom/qris-ctrl/verifikasi-op/sync', qrisCtrlRoutes.syncVerifikasiOpHandler); // token auth, no JWT
 app.post('/api/warroom/qris-ctrl/pten/sync',          qrisCtrlRoutes.syncPtenHandler);         // token auth, no JWT
 app.get('/api/warroom/qris-ctrl/analytics',           requireAuth, qrisCtrlRoutes.analyticsHandler);
+app.post('/api/warroom/payment-agent/produk/sync',      paymentAgentProdukRoutes.syncHandler); // token auth (PAYMENT_AGENT_PRODUK_SYNC_TOKEN), no JWT
+app.get('/api/warroom/payment-agent/produk/snapshots',  requireAuth, paymentAgentProdukRoutes.snapshotsHandler);
+app.get('/api/warroom/payment-agent/produk/analytics',  requireAuth, paymentAgentProdukRoutes.analyticsHandler);
+app.get('/api/warroom/payment-agent/produk/detail',     requireAuth, paymentAgentProdukRoutes.detailHandler);
+app.get('/api/warroom/payment-agent/produk/table',      requireAuth, paymentAgentProdukRoutes.tableHandler);
 app.post('/api/warroom/dm-control-tower/register/sync',  dmCtRoutes.registerSyncHandler);  // token auth, no JWT
 app.post('/api/warroom/dm-control-tower/aktivasi/sync',  dmCtRoutes.aktivasiSyncHandler);  // token auth, no JWT
 app.post('/api/warroom/dm-control-tower/trx/sync',       dmCtRoutes.trxSyncHandler);       // token auth, no JWT
