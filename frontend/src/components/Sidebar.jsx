@@ -532,16 +532,6 @@ export default function Sidebar({ onClose }) {
                 War Room
               </div>
               <NavLink
-                to="/war-room/pa-produk"
-                onClick={onClose}
-                className={({ isActive }) =>
-                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
-                }
-              >
-                <i className="ti ti-chart-bar" style={{ color: '#639922' }} aria-hidden="true" />
-                <span>⚡ Produk</span>
-              </NavLink>
-              <NavLink
                 to="/war-room/ekspedisi"
                 onClick={onClose}
                 className={({ isActive }) =>
@@ -563,28 +553,6 @@ export default function Sidebar({ onClose }) {
                 <i className="ti ti-box-seam" style={{ color: '#0EA5E9' }} aria-hidden="true" />
                 <span>Produk Ekspedisi</span>
                 <span className="sidebar-warroom-badge" style={{ background: '#0EA5E9' }}>PROD</span>
-              </NavLink>
-              <NavLink
-                to="/war-room/fastpayglobal"
-                onClick={onClose}
-                className={({ isActive }) =>
-                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
-                }
-              >
-                <i className="ti ti-world" style={{ color: '#F59E0B' }} aria-hidden="true" />
-                <span>Fastpay Global</span>
-                <span className="sidebar-warroom-badge" style={{ background: '#F59E0B' }}>Ainul</span>
-              </NavLink>
-              <NavLink
-                to="/war-room/farming"
-                onClick={onClose}
-                className={({ isActive }) =>
-                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
-                }
-              >
-                <i className="ti ti-plant" style={{ color: '#10B981' }} aria-hidden="true" />
-                <span>Farming</span>
-                <span className="sidebar-warroom-badge" style={{ background: '#10B981' }}>Nizar</span>
               </NavLink>
               <NavLink
                 to="/war-room/mgm-pa"
