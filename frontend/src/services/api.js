@@ -282,13 +282,25 @@ export const getFastpayOutlets = (params = {}) =>
   withCache(`fastpay-outlets-${JSON.stringify(params)}`, () =>
     axios.get(`${API_URL}/api/warroom/fastpay/outlets`, { params, headers: authHeaders() }).then(r => r.data));
 
-/* WAR-ROOM — Farming */
-export const getFarmingAnalytics = (params = {}) =>
-  withCache(`farming-analytics-${JSON.stringify(params)}`, () =>
-    axios.get(`${API_URL}/api/warroom/farming/analytics`, { params, headers: authHeaders() }).then(r => r.data));
+/* WAR-ROOM — Farming Fastpay Command Center (data-raw multi-bulan, TIDAK di-cache) */
+export const getFarmingSnapshots = () =>
+  axios.get(`${API_URL}/api/warroom/farming/snapshots`, { headers: authHeaders() }).then(r => r.data);
+export const getFarmingAnalytics = (snapshotDate) =>
+  axios.get(`${API_URL}/api/warroom/farming/analytics`, { params: { snapshot_date: snapshotDate || 'latest' }, headers: authHeaders() }).then(r => r.data);
+export const getFarmingActionQueue = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/farming/action-queue`, { params, headers: authHeaders() }).then(r => r.data);
 export const getFarmingOutlets = (params = {}) =>
-  withCache(`farming-outlets-${JSON.stringify(params)}`, () =>
-    axios.get(`${API_URL}/api/warroom/farming/outlets`, { params, headers: authHeaders() }).then(r => r.data));
+  axios.get(`${API_URL}/api/warroom/farming/outlets`, { params, headers: authHeaders() }).then(r => r.data);
+export const getFarmingOutletDetail = (idOutlet) =>
+  axios.get(`${API_URL}/api/warroom/farming/outlets/${encodeURIComponent(idOutlet)}`, { headers: authHeaders() }).then(r => r.data);
+export const getFarmingTrendline = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/farming/trendline`, { params, headers: authHeaders() }).then(r => r.data);
+export const getFarmingDataQuality = (params = {}) =>
+  axios.get(`${API_URL}/api/warroom/farming/data-quality`, { params, headers: authHeaders() }).then(r => r.data);
+export const getFarmingFollowup = (idOutlet) =>
+  axios.get(`${API_URL}/api/warroom/farming/followup`, { params: { id_outlet: idOutlet }, headers: authHeaders() }).then(r => r.data);
+export const upsertFarmingFollowup = (data) =>
+  axios.post(`${API_URL}/api/warroom/farming/followup`, data, { headers: authHeaders() }).then(r => r.data);
 
 /* WAR-ROOM — PA Produk */
 export const getPAProdukAnalytics = (params = {}) =>

@@ -5411,6 +5411,149 @@ body {
 }
 
 /* ══════════════════════════════════════════════════════════════════
+   WAR-ROOM Payment Agent > Farming — Farming Fastpay Command Center
+   Prefix: farm-cc-*. Sama struktur dengan pa-prod-*, semua warna via
+   var(--token) supaya otomatis kontras di light & dark mode.
+   ══════════════════════════════════════════════════════════════════ */
+.farm-cc-page { padding: 0 20px 40px; }
+
+.farm-cc-loading, .farm-cc-error, .farm-cc-empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; padding: 60px 20px; color: var(--text-3); font-size: 13px; text-align: center;
+}
+.farm-cc-loading i, .farm-cc-error i, .farm-cc-empty i { font-size: 32px; }
+.farm-cc-error i { color: #DC2626; }
+.farm-cc-empty i { color: #10B981; }
+.farm-cc-empty-sub { font-size: 12.5px; color: var(--text-4); padding: 6px 0; }
+@keyframes farm-cc-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+.farm-cc-spin { animation: farm-cc-spin .8s linear infinite; display: inline-block; }
+
+.farm-cc-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 18px 0 14px; }
+.farm-cc-header-left { display: flex; align-items: center; gap: 12px; }
+.farm-cc-header-title { font-size: 18px; font-weight: 800; color: var(--text-1); letter-spacing: .3px; }
+.farm-cc-header-sub { font-size: 12.5px; color: var(--text-3); margin-top: 3px; max-width: 560px; line-height: 1.5; }
+.farm-cc-header-sync { font-size: 11.5px; color: var(--text-4); margin-top: 4px; }
+.farm-cc-header-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+.farm-cc-badge-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+.farm-cc-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; padding: 5px 11px; border-radius: 20px; border: 1px solid var(--border); color: var(--text-2); background: var(--bg-elevated); }
+.farm-cc-badge--info { color: #047857; background: #D1FAE5; border-color: #A7F3D0; }
+[data-theme="dark"] .farm-cc-badge--info { color: #6EE7B7; background: rgba(16,185,129,.12); border-color: rgba(52,211,153,.35); }
+.farm-cc-badge--sync { background: var(--bg-page); }
+
+.farm-cc-info-banner { display: flex; align-items: flex-start; gap: 8px; padding: 10px 14px; border-radius: 10px; font-size: 12.5px; color: var(--text-2); margin-bottom: 14px; border: 1px solid var(--border); background: #ECFDF5; }
+[data-theme="dark"] .farm-cc-info-banner { background: rgba(5,150,105,.12); border-color: rgba(5,150,105,.35); }
+.farm-cc-info-banner i { font-size: 15px; margin-top: 1px; flex-shrink: 0; color: #059669; }
+
+.farm-cc-panel { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+.farm-cc-panel-title { font-size: 13px; font-weight: 700; color: var(--text-1); margin-bottom: 12px; display: flex; align-items: center; gap: 6px; }
+
+.farm-cc-kpi-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 16px; }
+.farm-cc-kpi-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+.farm-cc-kpi-label { font-size: 11px; font-weight: 600; color: var(--text-3); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px; }
+.farm-cc-kpi-value { font-size: 19px; font-weight: 700; color: var(--text-1); }
+.farm-cc-kpi-sub { font-size: 11px; color: var(--text-3); margin-top: 4px; }
+.farm-cc-kpi-card--alert { border-color: #FCA5A5; background: rgba(239,68,68,.06); }
+.farm-cc-kpi-card--alert .farm-cc-kpi-value { color: #DC2626; }
+[data-theme="dark"] .farm-cc-kpi-card--alert .farm-cc-kpi-value { color: #F87171; }
+
+.farm-cc-status-badge { display: inline-block; font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 20px; white-space: nowrap; }
+.farm-cc-priority-chip { color: #fff; font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 10px; }
+.farm-cc-followup-chip { font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 8px; background: var(--bg-page); border: 1px solid var(--border); color: var(--text-2); }
+
+.farm-cc-chart-grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+.farm-cc-chart-subtitle { font-size: 11.5px; font-weight: 700; color: var(--text-2); margin-bottom: 8px; }
+.farm-cc-chart-box { position: relative; height: 260px; }
+.farm-cc-chart-box-sm { position: relative; height: 160px; }
+
+.farm-cc-quadrant-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.farm-cc-quadrant-card { text-align: left; background: var(--bg-elevated); border: 2px solid var(--border); border-radius: 10px; padding: 12px 14px; cursor: pointer; }
+.farm-cc-quadrant-card--active { background: var(--bg-selected); }
+.farm-cc-quadrant-title { font-size: 12.5px; font-weight: 800; margin-bottom: 4px; }
+.farm-cc-quadrant-desc { font-size: 11px; color: var(--text-3); margin-bottom: 6px; }
+.farm-cc-quadrant-count { font-size: 11px; color: var(--text-2); font-weight: 600; }
+
+.farm-cc-insight-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.farm-cc-insight-list li { display: flex; align-items: flex-start; gap: 8px; font-size: 12.5px; color: var(--text-2); line-height: 1.5; }
+.farm-cc-insight-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; flex-shrink: 0; background: #10B981; }
+
+.farm-cc-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 16px; flex-wrap: wrap; overflow-x: auto; }
+.farm-cc-tab-btn { display: flex; align-items: center; gap: 6px; padding: 10px 14px; font-size: 12.5px; font-weight: 600; color: var(--text-3); background: none; border: none; border-bottom: 2px solid transparent; cursor: pointer; white-space: nowrap; }
+.farm-cc-tab-btn:hover { color: var(--text-1); background: var(--bg-hover); border-radius: 8px 8px 0 0; }
+.farm-cc-tab-btn--active { color: #10B981; border-bottom-color: #10B981; }
+[data-theme="dark"] .farm-cc-tab-btn--active { color: #34D399; border-bottom-color: #34D399; }
+
+.farm-cc-toolbar { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; align-items: center; }
+.farm-cc-input, .farm-cc-select { padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-card); color: var(--text-1); font-size: 12.5px; }
+.farm-cc-input { min-width: 200px; flex: 1 1 200px; }
+.farm-cc-input:focus, .farm-cc-select:focus { outline: none; border-color: #10B981; }
+.farm-cc-select-sm { padding: 5px 8px; font-size: 12px; }
+.farm-cc-btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-card); color: var(--text-2); font-size: 12.5px; font-weight: 600; cursor: pointer; text-decoration: none; }
+.farm-cc-btn:hover { background: var(--bg-hover); }
+.farm-cc-btn--primary { background: #10B981; border-color: #10B981; color: #fff; }
+.farm-cc-btn--primary:hover { background: #059669; border-color: #059669; }
+
+.farm-cc-table-wrap { overflow-x: auto; }
+.farm-cc-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.farm-cc-table th { text-align: left; padding: 8px 10px; font-size: 11px; font-weight: 700; color: var(--text-3); text-transform: uppercase; letter-spacing: .03em; border-bottom: 2px solid var(--border); white-space: nowrap; }
+.farm-cc-table td { padding: 7px 10px; border-bottom: 1px solid var(--border); color: var(--text-2); white-space: nowrap; }
+.farm-cc-table tbody tr:hover td { background: var(--bg-hover); }
+.farm-cc-table tbody tr:last-child td { border-bottom: none; }
+.farm-cc-reco-cell, .farm-cc-reason-cell { white-space: normal; min-width: 200px; color: var(--text-3); }
+.farm-cc-clickable-row { cursor: pointer; }
+.farm-cc-link-btn { background: none; border: none; padding: 0; font-size: 12.5px; font-weight: 700; color: #10B981; cursor: pointer; text-decoration: underline; }
+.farm-cc-link-btn:hover { color: #059669; }
+
+.farm-cc-sort-th { cursor: pointer; user-select: none; white-space: nowrap; }
+.farm-cc-sort-th:hover { color: var(--text-1); background: var(--bg-hover); }
+.farm-cc-sort-th--active { color: #10B981; }
+[data-theme="dark"] .farm-cc-sort-th--active { color: #34D399; }
+.farm-cc-sort-th i { font-size: 12px; margin-left: 2px; }
+
+.farm-cc-pagination { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 12px; font-size: 12.5px; color: var(--text-2); }
+.farm-cc-pagination button { padding: 6px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-card); color: var(--text-2); cursor: pointer; }
+.farm-cc-pagination button:hover:not(:disabled) { background: var(--bg-hover); }
+.farm-cc-pagination button:disabled { opacity: .4; cursor: not-allowed; }
+
+.farm-cc-dq-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+.farm-cc-dq-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 14px; text-align: center; }
+.farm-cc-dq-card--alert { border-color: #FCA5A5; background: rgba(239,68,68,.06); }
+.farm-cc-dq-value { font-size: 20px; font-weight: 800; color: var(--text-1); }
+.farm-cc-dq-card--alert .farm-cc-dq-value { color: #DC2626; }
+.farm-cc-dq-label { font-size: 11px; color: var(--text-3); margin-top: 4px; }
+.farm-cc-simple-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; color: var(--text-2); line-height: 1.5; }
+.farm-cc-raw-headers { background: var(--bg-page); border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-size: 11px; color: var(--text-2); overflow-x: auto; max-height: 240px; overflow-y: auto; }
+
+.farm-cc-drawer-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 1000; display: flex; justify-content: flex-end; }
+.farm-cc-drawer { width: min(520px, 100vw); height: 100%; background: var(--bg-card); overflow-y: auto; box-shadow: -8px 0 24px rgba(0,0,0,.15); }
+.farm-cc-drawer-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg-card); z-index: 1; }
+.farm-cc-drawer-title { font-size: 15px; font-weight: 800; color: var(--text-1); display: flex; align-items: center; gap: 8px; }
+.farm-cc-drawer-close { background: none; border: 1px solid var(--border); border-radius: 8px; width: 32px; height: 32px; cursor: pointer; color: var(--text-2); }
+.farm-cc-drawer-close:hover { background: var(--bg-hover); }
+.farm-cc-drawer-body { padding: 20px; }
+.farm-cc-drawer-summary { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 16px; }
+.farm-cc-drawer-summary > div { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-3); }
+.farm-cc-drawer-summary > div b { font-size: 13px; color: var(--text-1); }
+.farm-cc-drawer-section-title { font-size: 12.5px; font-weight: 700; color: var(--text-1); margin: 16px 0 8px; }
+.farm-cc-followup-form { display: flex; flex-direction: column; gap: 10px; }
+.farm-cc-followup-form label { display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; color: var(--text-3); font-weight: 600; }
+.farm-cc-checkbox-label { flex-direction: row !important; align-items: center; gap: 8px !important; }
+
+@media (max-width: 1200px) {
+  .farm-cc-kpi-grid { grid-template-columns: repeat(3, 1fr); }
+  .farm-cc-chart-grid-2 { grid-template-columns: 1fr; }
+  .farm-cc-quadrant-grid { grid-template-columns: repeat(2, 1fr); }
+  .farm-cc-dq-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 640px) {
+  .farm-cc-page { padding: 0 12px 40px; }
+  .farm-cc-kpi-grid { grid-template-columns: 1fr; }
+  .farm-cc-quadrant-grid { grid-template-columns: 1fr; }
+  .farm-cc-drawer { width: 100vw; }
+  .farm-cc-tab-btn { padding: 8px 10px; font-size: 12px; }
+}
+
+/* ══════════════════════════════════════════════════════════════════
    Rekonsiliasi OCBC (War Room Payment Agent > Rekonsiliasi OCBC) — wrr-*
    Aksen utama #DC2626, struktur sama pola eprod- dan qw3- (tab, panel,
    tabel sortable, modal, pagination) supaya konsisten dgn War Room lain.

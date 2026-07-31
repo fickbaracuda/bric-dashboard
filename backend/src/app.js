@@ -114,9 +114,17 @@ app.get('/api/warroom/ekspedisi-produk/outlet-detail',   requireAuth, ekspedisiP
 app.post('/api/warroom/fastpay/sync',      fastpayRoutes.syncHandler);            // token auth, no JWT
 app.get('/api/warroom/fastpay/analytics', requireAuth, fastpayRoutes.analyticsHandler);
 app.get('/api/warroom/fastpay/outlets',   requireAuth, fastpayRoutes.outletsHandler);
-app.post('/api/warroom/farming/sync',     farmingRoutes.syncHandler);             // token auth, no JWT
+app.post('/api/warroom/farming/sync',     farmingRoutes.syncHandler);             // token auth (FARMING_SYNC_TOKEN), no JWT
 app.get('/api/warroom/farming/analytics', requireAuth, farmingRoutes.analyticsHandler);
+app.get('/api/warroom/farming/snapshots', requireAuth, farmingRoutes.snapshotsHandler);
+app.get('/api/warroom/farming/action-queue', requireAuth, farmingRoutes.actionQueueHandler);
 app.get('/api/warroom/farming/outlets',   requireAuth, farmingRoutes.outletsHandler);
+app.get('/api/warroom/farming/outlets/:id', requireAuth, farmingRoutes.outletDetailHandler);
+app.get('/api/warroom/farming/trendline', requireAuth, farmingRoutes.trendlineHandler);
+app.get('/api/warroom/farming/data-quality', requireAuth, farmingRoutes.dataQualityHandler);
+app.get('/api/warroom/farming/export',    requireAuth, farmingRoutes.exportHandler);
+app.get('/api/warroom/farming/followup',  requireAuth, farmingRoutes.followupGetHandler);
+app.post('/api/warroom/farming/followup', requireAuth, farmingRoutes.followupUpsertHandler);
 app.post('/api/warroom/pa-produk/sync',     warroomRoutes.paProdukSyncHandler); // token auth, no JWT
 app.post('/api/warroom/pa-arpu/sync',      warroomRoutes.paArpuSyncHandler);   // token auth, no JWT
 app.post('/api/warroom/mgm/sync',          warroomRoutes.mgmSyncHandler);       // token auth, no JWT
