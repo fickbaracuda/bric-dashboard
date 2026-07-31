@@ -28,6 +28,26 @@ const REC_LEVEL = {
   low:    { label:'Opsional',         bg:'#F0FDF4', border:'#16A34A', color:'#16A34A' },
 };
 
+/* ─── Label bulan dinamis (bukan lagi hardcode "Mei"/"Juni") ─── */
+const BULAN_ID = ['', 'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+function currLabel(bulan) {
+  if (!bulan) return 'Bulan Ini';
+  const m = parseInt(bulan.slice(5, 7));
+  return BULAN_ID[m] || bulan;
+}
+function prevLabel(bulan) {
+  if (!bulan) return 'Bulan Lalu';
+  let y = parseInt(bulan.slice(0, 4));
+  let m = parseInt(bulan.slice(5, 7)) - 1;
+  if (m < 1) { m = 12; y -= 1; }
+  return BULAN_ID[m] || '-';
+}
+function bulanDisplay(bulan) {
+  if (!bulan) return '-';
+  const [y, m] = bulan.split('-');
+  return `${BULAN_ID[parseInt(m)]} ${y}`;
+}
+
 /* ─── Format helpers ─── */
 const fmtRp = v => {
   const n = Number(v) || 0;
@@ -47,19 +67,21 @@ const fmtDate = d => {
 /* ─── buildInsights ─── */
 function buildInsights(data) {
   if (!data?.summary) return { paragraph: '', recs: [] };
-  const { summary, status_counts: sc, meta } = data;
+  const { summary, status_counts: sc, meta, bulan } = data;
+  const curr = currLabel(bulan);
+  const prev = prevLabel(bulan);
   const total = meta.total_outlets || 0;
-  const activeJun = summary.active_jun || 0;
-  const pctActive = total > 0 ? ((activeJun / total) * 100).toFixed(0) : 0;
+  const activeCurr = summary.active_curr || 0;
+  const pctActive = total > 0 ? ((activeCurr / total) * 100).toFixed(0) : 0;
   const growing = (sc.rocket || 0) + (sc.growing || 0);
-  const pctGrowing = activeJun > 0 ? ((growing / activeJun) * 100).toFixed(0) : 0;
+  const pctGrowing = activeCurr > 0 ? ((growing / activeCurr) * 100).toFixed(0) : 0;
 
   const trendTrx = summary.pct_dev_trx >= 0 ? 'naik' : 'turun';
   const trendRev = summary.pct_dev_rev >= 0 ? 'naik' : 'turun';
 
   const paragraph =
-    `Total ${fmtN(total)} outlet terdaftar dengan ${fmtN(activeJun)} outlet aktif di Juni (${pctActive}% dari total). ` +
-    `TRX ${trendTrx} ${Math.abs(summary.pct_dev_trx).toFixed(1)}% dan revenue ${trendRev} ${Math.abs(summary.pct_dev_rev).toFixed(1)}% dibandingkan Mei. ` +
+    `Total ${fmtN(total)} outlet terdaftar dengan ${fmtN(activeCurr)} outlet aktif di ${curr} (${pctActive}% dari total). ` +
+    `TRX ${trendTrx} ${Math.abs(summary.pct_dev_trx).toFixed(1)}% dan revenue ${trendRev} ${Math.abs(summary.pct_dev_rev).toFixed(1)}% dibandingkan ${prev}. ` +
     `${pctGrowing}% outlet aktif mengalami pertumbuhan positif. ` +
     `${fmtN(sc.churned || 0)} outlet churn dan ${fmtN(sc.new || 0)} outlet baru bergabung bulan ini.`;
 
@@ -76,7 +98,7 @@ function buildInsights(data) {
     recs.push({
       level: 'high',
       title: `Recovery ${fmtN(sc.declining)} Outlet Declining`,
-      text: 'Buat program insentif untuk outlet yang mengalami penurunan TRX. Prioritaskan yang memiliki revenue besar di Mei.',
+      text: `Buat program insentif untuk outlet yang mengalami penurunan TRX. Prioritaskan yang memiliki revenue besar di ${prev}.`,
     });
   }
   if (summary.pct_dev_trx > 0 && summary.pct_dev_rev < 0) {
@@ -104,7 +126,7 @@ function buildInsights(data) {
     recs.push({
       level: 'low',
       title: `${data.anomali_free_trx.length} Outlet "Free TRX" Perlu Diverifikasi`,
-      text: 'Outlet dengan TRX > 0 tapi Revenue = 0 di Juni perlu dicek — kemungkinan data anomali atau transaksi gratis.',
+      text: `Outlet dengan TRX > 0 tapi Revenue = 0 di ${curr} perlu dicek — kemungkinan data anomali atau transaksi gratis.`,
     });
   }
 
@@ -187,7 +209,7 @@ function DonutChart({ id, labels, values, colors }) {
   return <canvas key={id} ref={ref} />;
 }
 
-function ScatterChart({ id, groups }) {
+function ScatterChart({ id, groups, xLabel }) {
   const ref = useRef(null);
   useEffect(() => {
     if (!ref.current || !groups?.length) return;
@@ -204,7 +226,7 @@ function ScatterChart({ id, groups }) {
         responsive: true, maintainAspectRatio: false,
         plugins: { legend: { position: 'bottom', labels: { font: { size: 11 }, padding: 8 } } },
         scales: {
-          x: { title: { display: true, text: 'TRX Juni', font: { size: 11 } }, grid: { color: '#f0f0f0' } },
+          x: { title: { display: true, text: xLabel || 'TRX', font: { size: 11 } }, grid: { color: '#f0f0f0' } },
           y: { title: { display: true, text: 'Avg Rev/TRX (Rp)', font: { size: 11 } }, grid: { color: '#f0f0f0' }, ticks: { callback: v => fmtRp(v) } },
         },
       },
@@ -336,13 +358,15 @@ function ExecInsightCard({ insights }) {
 
 /* ─── TAB 0: Executive Summary ─── */
 function ExecutiveSummaryTab({ data }) {
-  const { summary: s, status_counts: sc, top15_trx_jun, top15_rev_jun, meta } = data;
+  const { summary: s, status_counts: sc, top15_trx_curr, top15_rev_curr, meta, bulan } = data;
+  const curr = currLabel(bulan);
+  const prev = prevLabel(bulan);
 
   const kpis = [
     { label: 'Total Outlet',  value: fmtN(meta.total_outlets) },
-    { label: 'Aktif Juni',    value: fmtN(s.active_jun), sub: `${meta.total_outlets > 0 ? ((s.active_jun / meta.total_outlets)*100).toFixed(0) : 0}% dari total` },
-    { label: 'TRX Juni',      value: fmtN(s.total_trx_jun), sub: fmtPct(s.pct_dev_trx) + ' vs Mei', badge: s.pct_dev_trx >= 0 ? '▲' : '▼', badgeColor: s.pct_dev_trx >= 0 ? '#059669' : '#DC2626' },
-    { label: 'Revenue Juni',  value: fmtRp(s.total_rev_jun), sub: fmtPct(s.pct_dev_rev) + ' vs Mei', badge: s.pct_dev_rev >= 0 ? '▲' : '▼', badgeColor: s.pct_dev_rev >= 0 ? '#059669' : '#DC2626' },
+    { label: `Aktif ${curr}`,    value: fmtN(s.active_curr), sub: `${meta.total_outlets > 0 ? ((s.active_curr / meta.total_outlets)*100).toFixed(0) : 0}% dari total` },
+    { label: `TRX ${curr}`,      value: fmtN(s.total_trx_curr), sub: fmtPct(s.pct_dev_trx) + ` vs ${prev}`, badge: s.pct_dev_trx >= 0 ? '▲' : '▼', badgeColor: s.pct_dev_trx >= 0 ? '#059669' : '#DC2626' },
+    { label: `Revenue ${curr}`,  value: fmtRp(s.total_rev_curr), sub: fmtPct(s.pct_dev_rev) + ` vs ${prev}`, badge: s.pct_dev_rev >= 0 ? '▲' : '▼', badgeColor: s.pct_dev_rev >= 0 ? '#059669' : '#DC2626' },
     { label: 'Outlet Baru',   value: fmtN(sc.new || 0),     badge: '✨', badgeColor: '#2563EB' },
     { label: 'Churn',         value: fmtN(sc.churned || 0), badge: '💀', badgeColor: '#9CA3AF' },
   ];
@@ -363,25 +387,25 @@ function ExecutiveSummaryTab({ data }) {
       <div className="wrfp-charts-2col">
         <ChartCard title="Distribusi Status Outlet" height="260px">
           <DonutChart
-            id={`fp-donut-${meta.sync_date}`}
+            id={`fp-donut-${bulan}`}
             labels={donutLabels} values={donutValues} colors={donutColors}
           />
         </ChartCard>
-        <ChartCard title="Top 15 Outlet — TRX Juni" height="260px">
+        <ChartCard title={`Top 15 Outlet — TRX ${curr}`} height="260px">
           <HBarChart
-            id={`fp-top15trx-${meta.sync_date}`}
-            labels={top15_trx_jun.map(o => o.id_outlet)}
-            values={top15_trx_jun.map(o => Number(o.trx_jun))}
+            id={`fp-top15trx-${bulan}`}
+            labels={top15_trx_curr.map(o => o.id_outlet)}
+            values={top15_trx_curr.map(o => Number(o.trx_curr))}
             color={THEME}
           />
         </ChartCard>
       </div>
 
-      <ChartCard title="Top 15 Outlet — Revenue Juni" height="260px">
+      <ChartCard title={`Top 15 Outlet — Revenue ${curr}`} height="260px">
         <HBarChart
-          id={`fp-top15rev-${meta.sync_date}`}
-          labels={top15_rev_jun.map(o => o.id_outlet)}
-          values={top15_rev_jun.map(o => Number(o.rev_jun))}
+          id={`fp-top15rev-${bulan}`}
+          labels={top15_rev_curr.map(o => o.id_outlet)}
+          values={top15_rev_curr.map(o => Number(o.rev_curr))}
           color="#059669"
           formatFn={fmtRp}
         />
@@ -394,7 +418,9 @@ function ExecutiveSummaryTab({ data }) {
 
 /* ─── TAB 1: Growth & Decline ─── */
 function GrowthDeclineTab({ data }) {
-  const { status_counts: sc, top15_growth_trx, top15_decline_trx, rocket_outlets } = data;
+  const { status_counts: sc, top15_growth_trx, top15_decline_trx, rocket_outlets, bulan } = data;
+  const curr = currLabel(bulan);
+  const prev = prevLabel(bulan);
   const statusOrder = ['rocket','growing','stable','declining','new','churned'];
 
   return (
@@ -418,17 +444,17 @@ function GrowthDeclineTab({ data }) {
           <div className="wrfp-table-wrap">
             <table className="wrfp-table">
               <thead><tr>
-                <th>ID Outlet</th><th>TRX Mei</th><th>TRX Jun</th><th>Dev TRX</th><th>Growth %</th><th>Rev Juni</th>
+                <th>ID Outlet</th><th>TRX {prev}</th><th>TRX {curr}</th><th>Dev TRX</th><th>Growth %</th><th>Rev {curr}</th>
               </tr></thead>
               <tbody>
                 {rocket_outlets.map((o, i) => (
                   <tr key={i}>
                     <td style={{ fontWeight: 600 }}>{o.id_outlet}</td>
-                    <td>{fmtN(o.trx_mei)}</td>
-                    <td style={{ color: '#7C3AED', fontWeight: 600 }}>{fmtN(o.trx_jun)}</td>
+                    <td>{fmtN(o.trx_prev)}</td>
+                    <td style={{ color: '#7C3AED', fontWeight: 600 }}>{fmtN(o.trx_curr)}</td>
                     <td><DevCell value={o.dev_trx} /></td>
                     <td><PctCell value={o.pct_trx_growth} /></td>
-                    <td>{fmtRp(o.rev_jun)}</td>
+                    <td>{fmtRp(o.rev_curr)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -446,13 +472,13 @@ function GrowthDeclineTab({ data }) {
           {top15_growth_trx?.length > 0 ? (
             <div className="wrfp-table-wrap">
               <table className="wrfp-table">
-                <thead><tr><th>ID Outlet</th><th>TRX Mei</th><th>TRX Jun</th><th>Growth %</th></tr></thead>
+                <thead><tr><th>ID Outlet</th><th>TRX {prev}</th><th>TRX {curr}</th><th>Growth %</th></tr></thead>
                 <tbody>
                   {top15_growth_trx.map((o, i) => (
                     <tr key={i}>
                       <td style={{ fontWeight: 600 }}>{o.id_outlet}</td>
-                      <td>{fmtN(o.trx_mei)}</td>
-                      <td style={{ color: '#059669', fontWeight: 600 }}>{fmtN(o.trx_jun)}</td>
+                      <td>{fmtN(o.trx_prev)}</td>
+                      <td style={{ color: '#059669', fontWeight: 600 }}>{fmtN(o.trx_curr)}</td>
                       <td><PctCell value={o.pct_trx_growth} /></td>
                     </tr>
                   ))}
@@ -469,13 +495,13 @@ function GrowthDeclineTab({ data }) {
           {top15_decline_trx?.length > 0 ? (
             <div className="wrfp-table-wrap">
               <table className="wrfp-table">
-                <thead><tr><th>ID Outlet</th><th>TRX Mei</th><th>TRX Jun</th><th>Dev TRX</th></tr></thead>
+                <thead><tr><th>ID Outlet</th><th>TRX {prev}</th><th>TRX {curr}</th><th>Dev TRX</th></tr></thead>
                 <tbody>
                   {top15_decline_trx.map((o, i) => (
                     <tr key={i}>
                       <td style={{ fontWeight: 600 }}>{o.id_outlet}</td>
-                      <td>{fmtN(o.trx_mei)}</td>
-                      <td style={{ color: '#DC2626', fontWeight: 600 }}>{fmtN(o.trx_jun)}</td>
+                      <td>{fmtN(o.trx_prev)}</td>
+                      <td style={{ color: '#DC2626', fontWeight: 600 }}>{fmtN(o.trx_curr)}</td>
                       <td><DevCell value={o.dev_trx} /></td>
                     </tr>
                   ))}
@@ -490,7 +516,7 @@ function GrowthDeclineTab({ data }) {
 }
 
 /* ─── TAB 2: Outlet Detail (server-side paginated) ─── */
-function OutletDetailTab() {
+function OutletDetailTab({ bulan }) {
   const [rows, setRows]               = useState([]);
   const [total, setTotal]             = useState(0);
   const [page, setPage]               = useState(1);
@@ -498,9 +524,11 @@ function OutletDetailTab() {
   const [search, setSearch]           = useState('');
   const [dSearch, setDSearch]         = useState('');
   const [filterStatus, setFilterStatus] = useState('all');
-  const [sortBy, setSortBy]           = useState('trx_jun');
+  const [sortBy, setSortBy]           = useState('trx_curr');
   const [sortDir, setSortDir]         = useState('desc');
   const PER_PAGE = 50;
+  const curr = currLabel(bulan);
+  const prev = prevLabel(bulan);
 
   useEffect(() => {
     const t = setTimeout(() => { setDSearch(search); setPage(1); }, 400);
@@ -509,11 +537,11 @@ function OutletDetailTab() {
 
   useEffect(() => {
     setLoading(true);
-    getFastpayOutlets({ page, limit: PER_PAGE, search: dSearch, status: filterStatus, sortBy, sortDir })
+    getFastpayOutlets({ page, limit: PER_PAGE, search: dSearch, status: filterStatus, sortBy, sortDir, bulan })
       .then(d => { setRows(d.rows || []); setTotal(d.total || 0); })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [page, dSearch, filterStatus, sortBy, sortDir]);
+  }, [page, dSearch, filterStatus, sortBy, sortDir, bulan]);
 
   const totalPages = Math.max(1, Math.ceil(total / PER_PAGE));
   const handleSort = col => {
@@ -550,24 +578,24 @@ function OutletDetailTab() {
           <table className="wrfp-table">
             <thead><tr>
               <th>ID Outlet</th>
-              <th className="wrfp-th-sort" onClick={() => handleSort('trx_mei')}>TRX Mei <SortIcon col="trx_mei"/></th>
-              <th className="wrfp-th-sort" onClick={() => handleSort('trx_jun')}>TRX Jun <SortIcon col="trx_jun"/></th>
+              <th className="wrfp-th-sort" onClick={() => handleSort('trx_prev')}>TRX {prev} <SortIcon col="trx_prev"/></th>
+              <th className="wrfp-th-sort" onClick={() => handleSort('trx_curr')}>TRX {curr} <SortIcon col="trx_curr"/></th>
               <th className="wrfp-th-sort" onClick={() => handleSort('dev_trx')}>Dev TRX <SortIcon col="dev_trx"/></th>
               <th className="wrfp-th-sort" onClick={() => handleSort('pct_trx_growth')}>Growth % <SortIcon col="pct_trx_growth"/></th>
-              <th className="wrfp-th-sort" onClick={() => handleSort('rev_jun')}>Rev Juni <SortIcon col="rev_jun"/></th>
-              <th className="wrfp-th-sort" onClick={() => handleSort('avg_rev_per_trx_jun')}>Avg Rev/TRX <SortIcon col="avg_rev_per_trx_jun"/></th>
+              <th className="wrfp-th-sort" onClick={() => handleSort('rev_curr')}>Rev {curr} <SortIcon col="rev_curr"/></th>
+              <th className="wrfp-th-sort" onClick={() => handleSort('avg_rev_per_trx_curr')}>Avg Rev/TRX <SortIcon col="avg_rev_per_trx_curr"/></th>
               <th>Status</th>
             </tr></thead>
             <tbody>
               {rows.map((o, i) => (
                 <tr key={i}>
                   <td style={{ fontWeight:600, fontFamily:'monospace', fontSize:12 }}>{o.id_outlet}</td>
-                  <td>{fmtN(o.trx_mei)}</td>
-                  <td style={{ fontWeight:600 }}>{fmtN(o.trx_jun)}</td>
+                  <td>{fmtN(o.trx_prev)}</td>
+                  <td style={{ fontWeight:600 }}>{fmtN(o.trx_curr)}</td>
                   <td><DevCell value={o.dev_trx}/></td>
                   <td><PctCell value={o.pct_trx_growth}/></td>
-                  <td>{fmtRp(o.rev_jun)}</td>
-                  <td>{o.trx_jun > 0 ? fmtRp(o.avg_rev_per_trx_jun) : '-'}</td>
+                  <td>{fmtRp(o.rev_curr)}</td>
+                  <td>{o.trx_curr > 0 ? fmtRp(o.avg_rev_per_trx_curr) : '-'}</td>
                   <td><StatusBadge status={o.status}/></td>
                 </tr>
               ))}
@@ -590,23 +618,25 @@ function OutletDetailTab() {
 
 /* ─── TAB 3: Revenue Analysis ─── */
 function RevenueAnalysisTab({ data }) {
-  const { scatter_data, prefix_breakdown, trx_distribution, anomali_free_trx } = data;
+  const { scatter_data, prefix_breakdown, trx_distribution, anomali_free_trx, bulan } = data;
+  const curr = currLabel(bulan);
+  const prev = prevLabel(bulan);
 
   const scatterGroups = useMemo(() => {
     const statusOrder = ['rocket','growing','stable','declining','new','churned'];
     const grouped = {};
     for (const o of (scatter_data || [])) {
       if (!grouped[o.status]) grouped[o.status] = [];
-      grouped[o.status].push({ x: Number(o.trx_jun), y: Number(o.avg_rev_per_trx_jun) });
+      grouped[o.status].push({ x: Number(o.trx_curr), y: Number(o.avg_rev_per_trx_curr) });
     }
     return statusOrder
       .filter(s => grouped[s]?.length > 0)
       .map(s => ({ status: s, points: grouped[s].slice(0, 500) }));
   }, [scatter_data]);
 
-  const distId = `fp-dist-${data.meta.sync_date}`;
-  const scatterId = `fp-scatter-${data.meta.sync_date}`;
-  const prefixId = `fp-prefix-${data.meta.sync_date}`;
+  const distId = `fp-dist-${bulan}`;
+  const scatterId = `fp-scatter-${bulan}`;
+  const prefixId = `fp-prefix-${bulan}`;
 
   const bucketOrder = ['0 (Inactive)','1-5','6-20','21-50','51-100','101-500','501+'];
   const distMap = {};
@@ -617,20 +647,20 @@ function RevenueAnalysisTab({ data }) {
   return (
     <div>
       <div className="wrfp-charts-2col">
-        <ChartCard title="Scatter: TRX vs Avg Revenue/TRX" height="280px">
-          <ScatterChart id={scatterId} groups={scatterGroups} />
+        <ChartCard title={`Scatter: TRX vs Avg Revenue/TRX (${curr})`} height="280px">
+          <ScatterChart id={scatterId} groups={scatterGroups} xLabel={`TRX ${curr}`} />
         </ChartCard>
-        <ChartCard title="Distribusi TRX Juni (Bucket)" height="280px">
+        <ChartCard title={`Distribusi TRX ${curr} (Bucket)`} height="280px">
           <DistBarChart id={distId} labels={distLabels} values={distValues} color={THEME} />
         </ChartCard>
       </div>
 
       {prefix_breakdown?.length > 0 && (
-        <ChartCard title="Top 20 Prefix Outlet — Total TRX Juni" height="260px">
+        <ChartCard title={`Top 20 Prefix Outlet — Total TRX ${curr}`} height="260px">
           <HBarChart
             id={prefixId}
             labels={prefix_breakdown.map(p => p.prefix || '???')}
-            values={prefix_breakdown.map(p => Number(p.total_trx_jun))}
+            values={prefix_breakdown.map(p => Number(p.total_trx_curr))}
             color="#8B5CF6"
           />
         </ChartCard>
@@ -644,14 +674,14 @@ function RevenueAnalysisTab({ data }) {
           </div>
           <div className="wrfp-table-wrap">
             <table className="wrfp-table">
-              <thead><tr><th>ID Outlet</th><th>TRX Mei</th><th>Rev Mei</th><th>TRX Jun</th><th>Rev Jun</th><th>Status</th></tr></thead>
+              <thead><tr><th>ID Outlet</th><th>TRX {prev}</th><th>Rev {prev}</th><th>TRX {curr}</th><th>Rev {curr}</th><th>Status</th></tr></thead>
               <tbody>
                 {anomali_free_trx.map((o, i) => (
                   <tr key={i} style={{ background: '#FFFBEB' }}>
                     <td style={{ fontWeight:600, fontFamily:'monospace', fontSize:12 }}>{o.id_outlet}</td>
-                    <td>{fmtN(o.trx_mei)}</td>
-                    <td>{fmtRp(o.rev_mei)}</td>
-                    <td style={{ color:'#D97706', fontWeight:600 }}>{fmtN(o.trx_jun)}</td>
+                    <td>{fmtN(o.trx_prev)}</td>
+                    <td>{fmtRp(o.rev_prev)}</td>
+                    <td style={{ color:'#D97706', fontWeight:600 }}>{fmtN(o.trx_curr)}</td>
                     <td style={{ color:'#DC2626' }}>Rp 0</td>
                     <td><StatusBadge status={o.status} /></td>
                   </tr>
@@ -668,15 +698,15 @@ function RevenueAnalysisTab({ data }) {
           <div className="wrfp-chart-title">Detail Prefix Outlet</div>
           <div className="wrfp-table-wrap">
             <table className="wrfp-table">
-              <thead><tr><th>Prefix</th><th>Total Outlet</th><th>Aktif Juni</th><th>TRX Juni</th><th>Revenue Juni</th></tr></thead>
+              <thead><tr><th>Prefix</th><th>Total Outlet</th><th>Aktif {curr}</th><th>TRX {curr}</th><th>Revenue {curr}</th></tr></thead>
               <tbody>
                 {prefix_breakdown.map((p, i) => (
                   <tr key={i}>
                     <td style={{ fontWeight:700, fontFamily:'monospace', color: THEME }}>{p.prefix || '???'}</td>
                     <td>{fmtN(p.total_outlets)}</td>
-                    <td>{fmtN(p.active_jun)}</td>
-                    <td style={{ fontWeight:600 }}>{fmtN(p.total_trx_jun)}</td>
-                    <td>{fmtRp(p.total_rev_jun)}</td>
+                    <td>{fmtN(p.active_curr)}</td>
+                    <td style={{ fontWeight:600 }}>{fmtN(p.total_trx_curr)}</td>
+                    <td>{fmtRp(p.total_rev_curr)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -711,55 +741,57 @@ function ActionSection({ icon, title, color, items, columns, renderRow }) {
 }
 
 function ActionCenterTab({ data }) {
-  const { rocket_outlets, top15_decline_trx, new_outlets, churned_outlets } = data;
+  const { rocket_outlets, top15_decline_trx, new_outlets, churned_outlets, bulan } = data;
+  const curr = currLabel(bulan);
+  const prev = prevLabel(bulan);
 
   return (
     <div>
       <ActionSection
         icon="🚀" title="Pertahankan Outlet Rocket" color="#7C3AED"
         items={rocket_outlets}
-        columns={['ID Outlet','TRX Mei','TRX Jun','Growth %','Rev Juni']}
+        columns={['ID Outlet', `TRX ${prev}`, `TRX ${curr}`, 'Growth %', `Rev ${curr}`]}
         renderRow={o => <>
           <td style={{ fontWeight:600, fontFamily:'monospace', fontSize:12 }}>{o.id_outlet}</td>
-          <td>{fmtN(o.trx_mei)}</td>
-          <td style={{ color:'#7C3AED', fontWeight:700 }}>{fmtN(o.trx_jun)}</td>
+          <td>{fmtN(o.trx_prev)}</td>
+          <td style={{ color:'#7C3AED', fontWeight:700 }}>{fmtN(o.trx_curr)}</td>
           <td><PctCell value={o.pct_trx_growth} /></td>
-          <td>{fmtRp(o.rev_jun)}</td>
+          <td>{fmtRp(o.rev_curr)}</td>
         </>}
       />
 
       <ActionSection
         icon="🚨" title="Selamatkan Outlet Declining" color="#DC2626"
         items={top15_decline_trx}
-        columns={['ID Outlet','TRX Mei','TRX Jun','Dev TRX','Rev Mei (potensi hilang)']}
+        columns={['ID Outlet', `TRX ${prev}`, `TRX ${curr}`, 'Dev TRX', `Rev ${prev} (potensi hilang)`]}
         renderRow={o => <>
           <td style={{ fontWeight:600, fontFamily:'monospace', fontSize:12 }}>{o.id_outlet}</td>
-          <td style={{ fontWeight:600 }}>{fmtN(o.trx_mei)}</td>
-          <td style={{ color:'#DC2626' }}>{fmtN(o.trx_jun)}</td>
+          <td style={{ fontWeight:600 }}>{fmtN(o.trx_prev)}</td>
+          <td style={{ color:'#DC2626' }}>{fmtN(o.trx_curr)}</td>
           <td><DevCell value={o.dev_trx} /></td>
-          <td>{fmtRp(o.rev_mei)}</td>
+          <td>{fmtRp(o.rev_prev)}</td>
         </>}
       />
 
       <ActionSection
         icon="✨" title="Onboarding Outlet Baru" color="#2563EB"
         items={new_outlets}
-        columns={['ID Outlet','TRX Jun','Rev Juni']}
+        columns={['ID Outlet', `TRX ${curr}`, `Rev ${curr}`]}
         renderRow={o => <>
           <td style={{ fontWeight:600, fontFamily:'monospace', fontSize:12 }}>{o.id_outlet}</td>
-          <td style={{ color:'#2563EB', fontWeight:600 }}>{fmtN(o.trx_jun)}</td>
-          <td>{fmtRp(o.rev_jun)}</td>
+          <td style={{ color:'#2563EB', fontWeight:600 }}>{fmtN(o.trx_curr)}</td>
+          <td>{fmtRp(o.rev_curr)}</td>
         </>}
       />
 
       <ActionSection
         icon="💀" title="Recover Outlet Churn" color="#9CA3AF"
         items={churned_outlets}
-        columns={['ID Outlet','TRX Mei (terakhir)','Rev Mei (terakhir)']}
+        columns={['ID Outlet', `TRX ${prev} (terakhir)`, `Rev ${prev} (terakhir)`]}
         renderRow={o => <>
           <td style={{ fontWeight:600, fontFamily:'monospace', fontSize:12 }}>{o.id_outlet}</td>
-          <td>{fmtN(o.trx_mei)}</td>
-          <td>{fmtRp(o.rev_mei)}</td>
+          <td>{fmtN(o.trx_prev)}</td>
+          <td>{fmtRp(o.rev_prev)}</td>
         </>}
       />
 
@@ -784,17 +816,19 @@ const TABS = [
 export default function WarRoomFastpay() {
   const [tab, setTab]           = useState(0);
   const [data, setData]         = useState(null);
+  const [bulan, setBulan]       = useState(null);
   const [loading, setLoading]   = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError]       = useState(null);
 
-  async function fetchData(isRefresh = false) {
+  async function fetchData(isRefresh = false, bulanOverride) {
     if (isRefresh) setRefreshing(true);
     else setLoading(true);
     setError(null);
     try {
-      const d = await getFastpayAnalytics();
+      const d = await getFastpayAnalytics(bulanOverride ? { bulan: bulanOverride } : (bulan ? { bulan } : {}));
       setData(d);
+      if (d?.bulan) setBulan(d.bulan);
     } catch (e) {
       setError(e?.response?.data?.error || e.message);
     } finally {
@@ -804,6 +838,11 @@ export default function WarRoomFastpay() {
   }
 
   useEffect(() => { fetchData(); }, []);
+
+  function handleBulanChange(newBulan) {
+    setBulan(newBulan);
+    fetchData(false, newBulan);
+  }
 
   if (loading) {
     return (
@@ -827,7 +866,7 @@ export default function WarRoomFastpay() {
     );
   }
 
-  if (!data || data.error) {
+  if (!data || data.error || data.empty) {
     return (
       <Layout gsheetUrl="https://docs.google.com/spreadsheets/d/1GbDo9ASOQYiCCVqOT89RxAWuvZfQjeNbq3U9qP4jvcw" gsheetLabel="Fastpay Global">
         <div className="wrfp-empty">
@@ -845,6 +884,7 @@ export default function WarRoomFastpay() {
     ? new Date(isoDate + 'T12:00:00').toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })
     : '-';
   const hari = isoDate ? parseInt(isoDate.split('-')[2]) : null;
+  const bulanList = data.bulan_list || [];
 
   return (
     <Layout gsheetUrl="https://docs.google.com/spreadsheets/d/1GbDo9ASOQYiCCVqOT89RxAWuvZfQjeNbq3U9qP4jvcw" gsheetLabel="Fastpay Global">
@@ -862,11 +902,16 @@ export default function WarRoomFastpay() {
             <span className="wrfp-badge wrfp-badge-owner">
               <i className="ti ti-user" /> Ainul
             </span>
+            {bulanList.length > 1 && (
+              <select className="wrfp-select" value={data.bulan} onChange={e => handleBulanChange(e.target.value)} style={{ marginRight: 4 }}>
+                {bulanList.map(b => <option key={b} value={b}>{bulanDisplay(b)}</option>)}
+              </select>
+            )}
             <span className="wrfp-badge wrfp-badge-date">
               <i className="ti ti-calendar" /> {tanggal}
             </span>
             {hari && (
-              <span className="wrfp-badge wrfp-badge-hari">Juni — Hari ke-{hari}</span>
+              <span className="wrfp-badge wrfp-badge-hari">{currLabel(data.bulan)} — Hari ke-{hari}</span>
             )}
             <button
               className="wrfp-refresh-btn"
@@ -896,7 +941,7 @@ export default function WarRoomFastpay() {
         <div className="wrfp-tab-content">
           {tab === 0 && <ExecutiveSummaryTab data={data} />}
           {tab === 1 && <GrowthDeclineTab    data={data} />}
-          {tab === 2 && <OutletDetailTab />}
+          {tab === 2 && <OutletDetailTab bulan={data.bulan} />}
           {tab === 3 && <RevenueAnalysisTab  data={data} />}
           {tab === 4 && <ActionCenterTab     data={data} />}
         </div>

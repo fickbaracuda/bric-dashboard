@@ -1,22 +1,94 @@
 const pool = require('../db');
 
-const SYNC_TOKEN = 'bric2026bimasaktisecret';
+// Part 2A: baca dari env dulu, fallback ke nilai lama agar Apps Script existing tidak putus.
+const SYNC_TOKEN = process.env.APPS_SCRIPT_TOKEN || 'bric2026bimasaktisecret';
+
+const CHUNK = 500; // 500 baris x N kolom, aman < 65535 params
 
 /* ─────────────────────────────────────────────
-   Helper: compute status from raw values
+   Helper: compute status dari nilai prev/curr GENERIK (bukan lagi
+   mei/jun hardcode) -- rumus SAMA PERSIS dgn versi lama, cuma nama
+   variabel yg berubah supaya berlaku utk pasangan bulan apa pun.
 ───────────────────────────────────────────── */
-function computeStatus(trxMei, trxJun, pctTrxGrowth, devTrx) {
-  if (trxMei > 0 && trxJun === 0)                                 return 'churned';
-  if (trxMei === 0 && trxJun > 0)                                  return 'new';
-  if (trxMei > 0 && pctTrxGrowth >= 50 && devTrx >= 20)           return 'rocket';
-  if (trxMei > 0 && devTrx > 0)                                    return 'growing';
-  if (trxMei > 0 && devTrx < 0)                                    return 'declining';
+function computeStatus(trxPrev, trxCurr, pctTrxGrowth, devTrx) {
+  if (trxPrev > 0 && trxCurr === 0)                                return 'churned';
+  if (trxPrev === 0 && trxCurr > 0)                                return 'new';
+  if (trxPrev > 0 && pctTrxGrowth >= 50 && devTrx >= 20)           return 'rocket';
+  if (trxPrev > 0 && devTrx > 0)                                    return 'growing';
+  if (trxPrev > 0 && devTrx < 0)                                    return 'declining';
   return 'stable';
+}
+
+async function upsertChunk(bulan, rows) {
+  if (!rows.length) return;
+
+  const idOutlets = [], trxPrevs = [], revPrevs   = [];
+  const trxCurrs  = [], revCurrs = [], devTrxs     = [];
+  const devRevs   = [], pctTrxs  = [], pctRevs     = [];
+  const avgRevPrevs = [], avgRevCurrs = [], statuses = [];
+
+  for (const row of rows) {
+    const trxPrev = parseInt(row.trx_prev) || 0;
+    const trxCurr = parseInt(row.trx_curr) || 0;
+    const revPrev = parseInt(row.rev_prev) || 0;
+    const revCurr = parseInt(row.rev_curr) || 0;
+
+    const devTrx = trxCurr - trxPrev;
+    const devRev = revCurr - revPrev;
+    const pctTrxGrowth = trxPrev > 0 ? ((devTrx / trxPrev) * 100) : (trxCurr > 0 ? 100 : 0);
+    const pctRevGrowth = revPrev > 0 ? ((devRev / revPrev) * 100) : (revCurr > 0 ? 100 : 0);
+    const avgRevPrev = trxPrev > 0 ? Math.round(revPrev / trxPrev) : 0;
+    const avgRevCurr = trxCurr > 0 ? Math.round(revCurr / trxCurr) : 0;
+    const status = computeStatus(trxPrev, trxCurr, pctTrxGrowth, devTrx);
+
+    idOutlets.push(String(row.id_outlet || '').trim());
+    trxPrevs.push(trxPrev); revPrevs.push(revPrev);
+    trxCurrs.push(trxCurr); revCurrs.push(revCurr);
+    devTrxs.push(devTrx);   devRevs.push(devRev);
+    pctTrxs.push(parseFloat(pctTrxGrowth.toFixed(2)));
+    pctRevs.push(parseFloat(pctRevGrowth.toFixed(2)));
+    avgRevPrevs.push(avgRevPrev);
+    avgRevCurrs.push(avgRevCurr);
+    statuses.push(status);
+  }
+
+  await pool.query(
+    `INSERT INTO warroom_fastpay_outlet
+       (bulan, id_outlet, trx_prev, rev_prev, trx_curr, rev_curr,
+        dev_trx, dev_rev, pct_trx_growth, pct_rev_growth,
+        avg_rev_per_trx_prev, avg_rev_per_trx_curr, status, synced_at)
+     SELECT $1,
+       unnest($2::varchar[]), unnest($3::int[]),  unnest($4::bigint[]),
+       unnest($5::int[]),     unnest($6::bigint[]),
+       unnest($7::int[]),     unnest($8::bigint[]),
+       unnest($9::numeric[]), unnest($10::numeric[]),
+       unnest($11::bigint[]), unnest($12::bigint[]),
+       unnest($13::varchar[]), NOW()
+     ON CONFLICT (bulan, id_outlet) DO UPDATE SET
+       trx_prev             = EXCLUDED.trx_prev,
+       rev_prev             = EXCLUDED.rev_prev,
+       trx_curr             = EXCLUDED.trx_curr,
+       rev_curr             = EXCLUDED.rev_curr,
+       dev_trx              = EXCLUDED.dev_trx,
+       dev_rev              = EXCLUDED.dev_rev,
+       pct_trx_growth       = EXCLUDED.pct_trx_growth,
+       pct_rev_growth       = EXCLUDED.pct_rev_growth,
+       avg_rev_per_trx_prev = EXCLUDED.avg_rev_per_trx_prev,
+       avg_rev_per_trx_curr = EXCLUDED.avg_rev_per_trx_curr,
+       status               = EXCLUDED.status,
+       synced_at            = NOW()`,
+    [bulan, idOutlets, trxPrevs, revPrevs, trxCurrs, revCurrs,
+     devTrxs, devRevs, pctTrxs, pctRevs, avgRevPrevs, avgRevCurrs, statuses]
+  );
 }
 
 /* ─────────────────────────────────────────────
    POST /api/warroom/fastpay/sync
-   Token auth (bukan JWT) — dipanggil Apps Script
+   Token auth (Bearer, sama seperti sebelumnya) -- dipanggil Apps Script.
+   Body BARU (breaking change dari versi lama): { bulan: 'YYYY-MM',
+   data: [{ id_outlet, trx_prev, rev_prev, trx_curr, rev_curr }] }.
+   `tanggal` (versi lama) TIDAK dipakai lagi -- `bulan` menggantikannya
+   sbg identitas periode data (bukan tanggal eksekusi sync).
 ───────────────────────────────────────────── */
 async function syncHandler(req, res) {
   const authHeader = req.headers['authorization'] || '';
@@ -24,93 +96,48 @@ async function syncHandler(req, res) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  const { tanggal, data } = req.body;
-  if (!tanggal || !Array.isArray(data) || data.length === 0) {
-    return res.status(400).json({ error: 'Body tidak valid. Perlu tanggal & data[]' });
+  const { bulan, data } = req.body;
+  if (!bulan || !/^\d{4}-\d{2}$/.test(bulan)) {
+    return res.status(400).json({ error: 'bulan wajib diisi, format YYYY-MM' });
+  }
+  if (!Array.isArray(data) || data.length === 0) {
+    return res.status(400).json({ error: 'Body tidak valid. Perlu data[]' });
   }
 
-  try {
-    // Compute derived fields for each row
-    const idOutlets   = [], trxMeis  = [], revMeis     = [];
-    const trxJuns     = [], revJuns  = [], devTrxs     = [];
-    const devRevs     = [], pctTrxs  = [], pctRevs     = [];
-    const avgRevMeis  = [], avgRevJuns = [], statuses   = [];
+  const raw = data.filter(o => o.id_outlet);
+  if (!raw.length) return res.json({ success: true, upserted: 0, bulan });
 
-    for (const row of data) {
-      const trxMei = parseInt(row.trx_mei) || 0;
-      const trxJun = parseInt(row.trx_jun) || 0;
-      const revMei = parseInt(row.rev_mei) || 0;
-      const revJun = parseInt(row.rev_jun) || 0;
+  // Dedup by id_outlet -- ON CONFLICT gagal kalau 2 baris sama masuk 1 chunk unnest.
+  const seen = new Map();
+  for (const o of raw) seen.set(String(o.id_outlet).trim(), o);
+  const valid = [...seen.values()];
 
-      const devTrx = trxJun - trxMei;
-      const devRev = revJun - revMei;
-      const pctTrxGrowth = trxMei > 0 ? ((devTrx / trxMei) * 100) : (trxJun > 0 ? 100 : 0);
-      const pctRevGrowth = revMei > 0 ? ((devRev / revMei) * 100) : (revJun > 0 ? 100 : 0);
-      const avgRevMei    = trxMei > 0 ? Math.round(revMei / trxMei) : 0;
-      const avgRevJun    = trxJun > 0 ? Math.round(revJun / trxJun) : 0;
-      const status       = computeStatus(trxMei, trxJun, pctTrxGrowth, devTrx);
+  res.json({ success: true, upserted: valid.length, bulan, chunks: Math.ceil(valid.length / CHUNK) });
 
-      idOutlets.push(String(row.id_outlet || '').trim());
-      trxMeis.push(trxMei);  revMeis.push(revMei);
-      trxJuns.push(trxJun);  revJuns.push(revJun);
-      devTrxs.push(devTrx);  devRevs.push(devRev);
-      pctTrxs.push(parseFloat(pctTrxGrowth.toFixed(2)));
-      pctRevs.push(parseFloat(pctRevGrowth.toFixed(2)));
-      avgRevMeis.push(avgRevMei);
-      avgRevJuns.push(avgRevJun);
-      statuses.push(status);
+  setImmediate(async () => {
+    try {
+      for (let i = 0; i < valid.length; i += CHUNK) await upsertChunk(bulan, valid.slice(i, i + CHUNK));
+      console.log(`[fastpay sync] done: ${valid.length} outlets, bulan ${bulan}`);
+    } catch (err) {
+      console.error(`[fastpay sync] error bulan ${bulan}:`, err.message);
     }
-
-    const result = await pool.query(
-      `INSERT INTO fastpay_snapshot
-         (tanggal, id_outlet, trx_mei, rev_mei, trx_jun, rev_jun,
-          dev_trx, dev_rev, pct_trx_growth, pct_rev_growth,
-          avg_rev_per_trx_mei, avg_rev_per_trx_jun, status, synced_at)
-       SELECT $1,
-         unnest($2::varchar[]), unnest($3::int[]),  unnest($4::bigint[]),
-         unnest($5::int[]),     unnest($6::bigint[]),
-         unnest($7::int[]),     unnest($8::bigint[]),
-         unnest($9::numeric[]), unnest($10::numeric[]),
-         unnest($11::bigint[]), unnest($12::bigint[]),
-         unnest($13::varchar[]), NOW()
-       ON CONFLICT (tanggal, id_outlet) DO UPDATE SET
-         trx_mei             = EXCLUDED.trx_mei,
-         rev_mei             = EXCLUDED.rev_mei,
-         trx_jun             = EXCLUDED.trx_jun,
-         rev_jun             = EXCLUDED.rev_jun,
-         dev_trx             = EXCLUDED.dev_trx,
-         dev_rev             = EXCLUDED.dev_rev,
-         pct_trx_growth      = EXCLUDED.pct_trx_growth,
-         pct_rev_growth      = EXCLUDED.pct_rev_growth,
-         avg_rev_per_trx_mei = EXCLUDED.avg_rev_per_trx_mei,
-         avg_rev_per_trx_jun = EXCLUDED.avg_rev_per_trx_jun,
-         status              = EXCLUDED.status,
-         synced_at           = NOW()`,
-      [tanggal, idOutlets, trxMeis, revMeis, trxJuns, revJuns,
-       devTrxs, devRevs, pctTrxs, pctRevs, avgRevMeis, avgRevJuns, statuses]
-    );
-
-    res.json({ success: true, upserted: result.rowCount, tanggal });
-  } catch (err) {
-    console.error('[fastpay sync]', err.message);
-    res.status(500).json({ error: err.message });
-  }
+  });
 }
 
 /* ─────────────────────────────────────────────
-   GET /api/warroom/fastpay/analytics
-   requireAuth — dipanggil frontend
+   GET /api/warroom/fastpay/analytics?bulan=YYYY-MM
+   requireAuth -- dipanggil frontend. bulan opsional, default bulan
+   terbaru yang ada datanya (bulan_list dikirim utk dropdown).
 ───────────────────────────────────────────── */
 async function analyticsHandler(req, res) {
   try {
-    // Step 1: get latest tanggal
-    const { rows: dateRows } = await pool.query(
-      `SELECT MAX(tanggal) AS tanggal FROM fastpay_snapshot`
-    );
-    const tanggal = dateRows[0]?.tanggal;
-    if (!tanggal) return res.json({ error: 'Belum ada data' });
+    const blRes = await pool.query(`SELECT DISTINCT bulan FROM warroom_fastpay_outlet ORDER BY bulan DESC`);
+    const bulanList = blRes.rows.map(r => r.bulan);
+    if (!bulanList.length) return res.json({ empty: true, bulan_list: [] });
 
-    // Step 2: run all analytics queries in parallel
+    let { bulan } = req.query;
+    if (!bulan || !bulanList.includes(bulan)) bulan = bulanList[0];
+
     const [
       metaRes, summaryRes, statusRes,
       top15TrxRes, top15RevRes,
@@ -118,176 +145,121 @@ async function analyticsHandler(req, res) {
       newRes, churnedRes, rocketRes,
       prefixRes, trxDistRes, scatterRes, anomaliRes
     ] = await Promise.all([
-
-      // meta
       pool.query(
-        `SELECT tanggal, COUNT(*) AS total_outlets
-         FROM fastpay_snapshot WHERE tanggal = $1
-         GROUP BY tanggal`, [tanggal]
+        `SELECT bulan, COUNT(*) AS total_outlets, MAX(synced_at) AS last_sync
+         FROM warroom_fastpay_outlet WHERE bulan = $1 GROUP BY bulan`, [bulan]
       ),
-
-      // summary
       pool.query(
         `SELECT
-           SUM(trx_mei) AS total_trx_mei, SUM(trx_jun) AS total_trx_jun,
-           SUM(rev_mei) AS total_rev_mei, SUM(rev_jun) AS total_rev_jun,
-           SUM(dev_trx) AS dev_trx,      SUM(dev_rev) AS dev_rev,
-           COUNT(CASE WHEN trx_jun > 0 THEN 1 END) AS active_jun,
-           COUNT(CASE WHEN trx_mei > 0 THEN 1 END) AS active_mei,
-           ROUND(AVG(CASE WHEN trx_mei > 0 THEN avg_rev_per_trx_jun END)) AS avg_rev_per_trx
-         FROM fastpay_snapshot WHERE tanggal = $1`, [tanggal]
+           SUM(trx_prev) AS total_trx_prev, SUM(trx_curr) AS total_trx_curr,
+           SUM(rev_prev) AS total_rev_prev, SUM(rev_curr) AS total_rev_curr,
+           SUM(dev_trx) AS dev_trx,         SUM(dev_rev) AS dev_rev,
+           COUNT(CASE WHEN trx_curr > 0 THEN 1 END) AS active_curr,
+           COUNT(CASE WHEN trx_prev > 0 THEN 1 END) AS active_prev,
+           ROUND(AVG(CASE WHEN trx_prev > 0 THEN avg_rev_per_trx_curr END)) AS avg_rev_per_trx
+         FROM warroom_fastpay_outlet WHERE bulan = $1`, [bulan]
       ),
-
-      // status counts
+      pool.query(`SELECT status, COUNT(*) AS cnt FROM warroom_fastpay_outlet WHERE bulan = $1 GROUP BY status`, [bulan]),
       pool.query(
-        `SELECT status, COUNT(*) AS cnt
-         FROM fastpay_snapshot WHERE tanggal = $1
-         GROUP BY status`, [tanggal]
+        `SELECT id_outlet, trx_prev, trx_curr, dev_trx, pct_trx_growth, status
+         FROM warroom_fastpay_outlet WHERE bulan = $1 ORDER BY trx_curr DESC LIMIT 15`, [bulan]
       ),
-
-      // top 15 by trx_jun
       pool.query(
-        `SELECT id_outlet, trx_mei, trx_jun, dev_trx, pct_trx_growth, status
-         FROM fastpay_snapshot WHERE tanggal = $1
-         ORDER BY trx_jun DESC LIMIT 15`, [tanggal]
+        `SELECT id_outlet, rev_prev, rev_curr, dev_rev, pct_rev_growth, trx_curr, status
+         FROM warroom_fastpay_outlet WHERE bulan = $1 ORDER BY rev_curr DESC LIMIT 15`, [bulan]
       ),
-
-      // top 15 by rev_jun
       pool.query(
-        `SELECT id_outlet, rev_mei, rev_jun, dev_rev, pct_rev_growth, trx_jun, status
-         FROM fastpay_snapshot WHERE tanggal = $1
-         ORDER BY rev_jun DESC LIMIT 15`, [tanggal]
+        `SELECT id_outlet, trx_prev, trx_curr, dev_trx, pct_trx_growth, rev_curr, status
+         FROM warroom_fastpay_outlet WHERE bulan = $1 AND status IN ('rocket','growing')
+         ORDER BY pct_trx_growth DESC LIMIT 15`, [bulan]
       ),
-
-      // top 15 growth by pct_trx_growth (rocket + growing)
       pool.query(
-        `SELECT id_outlet, trx_mei, trx_jun, dev_trx, pct_trx_growth, rev_jun, status
-         FROM fastpay_snapshot
-         WHERE tanggal = $1 AND status IN ('rocket','growing')
-         ORDER BY pct_trx_growth DESC LIMIT 15`, [tanggal]
+        `SELECT id_outlet, trx_prev, trx_curr, dev_trx, pct_trx_growth, rev_prev, status
+         FROM warroom_fastpay_outlet WHERE bulan = $1 AND status = 'declining'
+         ORDER BY dev_trx ASC LIMIT 15`, [bulan]
       ),
-
-      // top 15 decline by dev_trx (declining)
       pool.query(
-        `SELECT id_outlet, trx_mei, trx_jun, dev_trx, pct_trx_growth, rev_mei, status
-         FROM fastpay_snapshot
-         WHERE tanggal = $1 AND status = 'declining'
-         ORDER BY dev_trx ASC LIMIT 15`, [tanggal]
+        `SELECT id_outlet, rev_prev, rev_curr, dev_rev, pct_rev_growth, trx_curr, status
+         FROM warroom_fastpay_outlet WHERE bulan = $1 AND dev_rev > 0
+         ORDER BY dev_rev DESC LIMIT 15`, [bulan]
       ),
-
-      // top 15 growth by dev_rev positive
       pool.query(
-        `SELECT id_outlet, rev_mei, rev_jun, dev_rev, pct_rev_growth, trx_jun, status
-         FROM fastpay_snapshot
-         WHERE tanggal = $1 AND dev_rev > 0
-         ORDER BY dev_rev DESC LIMIT 15`, [tanggal]
+        `SELECT id_outlet, trx_curr, rev_curr, status
+         FROM warroom_fastpay_outlet WHERE bulan = $1 AND status = 'new'
+         ORDER BY trx_curr DESC LIMIT 50`, [bulan]
       ),
-
-      // new outlets (trx_mei=0, trx_jun>0)
       pool.query(
-        `SELECT id_outlet, trx_jun, rev_jun, status
-         FROM fastpay_snapshot
-         WHERE tanggal = $1 AND status = 'new'
-         ORDER BY trx_jun DESC LIMIT 50`, [tanggal]
+        `SELECT id_outlet, trx_prev, rev_prev, status
+         FROM warroom_fastpay_outlet WHERE bulan = $1 AND status = 'churned'
+         ORDER BY rev_prev DESC LIMIT 50`, [bulan]
       ),
-
-      // churned outlets (trx_mei>0, trx_jun=0)
       pool.query(
-        `SELECT id_outlet, trx_mei, rev_mei, status
-         FROM fastpay_snapshot
-         WHERE tanggal = $1 AND status = 'churned'
-         ORDER BY rev_mei DESC LIMIT 50`, [tanggal]
+        `SELECT id_outlet, trx_prev, trx_curr, dev_trx, pct_trx_growth, rev_curr, status
+         FROM warroom_fastpay_outlet WHERE bulan = $1 AND status = 'rocket'
+         ORDER BY pct_trx_growth DESC LIMIT 50`, [bulan]
       ),
-
-      // rocket outlets
       pool.query(
-        `SELECT id_outlet, trx_mei, trx_jun, dev_trx, pct_trx_growth, rev_jun, status
-         FROM fastpay_snapshot
-         WHERE tanggal = $1 AND status = 'rocket'
-         ORDER BY pct_trx_growth DESC LIMIT 50`, [tanggal]
+        `SELECT SUBSTRING(id_outlet, 1, 3) AS prefix,
+           COUNT(*) AS total_outlets, SUM(trx_curr) AS total_trx_curr, SUM(rev_curr) AS total_rev_curr,
+           COUNT(CASE WHEN trx_curr > 0 THEN 1 END) AS active_curr
+         FROM warroom_fastpay_outlet WHERE bulan = $1
+         GROUP BY SUBSTRING(id_outlet, 1, 3) ORDER BY total_trx_curr DESC LIMIT 20`, [bulan]
       ),
-
-      // prefix breakdown (first 3 chars of id_outlet)
-      pool.query(
-        `SELECT
-           SUBSTRING(id_outlet, 1, 3) AS prefix,
-           COUNT(*) AS total_outlets,
-           SUM(trx_jun) AS total_trx_jun,
-           SUM(rev_jun) AS total_rev_jun,
-           COUNT(CASE WHEN trx_jun > 0 THEN 1 END) AS active_jun
-         FROM fastpay_snapshot WHERE tanggal = $1
-         GROUP BY SUBSTRING(id_outlet, 1, 3)
-         ORDER BY total_trx_jun DESC LIMIT 20`, [tanggal]
-      ),
-
-      // TRX distribution buckets
       pool.query(
         `SELECT
            CASE
-             WHEN trx_jun = 0     THEN '0 (Inactive)'
-             WHEN trx_jun BETWEEN 1  AND 5   THEN '1-5'
-             WHEN trx_jun BETWEEN 6  AND 20  THEN '6-20'
-             WHEN trx_jun BETWEEN 21 AND 50  THEN '21-50'
-             WHEN trx_jun BETWEEN 51 AND 100 THEN '51-100'
-             WHEN trx_jun BETWEEN 101 AND 500 THEN '101-500'
+             WHEN trx_curr = 0     THEN '0 (Inactive)'
+             WHEN trx_curr BETWEEN 1  AND 5   THEN '1-5'
+             WHEN trx_curr BETWEEN 6  AND 20  THEN '6-20'
+             WHEN trx_curr BETWEEN 21 AND 50  THEN '21-50'
+             WHEN trx_curr BETWEEN 51 AND 100 THEN '51-100'
+             WHEN trx_curr BETWEEN 101 AND 500 THEN '101-500'
              ELSE '501+'
-           END AS bucket,
-           COUNT(*) AS cnt
-         FROM fastpay_snapshot WHERE tanggal = $1
-         GROUP BY bucket
-         ORDER BY MIN(trx_jun)`, [tanggal]
+           END AS bucket, COUNT(*) AS cnt
+         FROM warroom_fastpay_outlet WHERE bulan = $1 GROUP BY bucket ORDER BY MIN(trx_curr)`, [bulan]
       ),
-
-      // scatter data for Revenue Analysis (max 3000 active outlets, 3 cols only)
       pool.query(
-        `SELECT id_outlet, trx_jun, avg_rev_per_trx_jun, status
-         FROM fastpay_snapshot WHERE tanggal = $1 AND trx_jun > 0
-         ORDER BY trx_jun DESC LIMIT 3000`, [tanggal]
+        `SELECT id_outlet, trx_curr, avg_rev_per_trx_curr, status
+         FROM warroom_fastpay_outlet WHERE bulan = $1 AND trx_curr > 0
+         ORDER BY trx_curr DESC LIMIT 3000`, [bulan]
       ),
-
-      // anomali: free TRX (trx > 0 but rev = 0)
       pool.query(
-        `SELECT id_outlet, trx_jun, rev_jun, trx_mei, rev_mei, status
-         FROM fastpay_snapshot
-         WHERE tanggal = $1 AND trx_jun > 0 AND rev_jun = 0
-         ORDER BY trx_jun DESC LIMIT 100`, [tanggal]
+        `SELECT id_outlet, trx_curr, rev_curr, trx_prev, rev_prev, status
+         FROM warroom_fastpay_outlet WHERE bulan = $1 AND trx_curr > 0 AND rev_curr = 0
+         ORDER BY trx_curr DESC LIMIT 100`, [bulan]
       ),
     ]);
 
-    // Build status_counts map
     const status_counts = {};
     for (const r of statusRes.rows) status_counts[r.status] = parseInt(r.cnt);
 
-    // Compute pct_dev from summary
     const s = summaryRes.rows[0] || {};
-    const pct_dev_trx = s.total_trx_mei > 0
-      ? ((s.dev_trx / s.total_trx_mei) * 100).toFixed(2)
-      : 0;
-    const pct_dev_rev = s.total_rev_mei > 0
-      ? ((s.dev_rev / s.total_rev_mei) * 100).toFixed(2)
-      : 0;
+    const pct_dev_trx = s.total_trx_prev > 0 ? ((s.dev_trx / s.total_trx_prev) * 100).toFixed(2) : 0;
+    const pct_dev_rev = s.total_rev_prev > 0 ? ((s.dev_rev / s.total_rev_prev) * 100).toFixed(2) : 0;
 
     res.json({
+      bulan,
+      bulan_list: bulanList,
       meta: {
-        sync_date: tanggal,
+        sync_date: metaRes.rows[0]?.last_sync || null,
         total_outlets: parseInt(metaRes.rows[0]?.total_outlets || 0),
       },
       summary: {
-        total_trx_mei:   parseInt(s.total_trx_mei || 0),
-        total_trx_jun:   parseInt(s.total_trx_jun || 0),
-        total_rev_mei:   parseInt(s.total_rev_mei || 0),
-        total_rev_jun:   parseInt(s.total_rev_jun || 0),
+        total_trx_prev:  parseInt(s.total_trx_prev || 0),
+        total_trx_curr:  parseInt(s.total_trx_curr || 0),
+        total_rev_prev:  parseInt(s.total_rev_prev || 0),
+        total_rev_curr:  parseInt(s.total_rev_curr || 0),
         dev_trx:         parseInt(s.dev_trx || 0),
         dev_rev:         parseInt(s.dev_rev || 0),
         pct_dev_trx:     parseFloat(pct_dev_trx),
         pct_dev_rev:     parseFloat(pct_dev_rev),
-        active_jun:      parseInt(s.active_jun || 0),
-        active_mei:      parseInt(s.active_mei || 0),
+        active_curr:     parseInt(s.active_curr || 0),
+        active_prev:     parseInt(s.active_prev || 0),
         avg_rev_per_trx: parseInt(s.avg_rev_per_trx || 0),
       },
       status_counts,
-      top15_trx_jun:      top15TrxRes.rows,
-      top15_rev_jun:      top15RevRes.rows,
+      top15_trx_curr:     top15TrxRes.rows,
+      top15_rev_curr:     top15RevRes.rows,
       top15_growth_trx:   top15GrowthTrxRes.rows,
       top15_decline_trx:  top15DeclineTrxRes.rows,
       top15_growth_rev:   top15GrowthRevRes.rows,
@@ -306,44 +278,47 @@ async function analyticsHandler(req, res) {
 }
 
 /* ─────────────────────────────────────────────
-   GET /api/warroom/fastpay/outlets
+   GET /api/warroom/fastpay/outlets?bulan=YYYY-MM
    Server-side paginated outlet detail
 ───────────────────────────────────────────── */
 async function outletsHandler(req, res) {
   try {
-    const { rows: dateRows } = await pool.query(`SELECT MAX(tanggal) AS tanggal FROM fastpay_snapshot`);
-    const tanggal = dateRows[0]?.tanggal;
-    if (!tanggal) return res.json({ rows: [], total: 0 });
+    const blRes = await pool.query(`SELECT DISTINCT bulan FROM warroom_fastpay_outlet ORDER BY bulan DESC`);
+    const bulanList = blRes.rows.map(r => r.bulan);
+    if (!bulanList.length) return res.json({ rows: [], total: 0, bulan_list: [] });
+
+    let { bulan } = req.query;
+    if (!bulan || !bulanList.includes(bulan)) bulan = bulanList[0];
 
     const page   = Math.max(1, parseInt(req.query.page)  || 1);
     const limit  = Math.min(200, parseInt(req.query.limit) || 50);
     const offset = (page - 1) * limit;
     const search = (req.query.search || '').trim();
     const status = req.query.status || 'all';
-    const validCols = { trx_mei:1, trx_jun:1, rev_mei:1, rev_jun:1, dev_trx:1, dev_rev:1, pct_trx_growth:1, pct_rev_growth:1, avg_rev_per_trx_jun:1 };
-    const col    = validCols[req.query.sortBy] ? req.query.sortBy : 'trx_jun';
+    const validCols = { trx_prev:1, trx_curr:1, rev_prev:1, rev_curr:1, dev_trx:1, dev_rev:1, pct_trx_growth:1, pct_rev_growth:1, avg_rev_per_trx_curr:1 };
+    const col    = validCols[req.query.sortBy] ? req.query.sortBy : 'trx_curr';
     const dir    = req.query.sortDir === 'asc' ? 'ASC' : 'DESC';
 
-    const conditions = [`tanggal = $1`];
-    const params = [tanggal];
+    const conditions = [`bulan = $1`];
+    const params = [bulan];
     if (status !== 'all') { params.push(status); conditions.push(`status = $${params.length}`); }
     if (search)           { params.push(`%${search.toLowerCase()}%`); conditions.push(`LOWER(id_outlet) LIKE $${params.length}`); }
 
     const where = conditions.join(' AND ');
     const [countRes, dataRes] = await Promise.all([
-      pool.query(`SELECT COUNT(*) FROM fastpay_snapshot WHERE ${where}`, params),
+      pool.query(`SELECT COUNT(*) FROM warroom_fastpay_outlet WHERE ${where}`, params),
       pool.query(
-        `SELECT id_outlet, trx_mei, trx_jun, rev_mei, rev_jun,
+        `SELECT id_outlet, trx_prev, trx_curr, rev_prev, rev_curr,
                 dev_trx, dev_rev, pct_trx_growth, pct_rev_growth,
-                avg_rev_per_trx_mei, avg_rev_per_trx_jun, status
-         FROM fastpay_snapshot WHERE ${where}
+                avg_rev_per_trx_prev, avg_rev_per_trx_curr, status
+         FROM warroom_fastpay_outlet WHERE ${where}
          ORDER BY ${col} ${dir}
          LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
         [...params, limit, offset]
       ),
     ]);
 
-    res.json({ rows: dataRes.rows, total: parseInt(countRes.rows[0].count), page, limit });
+    res.json({ rows: dataRes.rows, total: parseInt(countRes.rows[0].count), page, limit, bulan, bulan_list: bulanList });
   } catch (err) {
     console.error('[fastpay outlets]', err.message);
     res.status(500).json({ error: err.message });
