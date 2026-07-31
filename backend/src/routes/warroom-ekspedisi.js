@@ -404,14 +404,21 @@ async function syncHandler(req, res) {
 async function analyticsHandler(req, res) {
   try {
     let { tanggal, currentMonth, previousMonth } = req.query;
+
+    // ── daftar tanggal sync yang tersedia — dipakai frontend utk dropdown
+    //    date-picker (lihat data historis, bukan cuma sync terakhir). ──
+    const availableDatesRes = await pool.query(
+      "SELECT DISTINCT TO_CHAR(tanggal, 'YYYY-MM-DD') AS t FROM ekspedisi_monthly ORDER BY t DESC LIMIT 90"
+    );
+    const availableDates = availableDatesRes.rows.map(r => r.t);
+
     if (!tanggal) {
-      const r = await pool.query("SELECT TO_CHAR(MAX(tanggal), 'YYYY-MM-DD') AS t FROM ekspedisi_monthly");
-      tanggal = r.rows[0]?.t;
+      tanggal = availableDates[0] || null;
     }
     const emptyShape = {
       tanggal: tanggal || null, dayCutoff: null, currentMonthLabel: null,
       months: [], outlets: [], history: [], summary: {},
-      meta: {}, monthlyFacts: [], monthlySummary: [], outletPerformance: [],
+      meta: { availableDates }, monthlyFacts: [], monthlySummary: [], outletPerformance: [],
       executiveInsights: [], charts: {}, queues: {}, businessMetrics: {},
     };
     if (!tanggal) return res.json(emptyShape);
@@ -646,6 +653,7 @@ async function analyticsHandler(req, res) {
       lastDayPrevDate: prevSyncTanggal, // null kalau tanggal ini sync pertama utk latestBulan (belum ada pembanding)
       lastDayRevenue,
       lastDayTrx,
+      availableDates,
     };
 
     res.json({

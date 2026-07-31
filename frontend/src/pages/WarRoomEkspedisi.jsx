@@ -1186,6 +1186,7 @@ export default function WarRoomEkspedisi() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [selectedTanggal, setSelectedTanggal] = useState('');
   const [selectedCurrentMonth, setSelectedCurrentMonth] = useState('');
   const [selectedPreviousMonth, setSelectedPreviousMonth] = useState('');
   const [globalSearch, setGlobalSearch] = useState('');
@@ -1197,6 +1198,7 @@ export default function WarRoomEkspedisi() {
     setLoading(true); setError(null);
     try {
       const params = {};
+      if (selectedTanggal) params.tanggal = selectedTanggal;
       if (selectedCurrentMonth) params.currentMonth = selectedCurrentMonth;
       if (selectedPreviousMonth) params.previousMonth = selectedPreviousMonth;
       const [res, statusRes] = await Promise.all([
@@ -1210,7 +1212,7 @@ export default function WarRoomEkspedisi() {
     } finally {
       setLoading(false);
     }
-  }, [selectedCurrentMonth, selectedPreviousMonth]);
+  }, [selectedTanggal, selectedCurrentMonth, selectedPreviousMonth]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -1260,10 +1262,21 @@ export default function WarRoomEkspedisi() {
   const currentSelectValue = selectedCurrentMonth || meta.currentMonth || '';
   const previousOptions = (meta.monthsDetected || []).filter(b => b < currentSelectValue);
   const latestMonthLabel = monthLabelOf(meta.latestMonth);
+  const availableDates = meta.availableDates || [];
+  const tanggalSelectValue = selectedTanggal || data?.tanggal || '';
 
-  const tanggalFmt = data?.tanggal
-    ? new Date(data.tanggal).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })
+  const fmtDateShort = (d) => d
+    ? new Date(d).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })
     : '-';
+  const tanggalFmt = fmtDateShort(data?.tanggal);
+
+  // Ganti tanggal -> bulan current/previous yang ter-pilih bisa jadi tidak
+  // ada di sync tanggal itu, reset ke otomatis (backend yang pilihkan).
+  const handleTanggalChange = (val) => {
+    setSelectedTanggal(val);
+    setSelectedCurrentMonth('');
+    setSelectedPreviousMonth('');
+  };
 
   if (loading && !data) {
     return (
@@ -1315,6 +1328,9 @@ export default function WarRoomEkspedisi() {
         </div>
 
         <div className="wre-global-filter-row">
+          <select className="wre-select" value={tanggalSelectValue} onChange={e => handleTanggalChange(e.target.value)} title="Tanggal sync">
+            {availableDates.map(d => <option key={d} value={d}>{fmtDateShort(d)}</option>)}
+          </select>
           <select className="wre-select" value={currentSelectValue} onChange={e => setSelectedCurrentMonth(e.target.value)} title="Current month">
             {(meta.monthsDetected || []).map(b => <option key={b} value={b}>{monthLabelOf(b)} (Current)</option>)}
           </select>
