@@ -8,6 +8,8 @@ import {
   transferBctTopup, confirmBctTopupBalance, completeBctTopup, cancelBctTopup,
   getBctAlerts, acknowledgeBctAlert, snoozeBctAlert, resolveBctAlert, createBctBank,
   refreshBctForecast, getBctCommandCenter,
+  getBctFundingScheduler, acknowledgeBctFundingScheduler,
+  getBctHourlyPlan, updateBctHourlyPlan, getBctSchedulerPlan, createBctSchedulerPlan, updateBctSchedulerPlan,
 } from '../services/api';
 
 const COLOR = '#0D9488';
@@ -15,6 +17,7 @@ const COLOR = '#0D9488';
 const TABS = [
   { key: 'dashboard', label: 'Dashboard', icon: 'ti-building-bank' },
   { key: 'command-center', label: 'Command Center', icon: 'ti-radar-2' },
+  { key: 'funding-scheduler', label: 'Funding Scheduler Control', icon: 'ti-adjustments-alt' },
   { key: 'detail', label: 'Monitoring Saldo', icon: 'ti-activity' },
   { key: 'topup', label: 'Top Up', icon: 'ti-transfer-in' },
   { key: 'alerts', label: 'Alert', icon: 'ti-bell-ringing' },
@@ -225,6 +228,16 @@ export default function WarRoomBalanceControlTower() {
               banks={banks}
               selectedBankId={selectedBankId}
               onSelectBank={setSelectedBankId}
+            />
+          )}
+
+          {tab === 'funding-scheduler' && (
+            <FundingSchedulerTab
+              banks={banks}
+              selectedBankId={selectedBankId}
+              onSelectBank={setSelectedBankId}
+              isAdmin={isAdmin}
+              isFinance={isFinance}
             />
           )}
 
@@ -723,6 +736,373 @@ function CommandCenterTab({ banks, selectedBankId, onSelectBank }) {
         );
       })()}
     </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// FUNDING SCHEDULER CONTROL — decision support CANCEL/REDUCE/KEEP/ADD utk
+// scheduler funding berikutnya. Semua kalkulasi (variance/burn/required
+// funding/rekomendasi) murni dari backend GET .../funding-scheduler — TIDAK
+// ADA logic bisnis di frontend, sama prinsipnya dgn Command Center. ADVISORY
+// ONLY: tidak pernah transfer/cancel/edit scheduler bank otomatis, FA tetap
+// eksekusi manual — di sini cuma acknowledge/catat tindak lanjut.
+// ─────────────────────────────────────────────────────────────────────────
+const RECOMMENDATION_META = {
+  CANCEL: { label: 'Batalkan Scheduler', color: '#DC2626', bg: '#FEE2E2', icon: 'ti-player-stop' },
+  REDUCE: { label: 'Kurangi Scheduler', color: '#D97706', bg: '#FFEDD5', icon: 'ti-arrow-down' },
+  KEEP: { label: 'Pertahankan Scheduler', color: '#059669', bg: '#DCFCE7', icon: 'ti-check' },
+  ADD: { label: 'Tambahkan Scheduler', color: '#2563EB', bg: '#DBEAFE', icon: 'ti-arrow-up' },
+  NO_UPCOMING_SCHEDULER: { label: 'Tidak Ada Scheduler Tersisa', color: '#6B7280', bg: '#F3F4F6', icon: 'ti-calendar-off' },
+  INSUFFICIENT_DATA: { label: 'Data Belum Lengkap', color: '#7C3AED', bg: '#EDE9FE', icon: 'ti-alert-triangle' },
+  DATA_STALE: { label: 'Data Saldo Basi', color: '#7C3AED', bg: '#EDE9FE', icon: 'ti-clock-exclamation' },
+};
+function recoMeta(r) { return RECOMMENDATION_META[r] || { label: r || '-', color: '#6B7280', bg: '#F3F4F6', icon: 'ti-help' }; }
+
+const PLAN_STATUS_META = {
+  ABOVE_PLAN: { label: 'Saldo di atas rencana', color: '#2563EB', bg: '#DBEAFE' },
+  BELOW_PLAN: { label: 'Saldo di bawah rencana', color: '#DC2626', bg: '#FEE2E2' },
+  ON_PLAN: { label: 'Saldo sesuai rencana', color: '#059669', bg: '#DCFCE7' },
+  INSUFFICIENT_DATA: { label: 'Data belum lengkap', color: '#6B7280', bg: '#F3F4F6' },
+};
+function planStatusMeta(s) { return PLAN_STATUS_META[s] || { label: s || '-', color: '#6B7280', bg: '#F3F4F6' }; }
+
+function fmtRpSigned(v) {
+  if (v === null || v === undefined || !Number.isFinite(Number(v))) return '-';
+  const n = Number(v);
+  return (n > 0 ? '+' : '') + fmtRp(n);
+}
+
+function FundingSchedulerTab({ banks, selectedBankId, onSelectBank, isAdmin, isFinance }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [ackNote, setAckNote] = useState('');
+  const [ackSaving, setAckSaving] = useState(false);
+  const [ackMsg, setAckMsg] = useState(null);
+  const [showAdmin, setShowAdmin] = useState(false);
+  const chartRef = useRef(null);
+  const chartInstance = useRef(null);
+
+  const load = useCallback((bankId) => {
+    if (!bankId) return;
+    setLoading(true); setError(null);
+    getBctFundingScheduler(bankId)
+      .then(setData)
+      .catch(e => setError(e.response?.data?.error || 'Gagal memuat Funding Scheduler Control.'))
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => { if (selectedBankId) load(selectedBankId); }, [selectedBankId, load]);
+
+  useEffect(() => {
+    if (!data || !chartRef.current) return;
+    const ctx = chartRef.current.getContext('2d');
+    if (chartInstance.current) chartInstance.current.destroy();
+    const plan24h = data.plan_24h || [];
+    const labels = plan24h.map(p => `${String(p.hour).padStart(2, '0')}:00`);
+    const plannedSeries = plan24h.map(p => p.planned_balance);
+    const currentHour = data.current_hour;
+    // Actual balance historis per-jam TIDAK disimpan di rilis ini (lihat
+    // Known Limitations dokumentasi) -- titik tunggal utk jam berjalan saja.
+    const actualSeries = plan24h.map(p => (p.hour === currentHour ? data.actual_balance : null));
+    chartInstance.current = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          { label: 'Planned Balance', data: plannedSeries, borderColor: '#0D9488', backgroundColor: 'rgba(13,148,136,.08)', tension: 0.3, pointRadius: 2, fill: true },
+          { label: 'Actual Balance (jam berjalan)', data: actualSeries, borderColor: '#DC2626', backgroundColor: '#DC2626', pointRadius: 7, showLine: false },
+        ],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { position: 'bottom' },
+          tooltip: {
+            callbacks: {
+              afterBody: (items) => {
+                const hour = parseInt(items[0].label, 10);
+                const sched = (data.scheduler_timeline || []).find(s => parseInt(s.scheduled_time, 10) === hour);
+                if (!sched) return [];
+                return [`Scheduler: ${sched.funding_source_code} Rp${Number(sched.scheduled_amount).toLocaleString('id-ID')} (${sched.display_status})`];
+              },
+            },
+          },
+        },
+        scales: { y: { ticks: { callback: (v) => fmtRpShort(v) } } },
+      },
+    });
+    return () => { if (chartInstance.current) chartInstance.current.destroy(); };
+  }, [data]);
+
+  async function handleAcknowledge() {
+    if (!selectedBankId) return;
+    setAckSaving(true); setAckMsg(null);
+    try {
+      await acknowledgeBctFundingScheduler(selectedBankId, ackNote.trim() || null);
+      setAckNote('');
+      setAckMsg({ type: 'ok', text: 'Rekomendasi ditandai sudah ditindaklanjuti.' });
+      load(selectedBankId);
+    } catch (e) {
+      setAckMsg({ type: 'error', text: e.response?.data?.error || 'Gagal menyimpan acknowledgement.' });
+    } finally {
+      setAckSaving(false);
+    }
+  }
+
+  if (loading && !data) {
+    return <div className="loading-wrap"><div className="loading-spinner" /><div className="loading-text">Memuat Funding Scheduler Control…</div></div>;
+  }
+  if (error && !loading) return <div className="fbr-error">{error}</div>;
+  if (!data) return null;
+
+  const cp = data.current_plan;
+  const ns = data.next_scheduler;
+  const reco = recoMeta(data.recommendation);
+  const planMeta = cp ? planStatusMeta(cp.status) : planStatusMeta(null);
+  const canAcknowledge = isFinance && !['INSUFFICIENT_DATA', 'DATA_STALE'].includes(data.recommendation);
+
+  return (
+    <div className="wrfs">
+      <div className="header-controls" style={{ marginBottom: 16 }}>
+        <select className="select-input" value={selectedBankId || ''} onChange={e => onSelectBank(Number(e.target.value))}>
+          {banks.map(b => <option key={b.id} value={b.id}>{b.bank_name} ({b.bank_code})</option>)}
+        </select>
+        <span className="wrfs-updated">
+          Saldo: {data.actual_balance_source || '-'} · update {fmtDateTime(data.actual_balance_updated_at)}
+          {data.actual_balance_stale && <span className="bct-badge" style={{ marginLeft: 8, color: '#7C3AED', background: '#EDE9FE' }}>Data Basi</span>}
+        </span>
+      </div>
+
+      {cp && (cp.status === 'ABOVE_PLAN' || cp.status === 'BELOW_PLAN') && (
+        <div className="wrfs-alert" style={{ borderLeftColor: planMeta.color, background: planMeta.bg }}>
+          <i className={'ti ' + (cp.status === 'ABOVE_PLAN' ? 'ti-trending-up' : 'ti-trending-down')} style={{ color: planMeta.color }} />
+          <div>
+            <b style={{ color: planMeta.color }}>{planMeta.label}</b>
+            <div className="wrfs-alert-text">
+              Saldo berjalan {fmtRpSigned(cp.variance)} dibanding rencana (Plan {String(cp.hour).padStart(2, '0')}:00–{String(cp.hour).padStart(2, '0')}:59, Rp{Number(cp.planned_balance).toLocaleString('id-ID')}).
+              {ns && ` Scheduler berikutnya: ${ns.funding_source_code} ${ns.scheduled_time} · Rp${Number(ns.scheduled_amount).toLocaleString('id-ID')}.`}
+            </div>
+          </div>
+        </div>
+      )}
+      {(data.recommendation === 'DATA_STALE' || data.recommendation === 'INSUFFICIENT_DATA') && (
+        <div className="wrfs-alert" style={{ borderLeftColor: '#7C3AED', background: '#EDE9FE' }}>
+          <i className={'ti ' + (data.recommendation === 'DATA_STALE' ? 'ti-clock-exclamation' : 'ti-alert-triangle')} style={{ color: '#7C3AED' }} />
+          <div><b style={{ color: '#7C3AED' }}>{reco.label}</b><div className="wrfs-alert-text">{data.reason}</div></div>
+        </div>
+      )}
+
+      <div className="wrfs-kpi-grid">
+        <Kpi label="Actual Balance" value={fmtRp(data.actual_balance)} sub={`${data.actual_balance_source || '-'} · ${fmtDateTime(data.actual_balance_updated_at)}`} />
+        <Kpi label="Planned Balance" value={cp ? fmtRp(cp.planned_balance) : '-'} sub={cp ? `Plan ${String(cp.hour).padStart(2, '0')}:00–${String(cp.hour).padStart(2, '0')}:59` : '-'} />
+        <Kpi label="Variance" value={cp ? fmtRpSigned(cp.variance) : '-'} sub={planMeta.label} alert={cp?.status === 'BELOW_PLAN'} />
+        <Kpi label="Next Scheduler" value={ns ? `${ns.funding_source_code} ${ns.scheduled_time}` : '-'} sub={ns ? `Existing Rp${Number(ns.scheduled_amount).toLocaleString('id-ID')}` : (data.recommendation === 'NO_UPCOMING_SCHEDULER' ? 'Tidak ada tersisa hari ini' : '-')} />
+        <Kpi label="Required Funding" value={ns && ns.required_funding !== null ? fmtRp(ns.required_funding) : '-'} sub={ns ? `s.d. ${ns.scheduled_time}` : '-'} />
+      </div>
+
+      <div className="wrfs-reco-card" style={{ borderColor: reco.color, background: reco.bg }}>
+        <div className="wrfs-reco-icon" style={{ color: reco.color }}><i className={'ti ' + reco.icon} /></div>
+        <div className="wrfs-reco-body">
+          <div className="wrfs-reco-label" style={{ color: reco.color }}>{reco.label}</div>
+          {ns && ns.adjustment_amount !== null && ns.adjustment_amount !== undefined && data.recommendation !== 'KEEP' && (
+            <div className="wrfs-reco-amount" style={{ color: reco.color }}>{fmtRp(Math.abs(ns.adjustment_amount))}</div>
+          )}
+          <div className="wrfs-reco-reason">{data.reason}</div>
+        </div>
+        {canAcknowledge && (
+          <div className="wrfs-ack-box">
+            <textarea className="fbr-input" rows={2} placeholder="Catatan tindak lanjut (opsional)…" value={ackNote} onChange={e => setAckNote(e.target.value)} />
+            <button className="fbr-btn fbr-btn-primary" onClick={handleAcknowledge} disabled={ackSaving}>
+              <i className="ti ti-check" /> {ackSaving ? 'Menyimpan…' : 'Sudah Ditindaklanjuti'}
+            </button>
+            {ackMsg && <div className={ackMsg.type === 'ok' ? 'wrfs-ack-ok' : 'fbr-error'} style={{ marginTop: 6 }}>{ackMsg.text}</div>}
+          </div>
+        )}
+      </div>
+
+      <div className="wr-table-section">
+        <div className="wr-table-controls"><div className="wr-table-left"><b>Actual vs Planned Balance — 24 Jam</b></div></div>
+        <div style={{ height: 280, padding: '8px 16px 16px' }}><canvas ref={chartRef} /></div>
+      </div>
+
+      <div className="wr-table-section">
+        <div className="wr-table-controls"><div className="wr-table-left"><b>Funding Scheduler Timeline</b></div></div>
+        <div className="wr-table-wrap">
+          <table className="wr-table">
+            <thead>
+              <tr><th>Waktu</th><th>Sumber</th><th>Scheduled</th><th>Required</th><th>Adjustment</th><th>Status</th><th>Rekomendasi</th></tr>
+            </thead>
+            <tbody>
+              {(data.scheduler_timeline || []).map(s => (
+                <tr key={s.id} style={s.is_next ? { background: 'var(--bg-elevated)', fontWeight: 600 } : undefined}>
+                  <td>{s.scheduled_time}</td>
+                  <td>{s.funding_source_code}</td>
+                  <td>{fmtRp(s.scheduled_amount)}</td>
+                  <td>{s.required_funding !== null && s.required_funding !== undefined ? fmtRp(s.required_funding) : '—'}</td>
+                  <td>{s.adjustment_amount !== null && s.adjustment_amount !== undefined ? fmtRpSigned(s.adjustment_amount) : '—'}</td>
+                  <td><span className="bct-badge" style={{ color: '#374151', background: '#F3F4F6' }}>{s.display_status}</span></td>
+                  <td>{s.recommendation ? <span className="bct-badge" style={{ color: recoMeta(s.recommendation).color, background: recoMeta(s.recommendation).bg }}>{recoMeta(s.recommendation).label}</span> : '—'}</td>
+                </tr>
+              ))}
+              {(!data.scheduler_timeline || !data.scheduler_timeline.length) && (
+                <tr><td colSpan={7} style={{ textAlign: 'center', color: 'var(--text-3)', padding: 24 }}>Belum ada scheduler funding dikonfigurasi.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {isAdmin && (
+        <div className="wr-table-section">
+          <div className="wr-table-controls" style={{ cursor: 'pointer' }} onClick={() => setShowAdmin(s => !s)}>
+            <div className="wr-table-left"><b>Konfigurasi Baseline (Admin)</b></div>
+            <i className={'ti ' + (showAdmin ? 'ti-chevron-up' : 'ti-chevron-down')} />
+          </div>
+          {showAdmin && <FundingSchedulerAdminPanel bankId={selectedBankId} onSaved={() => load(selectedBankId)} />}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Admin-only: edit baseline hourly plan (24 jam) & scheduler plan langsung dari tabel — additive, per-baris, tidak menyentuh baris lain. */
+function FundingSchedulerAdminPanel({ bankId, onSaved }) {
+  const [hourlyPlan, setHourlyPlan] = useState([]);
+  const [schedulerPlan, setSchedulerPlan] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [savingKey, setSavingKey] = useState(null);
+  const [newScheduler, setNewScheduler] = useState({ scheduled_time: '', funding_source_code: '', scheduled_amount: '' });
+  const [msg, setMsg] = useState(null);
+
+  const load = useCallback(() => {
+    if (!bankId) return;
+    setLoading(true);
+    Promise.all([getBctHourlyPlan(bankId), getBctSchedulerPlan(bankId)])
+      .then(([h, s]) => { setHourlyPlan(h.hourly_plan || []); setSchedulerPlan(s.scheduler_plan || []); })
+      .catch(() => setMsg({ type: 'error', text: 'Gagal memuat konfigurasi baseline.' }))
+      .finally(() => setLoading(false));
+  }, [bankId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  async function saveHour(hour, patch) {
+    setSavingKey(`h${hour}`); setMsg(null);
+    try {
+      await updateBctHourlyPlan(bankId, hour, patch);
+      setMsg({ type: 'ok', text: `Baseline jam ${String(hour).padStart(2, '0')}:00 tersimpan.` });
+      load(); onSaved?.();
+    } catch (e) {
+      setMsg({ type: 'error', text: e.response?.data?.error || 'Gagal menyimpan.' });
+    } finally { setSavingKey(null); }
+  }
+
+  async function saveScheduler(schedulerId, patch) {
+    setSavingKey(`s${schedulerId}`); setMsg(null);
+    try {
+      await updateBctSchedulerPlan(bankId, schedulerId, patch);
+      setMsg({ type: 'ok', text: 'Scheduler tersimpan.' });
+      load(); onSaved?.();
+    } catch (e) {
+      setMsg({ type: 'error', text: e.response?.data?.error || 'Gagal menyimpan.' });
+    } finally { setSavingKey(null); }
+  }
+
+  async function addScheduler() {
+    if (!newScheduler.scheduled_time || !newScheduler.funding_source_code || !newScheduler.scheduled_amount) {
+      setMsg({ type: 'error', text: 'Waktu, sumber, dan nominal scheduler baru wajib diisi.' });
+      return;
+    }
+    setSavingKey('new'); setMsg(null);
+    try {
+      await createBctSchedulerPlan(bankId, newScheduler);
+      setNewScheduler({ scheduled_time: '', funding_source_code: '', scheduled_amount: '' });
+      setMsg({ type: 'ok', text: 'Scheduler baru ditambahkan.' });
+      load(); onSaved?.();
+    } catch (e) {
+      setMsg({ type: 'error', text: e.response?.data?.error || 'Gagal menambah scheduler.' });
+    } finally { setSavingKey(null); }
+  }
+
+  if (loading) return <div className="loading-wrap" style={{ padding: 20 }}><div className="loading-spinner" /></div>;
+
+  return (
+    <div style={{ padding: '4px 16px 16px' }}>
+      {msg && <div className={msg.type === 'ok' ? 'wrfs-ack-ok' : 'fbr-error'} style={{ margin: '8px 0' }}>{msg.text}</div>}
+
+      <div style={{ fontWeight: 700, fontSize: 13, margin: '12px 0 6px' }}>Hourly Balance Plan</div>
+      <div className="wr-table-wrap">
+        <table className="wr-table">
+          <thead><tr><th>Jam</th><th>Avg Burn</th><th>Planned Balance</th><th></th></tr></thead>
+          <tbody>
+            {hourlyPlan.map(row => (
+              <AdminHourRow key={row.hour_of_day} row={row} saving={savingKey === `h${row.hour_of_day}`} onSave={(patch) => saveHour(row.hour_of_day, patch)} />
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={{ fontWeight: 700, fontSize: 13, margin: '18px 0 6px' }}>Funding Scheduler Plan</div>
+      <div className="wr-table-wrap">
+        <table className="wr-table">
+          <thead><tr><th>Waktu</th><th>Sumber</th><th>Nominal</th><th>Status</th><th></th></tr></thead>
+          <tbody>
+            {schedulerPlan.map(row => (
+              <AdminSchedulerRow key={row.id} row={row} saving={savingKey === `s${row.id}`} onSave={(patch) => saveScheduler(row.id, patch)} />
+            ))}
+            <tr>
+              <td><input className="fbr-input" style={{ width: 80 }} placeholder="HH:mm" value={newScheduler.scheduled_time} onChange={e => setNewScheduler(f => ({ ...f, scheduled_time: e.target.value }))} /></td>
+              <td><input className="fbr-input" style={{ width: 80 }} placeholder="BNI/BRI" value={newScheduler.funding_source_code} onChange={e => setNewScheduler(f => ({ ...f, funding_source_code: e.target.value }))} /></td>
+              <td><input className="fbr-input" style={{ width: 130 }} type="number" placeholder="Nominal" value={newScheduler.scheduled_amount} onChange={e => setNewScheduler(f => ({ ...f, scheduled_amount: e.target.value }))} /></td>
+              <td colSpan={2}>
+                <button className="fbr-btn fbr-btn-primary" onClick={addScheduler} disabled={savingKey === 'new'}>
+                  <i className="ti ti-plus" /> Tambah Scheduler
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function AdminHourRow({ row, saving, onSave }) {
+  const [burn, setBurn] = useState(row.average_burn ?? '');
+  const [planned, setPlanned] = useState(row.planned_balance ?? '');
+  return (
+    <tr>
+      <td>{String(row.hour_of_day).padStart(2, '0')}:00</td>
+      <td><input className="fbr-input" type="number" style={{ width: 140 }} value={burn} onChange={e => setBurn(e.target.value)} /></td>
+      <td><input className="fbr-input" type="number" style={{ width: 160 }} value={planned} onChange={e => setPlanned(e.target.value)} /></td>
+      <td>
+        <button className="fbr-btn" disabled={saving} onClick={() => onSave({ average_burn: burn === '' ? null : Number(burn), planned_balance: planned === '' ? null : Number(planned) })}>
+          {saving ? '…' : 'Simpan'}
+        </button>
+      </td>
+    </tr>
+  );
+}
+
+function AdminSchedulerRow({ row, saving, onSave }) {
+  const [amount, setAmount] = useState(row.scheduled_amount ?? '');
+  const [status, setStatus] = useState(row.status || 'SCHEDULED');
+  return (
+    <tr>
+      <td>{String(row.scheduled_time).slice(0, 5)}</td>
+      <td>{row.funding_source_code}</td>
+      <td><input className="fbr-input" type="number" style={{ width: 140 }} value={amount} onChange={e => setAmount(e.target.value)} /></td>
+      <td>
+        <select className="select-input" value={status} onChange={e => setStatus(e.target.value)}>
+          {['SCHEDULED', 'CONFIRMED', 'CANCELLED', 'ADJUSTED', 'COMPLETED', 'MISSED'].map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
+      </td>
+      <td>
+        <button className="fbr-btn" disabled={saving} onClick={() => onSave({ scheduled_amount: Number(amount), status, funding_source_code: row.funding_source_code, scheduled_time: row.scheduled_time })}>
+          {saving ? '…' : 'Simpan'}
+        </button>
+      </td>
+    </tr>
   );
 }
 
@@ -1395,6 +1775,8 @@ function Modal({ modal, banks, bankDetail, onClose, loading, error, run }) {
         watch_buffer_minutes: bankDetail.policy.watch_buffer_minutes ?? SUGGESTED_POLICY_DEFAULTS.watch_buffer_minutes,
         safety_buffer_type: bankDetail.policy.safety_buffer_type ?? '',
         safety_buffer_fixed_amount: bankDetail.policy.safety_buffer_fixed_amount ?? '',
+        funding_plan_variance_tolerance: bankDetail.policy.funding_plan_variance_tolerance ?? 10000000,
+        funding_scheduler_tolerance: bankDetail.policy.funding_scheduler_tolerance ?? 10000000,
       });
     } else {
       setForm(f => ({ ...f, is_active: true, ...SUGGESTED_POLICY_DEFAULTS }));
@@ -1519,6 +1901,16 @@ function Modal({ modal, banks, bankDetail, onClose, loading, error, run }) {
           <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <input type="checkbox" checked={form.is_active !== false} onChange={e => set('is_active', e.target.checked)} /> Policy aktif
           </label>
+        </Field>
+
+        <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '.04em', margin: '16px 0 8px' }}>
+          Funding Scheduler Adjustment Assistant
+        </div>
+        <Field label="Toleransi Variance Plan (Rp)" hint="Selisih actual vs planned balance di bawah nilai ini dianggap ON_PLAN (tidak alert).">
+          <input className="fbr-input" type="number" value={form.funding_plan_variance_tolerance ?? ''} onChange={e => set('funding_plan_variance_tolerance', e.target.value)} />
+        </Field>
+        <Field label="Toleransi Adjustment Scheduler (Rp)" hint="Selisih required funding vs nominal scheduler existing di bawah nilai ini dianggap KEEP (tidak disarankan CANCEL/REDUCE/ADD).">
+          <input className="fbr-input" type="number" value={form.funding_scheduler_tolerance ?? ''} onChange={e => set('funding_scheduler_tolerance', e.target.value)} />
         </Field>
       </>
     );

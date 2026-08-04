@@ -610,6 +610,24 @@ export const getBctForecastHistory = (bankId, params = {}) =>
 export const getBctCommandCenter = (bankId) =>
   axios.get(`${BCT_BASE}/banks/${bankId}/command-center`, { params: { t: Date.now() }, headers: authHeaders() }).then(r => r.data);
 
+/* Funding Scheduler Adjustment Assistant — advisory only, TIDAK transfer/cancel bank otomatis */
+export const getBctFundingScheduler = (bankId) =>
+  axios.get(`${BCT_BASE}/banks/${bankId}/funding-scheduler`, { params: { t: Date.now() }, headers: authHeaders() }).then(r => r.data);
+export const acknowledgeBctFundingScheduler = (bankId, note) =>
+  axios.post(`${BCT_BASE}/banks/${bankId}/funding-scheduler/acknowledge`, { note }, { headers: authHeaders() }).then(r => r.data);
+export const getBctFundingSchedulerHistory = (bankId, params = {}) =>
+  axios.get(`${BCT_BASE}/banks/${bankId}/funding-scheduler/history`, { params: { ...params, t: Date.now() }, headers: authHeaders() }).then(r => r.data);
+export const getBctHourlyPlan = (bankId) =>
+  axios.get(`${BCT_BASE}/banks/${bankId}/funding-scheduler/hourly-plan`, { params: { t: Date.now() }, headers: authHeaders() }).then(r => r.data);
+export const updateBctHourlyPlan = (bankId, hour, payload) =>
+  axios.put(`${BCT_BASE}/banks/${bankId}/funding-scheduler/hourly-plan/${hour}`, payload, { headers: authHeaders() }).then(r => r.data);
+export const getBctSchedulerPlan = (bankId) =>
+  axios.get(`${BCT_BASE}/banks/${bankId}/funding-scheduler/scheduler-plan`, { params: { t: Date.now() }, headers: authHeaders() }).then(r => r.data);
+export const createBctSchedulerPlan = (bankId, payload) =>
+  axios.post(`${BCT_BASE}/banks/${bankId}/funding-scheduler/scheduler-plan`, payload, { headers: authHeaders() }).then(r => r.data);
+export const updateBctSchedulerPlan = (bankId, schedulerId, payload) =>
+  axios.put(`${BCT_BASE}/banks/${bankId}/funding-scheduler/scheduler-plan/${schedulerId}`, payload, { headers: authHeaders() }).then(r => r.data);
+
 export const createBctTopup = (payload) =>
   axios.post(`${BCT_BASE}/topup`, payload, { headers: authHeaders() }).then(r => r.data);
 export const getBctTopups = (params = {}) =>

@@ -36,6 +36,8 @@ const {
 const { computeBurnRateStats, buildForecastOutput } = require('../reconciliation/balanceForecast');
 const { getLatestVerifiedBankPosition, getConfirmedFundingMutations, isSupportedBank } = require('../reconciliation/bankPosition');
 const { computeOperationalCalculationForBank, fetchRecentMatchedOutflows } = require('../balanceControlTower/operationalDataAccess');
+const { computeFundingSchedulerForBank } = require('../balanceControlTower/fundingSchedulerDataAccess');
+const { validateBaselineFormula } = require('../balanceControlTower/fundingSchedulerEngine');
 
 function isoDateJakarta(date) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(date);
@@ -774,6 +776,14 @@ router.put('/banks/:id/policy', requireAdmin, async (req, res) => {
       critical_margin_minutes = null, watch_buffer_minutes = null,
       safety_buffer_type = null, safety_buffer_fixed_amount = null,
     } = req.body || {};
+    // Toleransi Funding Scheduler Adjustment Assistant -- kolom NOT NULL DEFAULT
+    // 10jt di DB. undefined (field tidak dikirim body, mis. dari PolicyModal lama
+    // yang belum tahu field ini) HARUS mempertahankan nilai existing, BUKAN
+    // ditimpa null (akan melanggar NOT NULL constraint & menggagalkan endpoint
+    // ini utk SEMUA pemanggil lama). Resolusi akhir dilakukan setelah `before`
+    // (baris existing) diketahui, lihat di bawah.
+    const fundingPlanVarianceToleranceInput = req.body?.funding_plan_variance_tolerance;
+    const fundingSchedulerToleranceInput = req.body?.funding_scheduler_tolerance;
     const reason = req.body?.reason ? String(req.body.reason).trim() : null;
 
     const VALID_BURN_WINDOWS = [5, 15, 30, 60];
@@ -852,14 +862,31 @@ router.put('/banks/:id/policy', requireAdmin, async (req, res) => {
     const existingRes = await client.query(`SELECT * FROM bct_balance_policies WHERE bank_account_id = $1 FOR UPDATE`, [bankId]);
     const before = existingRes.rows[0] || null;
 
+    // Field tidak dikirim (undefined) -> pertahankan nilai existing (atau
+    // default 10jt kalau baris belum pernah ada) -- lihat komentar destructure
+    // di atas. Field dikirim EKSPLISIT null/angka -> divalidasi & dipakai.
+    const DEFAULT_FUNDING_TOLERANCE = 10000000;
+    for (const [label, v] of [['funding_plan_variance_tolerance', fundingPlanVarianceToleranceInput], ['funding_scheduler_tolerance', fundingSchedulerToleranceInput]]) {
+      if (v !== undefined && v !== null && (Number.isNaN(Number(v)) || Number(v) < 0)) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: `${label} harus angka >= 0.` });
+      }
+    }
+    const fundingPlanVarianceTolerance = fundingPlanVarianceToleranceInput !== undefined
+      ? (fundingPlanVarianceToleranceInput === null ? DEFAULT_FUNDING_TOLERANCE : Number(fundingPlanVarianceToleranceInput))
+      : (before ? Number(before.funding_plan_variance_tolerance) : DEFAULT_FUNDING_TOLERANCE);
+    const fundingSchedulerTolerance = fundingSchedulerToleranceInput !== undefined
+      ? (fundingSchedulerToleranceInput === null ? DEFAULT_FUNDING_TOLERANCE : Number(fundingSchedulerToleranceInput))
+      : (before ? Number(before.funding_scheduler_tolerance) : DEFAULT_FUNDING_TOLERANCE);
+
     const r = await client.query(
       `INSERT INTO bct_balance_policies
         (bank_account_id, absolute_minimum_balance, watch_threshold, excess_balance_threshold, stale_after_minutes,
          safety_buffer_percentage, topup_rounding_amount, critical_threshold, emergency_threshold, reserve_balance,
          sudden_drop_window_minutes, sudden_drop_amount_threshold, sudden_drop_percentage_threshold, is_active, created_by,
          burn_window_minutes, topup_lead_time_minutes, critical_margin_minutes, watch_buffer_minutes,
-         safety_buffer_type, safety_buffer_fixed_amount)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+         safety_buffer_type, safety_buffer_fixed_amount, funding_plan_variance_tolerance, funding_scheduler_tolerance)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
        ON CONFLICT (bank_account_id) DO UPDATE SET
          absolute_minimum_balance = EXCLUDED.absolute_minimum_balance,
          watch_threshold = EXCLUDED.watch_threshold,
@@ -880,6 +907,8 @@ router.put('/banks/:id/policy', requireAdmin, async (req, res) => {
          watch_buffer_minutes = EXCLUDED.watch_buffer_minutes,
          safety_buffer_type = EXCLUDED.safety_buffer_type,
          safety_buffer_fixed_amount = EXCLUDED.safety_buffer_fixed_amount,
+         funding_plan_variance_tolerance = EXCLUDED.funding_plan_variance_tolerance,
+         funding_scheduler_tolerance = EXCLUDED.funding_scheduler_tolerance,
          updated_at = NOW()
        RETURNING *`,
       [bankId, absolute_minimum_balance, watch_threshold, excess_balance_threshold, stale_after_minutes,
@@ -891,7 +920,8 @@ router.put('/banks/:id/policy', requireAdmin, async (req, res) => {
         critical_margin_minutes !== null && critical_margin_minutes !== undefined ? Number(critical_margin_minutes) : null,
         watch_buffer_minutes !== null && watch_buffer_minutes !== undefined ? Number(watch_buffer_minutes) : null,
         safetyBufferTypeNormalized,
-        safety_buffer_fixed_amount !== null && safety_buffer_fixed_amount !== undefined ? Number(safety_buffer_fixed_amount) : null]
+        safety_buffer_fixed_amount !== null && safety_buffer_fixed_amount !== undefined ? Number(safety_buffer_fixed_amount) : null,
+        fundingPlanVarianceTolerance, fundingSchedulerTolerance]
     );
 
     await logAudit(client, {
@@ -1236,6 +1266,419 @@ router.get('/banks/:id/forecast/history', async (req, res) => {
     res.json({ success: true, forecast_history: r.rows });
   } catch (e) {
     console.error('balance-control-tower forecast history error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// FUNDING SCHEDULER ADJUSTMENT ASSISTANT — advisory only (ALERT + RECOMMENDATION
+// + REMINDER). TIDAK PERNAH transfer/cancel/edit scheduler bank otomatis;
+// keputusan/eksekusi nyata tetap manual oleh FA. Lihat
+// docs/BALANCE_CONTROL_TOWER_SCHEDULER.md utk detail formula & business rule.
+// ─────────────────────────────────────────────────────────────────────────
+
+// Alert type MILIK fitur ini SAJA -- dedupe/resolve TERPISAH dari
+// syncAlertsForBank (status operasional bank) supaya tidak saling menimpa
+// (syncAlertsForBank me-resolve SEMUA alert OPEN yang tipenya beda dari
+// alert status bank saat itu -- kalau dicampur, alert scheduler ini akan
+// langsung ter-auto-resolve tiap kali /summary dipanggil).
+const FUNDING_SCHEDULER_ALERT_TYPES = ['ABOVE_PLAN', 'BELOW_PLAN', 'SCHEDULER_CANCEL', 'SCHEDULER_REDUCE', 'SCHEDULER_ADD', 'SCHEDULER_MISSED'];
+
+function fundingAlertMessages(result) {
+  const needed = new Map();
+  const cp = result.current_plan;
+  if (cp && cp.status === 'ABOVE_PLAN') {
+    needed.set('ABOVE_PLAN', `Saldo berjalan Rp${Math.round(cp.variance).toLocaleString('id-ID')} di atas rencana (Plan ${String(cp.hour).padStart(2, '0')}:00).`);
+  } else if (cp && cp.status === 'BELOW_PLAN') {
+    needed.set('BELOW_PLAN', `Saldo berjalan Rp${Math.round(Math.abs(cp.variance)).toLocaleString('id-ID')} di bawah rencana (Plan ${String(cp.hour).padStart(2, '0')}:00).`);
+  }
+  const ns = result.next_scheduler;
+  if (ns && ns.recommendation === 'CANCEL') {
+    needed.set('SCHEDULER_CANCEL', `Scheduler ${ns.funding_source_code} ${ns.scheduled_time} (Rp${Math.round(ns.scheduled_amount).toLocaleString('id-ID')}) dapat dibatalkan.`);
+  } else if (ns && ns.recommendation === 'REDUCE') {
+    needed.set('SCHEDULER_REDUCE', `Scheduler ${ns.funding_source_code} ${ns.scheduled_time} disarankan dikurangi ±Rp${Math.round(Math.abs(ns.adjustment_amount)).toLocaleString('id-ID')}.`);
+  } else if (ns && ns.recommendation === 'ADD') {
+    needed.set('SCHEDULER_ADD', `Scheduler ${ns.funding_source_code} ${ns.scheduled_time} disarankan ditambah ±Rp${Math.round(Math.abs(ns.adjustment_amount)).toLocaleString('id-ID')}.`);
+  }
+  return needed;
+}
+
+async function syncFundingSchedulerAlerts(client, bankId, result) {
+  const needed = fundingAlertMessages(result);
+  const neededTypes = [...needed.keys()];
+  await client.query(
+    `UPDATE bct_alerts SET status = 'RESOLVED', resolved_by = 'system', resolved_at = NOW(), updated_at = NOW(),
+            reason = COALESCE(reason || ' ', '') || '[auto-resolved: kondisi kembali normal]'
+     WHERE bank_account_id = $1 AND status = 'OPEN' AND alert_type = ANY($2::text[]) AND NOT (alert_type = ANY($3::text[]))`,
+    [bankId, FUNDING_SCHEDULER_ALERT_TYPES, neededTypes]
+  );
+  for (const [type, message] of needed) {
+    await client.query(
+      `INSERT INTO bct_alerts (bank_account_id, alert_type, status, message) VALUES ($1,$2,'OPEN',$3)
+       ON CONFLICT (bank_account_id, alert_type) WHERE status = 'OPEN' DO NOTHING`,
+      [bankId, type, message]
+    );
+  }
+}
+
+/**
+ * Persist history HANYA kalau rekomendasi berubah material sejak baris
+ * terakhir (spec section 35 -- bukan tiap kali GET/polling dipanggil).
+ * Best-effort: gagal simpan TIDAK BOLEH menggagalkan response GET.
+ */
+async function maybePersistRecommendationHistory(client, bankId, result) {
+  const latestRes = await client.query(
+    `SELECT * FROM bct_funding_recommendation_history WHERE bank_account_id = $1 ORDER BY calculated_at DESC LIMIT 1`,
+    [bankId]
+  );
+  const latest = latestRes.rows[0] || null;
+  const ns = result.next_scheduler;
+  const nextId = ns ? ns.id : null;
+  const adjustment = ns ? ns.adjustment_amount : null;
+  const changed = !latest
+    || latest.recommendation !== result.recommendation
+    || (latest.next_scheduler_id === null ? null : Number(latest.next_scheduler_id)) !== nextId
+    || Number(latest.adjustment_amount ?? 0) !== Number(adjustment ?? 0);
+  if (!changed) return latest;
+
+  const inserted = await client.query(
+    `INSERT INTO bct_funding_recommendation_history
+      (bank_account_id, current_hour, actual_balance, planned_balance, variance, variance_status,
+       next_scheduler_id, next_scheduler_time, next_scheduler_source, projected_balance_before_next,
+       target_balance_after_next, existing_scheduled_amount, required_funding, adjustment_amount,
+       recommendation, reason)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+     RETURNING *`,
+    [
+      bankId, result.current_hour, result.actual_balance,
+      result.current_plan ? result.current_plan.planned_balance : null,
+      result.current_plan ? result.current_plan.variance : null,
+      result.current_plan ? result.current_plan.status : null,
+      nextId, ns ? ns.scheduled_time : null, ns ? ns.funding_source_code : null,
+      ns ? ns.projected_balance_before : null, ns ? ns.target_planned_balance : null,
+      ns ? ns.scheduled_amount : null, ns ? ns.required_funding : null, adjustment,
+      result.recommendation, result.reason,
+    ]
+  );
+  return inserted.rows[0];
+}
+
+async function loadBankAndPolicy(id) {
+  const bankRes = await pool.query(`SELECT * FROM bct_bank_accounts WHERE id = $1`, [id]);
+  if (!bankRes.rows.length) return { bank: null, policy: null };
+  const policyRes = await pool.query(`SELECT * FROM bct_balance_policies WHERE bank_account_id = $1`, [id]);
+  return { bank: bankRes.rows[0], policy: policyRes.rows[0] || null };
+}
+
+// GET /banks/:id/funding-scheduler — payload utama (KPI cards, alert, timeline, chart 24 jam).
+router.get('/banks/:id/funding-scheduler', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'id tidak valid.' });
+    const { bank, policy } = await loadBankAndPolicy(id);
+    if (!bank) return res.status(404).json({ error: 'Bank tidak ditemukan.' });
+
+    if (isSupportedBank(bank.bank_code)) {
+      try { await refreshBankPositionIfNeeded(bank); }
+      catch (e) { console.error(`funding-scheduler refresh position (${bank.bank_code}) error:`, e.message); }
+    }
+
+    const now = new Date();
+    const result = await computeFundingSchedulerForBank({ pool, bank, policy, now });
+
+    try { await syncFundingSchedulerAlerts(client, id, result); }
+    catch (e) { console.error('syncFundingSchedulerAlerts error:', e.message); }
+    try { await maybePersistRecommendationHistory(client, id, result); }
+    catch (e) { console.error('maybePersistRecommendationHistory error:', e.message); }
+
+    res.set('Cache-Control', 'no-store');
+    res.json({ success: true, bank_account_id: id, ...result });
+  } catch (e) {
+    console.error('balance-control-tower funding-scheduler error:', e.message);
+    res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+// POST /banks/:id/funding-scheduler/acknowledge — FA/admin menandai "sudah ditindaklanjuti".
+// TIDAK menjalankan transaksi bank apa pun -- murni catat snapshot + user + note.
+router.post('/banks/:id/funding-scheduler/acknowledge', requireFinance, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'id tidak valid.' });
+    const { bank, policy } = await loadBankAndPolicy(id);
+    if (!bank) return res.status(404).json({ error: 'Bank tidak ditemukan.' });
+    const note = req.body?.note ? String(req.body.note).trim().slice(0, 2000) : null;
+
+    const now = new Date();
+    const result = await computeFundingSchedulerForBank({ pool, bank, policy, now });
+    const ns = result.next_scheduler;
+
+    await client.query('BEGIN');
+    const inserted = await client.query(
+      `INSERT INTO bct_funding_recommendation_history
+        (bank_account_id, current_hour, actual_balance, planned_balance, variance, variance_status,
+         next_scheduler_id, next_scheduler_time, next_scheduler_source, projected_balance_before_next,
+         target_balance_after_next, existing_scheduled_amount, required_funding, adjustment_amount,
+         recommendation, reason, acknowledged_by, acknowledged_at, note)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW(),$18)
+       RETURNING *`,
+      [
+        id, result.current_hour, result.actual_balance,
+        result.current_plan ? result.current_plan.planned_balance : null,
+        result.current_plan ? result.current_plan.variance : null,
+        result.current_plan ? result.current_plan.status : null,
+        ns ? ns.id : null, ns ? ns.scheduled_time : null, ns ? ns.funding_source_code : null,
+        ns ? ns.projected_balance_before : null, ns ? ns.target_planned_balance : null,
+        ns ? ns.scheduled_amount : null, ns ? ns.required_funding : null, ns ? ns.adjustment_amount : null,
+        result.recommendation, result.reason, req.user?.username || null, note,
+      ]
+    );
+    await logAudit(client, {
+      entityType: 'FUNDING_SCHEDULER_RECOMMENDATION', entityId: inserted.rows[0].id, action: 'ACKNOWLEDGE',
+      actorUserId: req.user?.id, actorUsername: req.user?.username, before: null, after: inserted.rows[0], notes: note,
+    });
+    await client.query('COMMIT');
+    res.json({ success: true, acknowledgement: inserted.rows[0] });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    console.error('funding-scheduler acknowledge error:', e.message);
+    res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+// GET /banks/:id/funding-scheduler/history — riwayat rekomendasi (audit).
+router.get('/banks/:id/funding-scheduler/history', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'id tidak valid.' });
+    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50));
+    const r = await pool.query(
+      `SELECT * FROM bct_funding_recommendation_history WHERE bank_account_id = $1 ORDER BY calculated_at DESC LIMIT $2`,
+      [id, limit]
+    );
+    res.json({ success: true, history: r.rows });
+  } catch (e) {
+    console.error('funding-scheduler history error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Admin config: Hourly Balance Plan ───────────────────────────────────
+router.get('/banks/:id/funding-scheduler/hourly-plan', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'id tidak valid.' });
+    const r = await pool.query(
+      `SELECT * FROM bct_hourly_balance_plan WHERE bank_account_id = $1 AND is_active = TRUE ORDER BY hour_of_day`,
+      [id]
+    );
+    res.json({ success: true, hourly_plan: r.rows });
+  } catch (e) {
+    console.error('funding-scheduler hourly-plan get error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.put('/banks/:id/funding-scheduler/hourly-plan/:hour', requireAdmin, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const id = parseInt(req.params.id, 10);
+    const hour = parseInt(req.params.hour, 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'id tidak valid.' });
+    if (!Number.isFinite(hour) || hour < 0 || hour > 23) return res.status(400).json({ error: 'hour harus 0-23.' });
+    const bankRes = await client.query(`SELECT id FROM bct_bank_accounts WHERE id = $1`, [id]);
+    if (!bankRes.rows.length) return res.status(404).json({ error: 'Bank tidak ditemukan.' });
+
+    const { average_burn = null, planned_balance = null, tolerance = null, is_active = true } = req.body || {};
+    for (const [label, v] of [['average_burn', average_burn], ['planned_balance', planned_balance], ['tolerance', tolerance]]) {
+      if (v !== null && v !== undefined && (Number.isNaN(Number(v)) || Number(v) < 0)) {
+        return res.status(400).json({ error: `${label} harus angka >= 0.` });
+      }
+    }
+
+    await client.query('BEGIN');
+    const existingRes = await client.query(
+      `SELECT * FROM bct_hourly_balance_plan WHERE bank_account_id = $1 AND hour_of_day = $2 AND is_active = TRUE FOR UPDATE`,
+      [id, hour]
+    );
+    const before = existingRes.rows[0] || null;
+    const r = await client.query(
+      `INSERT INTO bct_hourly_balance_plan (bank_account_id, hour_of_day, average_burn, planned_balance, tolerance, is_active, created_by, updated_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$7)
+       ON CONFLICT (bank_account_id, hour_of_day) WHERE is_active = TRUE DO UPDATE SET
+         average_burn = EXCLUDED.average_burn, planned_balance = EXCLUDED.planned_balance,
+         tolerance = EXCLUDED.tolerance, is_active = EXCLUDED.is_active, updated_by = EXCLUDED.updated_by, updated_at = NOW()
+       RETURNING *`,
+      [id, hour, average_burn, planned_balance, tolerance, !!is_active, req.user?.username || null]
+    );
+    await logAudit(client, {
+      entityType: 'FUNDING_HOURLY_PLAN', entityId: r.rows[0].id, action: before ? 'UPDATE' : 'CREATE',
+      actorUserId: req.user?.id, actorUsername: req.user?.username, before, after: r.rows[0], notes: req.body?.reason || null,
+    });
+    await client.query('COMMIT');
+    res.json({ success: true, hourly_plan: r.rows[0] });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    console.error('funding-scheduler hourly-plan put error:', e.message);
+    res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+// ── Admin config: Funding Scheduler Plan ────────────────────────────────
+router.get('/banks/:id/funding-scheduler/scheduler-plan', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'id tidak valid.' });
+    const r = await pool.query(
+      `SELECT * FROM bct_funding_scheduler_plan WHERE bank_account_id = $1 AND is_active = TRUE ORDER BY scheduled_time`,
+      [id]
+    );
+    res.json({ success: true, scheduler_plan: r.rows });
+  } catch (e) {
+    console.error('funding-scheduler scheduler-plan get error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+const VALID_SCHEDULER_STATUS = ['SCHEDULED', 'CONFIRMED', 'CANCELLED', 'ADJUSTED', 'COMPLETED', 'MISSED'];
+
+router.post('/banks/:id/funding-scheduler/scheduler-plan', requireAdmin, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'id tidak valid.' });
+    const bankRes = await client.query(`SELECT id FROM bct_bank_accounts WHERE id = $1`, [id]);
+    if (!bankRes.rows.length) return res.status(404).json({ error: 'Bank tidak ditemukan.' });
+
+    const scheduledTime = String(req.body?.scheduled_time || '').trim();
+    const fundingSourceCode = String(req.body?.funding_source_code || '').trim().toUpperCase();
+    const scheduledAmount = req.body?.scheduled_amount;
+    if (!/^\d{1,2}:\d{2}(:\d{2})?$/.test(scheduledTime)) return res.status(400).json({ error: 'scheduled_time harus format HH:mm.' });
+    if (!fundingSourceCode) return res.status(400).json({ error: 'funding_source_code wajib diisi (mis. BNI, BRI).' });
+    if (scheduledAmount === undefined || scheduledAmount === null || Number.isNaN(Number(scheduledAmount)) || Number(scheduledAmount) < 0) {
+      return res.status(400).json({ error: 'scheduled_amount harus angka >= 0.' });
+    }
+
+    await client.query('BEGIN');
+    const r = await client.query(
+      `INSERT INTO bct_funding_scheduler_plan (bank_account_id, scheduled_time, funding_source_code, scheduled_amount, status, created_by, updated_by)
+       VALUES ($1,$2,$3,$4,'SCHEDULED',$5,$5) RETURNING *`,
+      [id, scheduledTime, fundingSourceCode, Number(scheduledAmount), req.user?.username || null]
+    );
+    await logAudit(client, {
+      entityType: 'FUNDING_SCHEDULER_PLAN', entityId: r.rows[0].id, action: 'CREATE',
+      actorUserId: req.user?.id, actorUsername: req.user?.username, before: null, after: r.rows[0], notes: req.body?.reason || null,
+    });
+    await client.query('COMMIT');
+    res.json({ success: true, scheduler: r.rows[0] });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    if (String(e.message).includes('uq_bct_scheduler_plan_active')) {
+      return res.status(409).json({ error: 'Sudah ada scheduler aktif pada jam tersebut.' });
+    }
+    console.error('funding-scheduler scheduler-plan post error:', e.message);
+    res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+router.put('/banks/:id/funding-scheduler/scheduler-plan/:schedulerId', requireAdmin, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const id = parseInt(req.params.id, 10);
+    const schedulerId = parseInt(req.params.schedulerId, 10);
+    if (!Number.isFinite(id) || !Number.isFinite(schedulerId)) return res.status(400).json({ error: 'id tidak valid.' });
+
+    await client.query('BEGIN');
+    const existingRes = await client.query(
+      `SELECT * FROM bct_funding_scheduler_plan WHERE id = $1 AND bank_account_id = $2 FOR UPDATE`,
+      [schedulerId, id]
+    );
+    const before = existingRes.rows[0];
+    if (!before) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Scheduler tidak ditemukan.' }); }
+
+    const scheduledTime = req.body?.scheduled_time !== undefined ? String(req.body.scheduled_time).trim() : before.scheduled_time;
+    const fundingSourceCode = req.body?.funding_source_code !== undefined ? String(req.body.funding_source_code).trim().toUpperCase() : before.funding_source_code;
+    const scheduledAmount = req.body?.scheduled_amount !== undefined ? Number(req.body.scheduled_amount) : Number(before.scheduled_amount);
+    const status = req.body?.status !== undefined ? String(req.body.status).trim().toUpperCase() : before.status;
+    const isActive = req.body?.is_active !== undefined ? !!req.body.is_active : before.is_active;
+    const actualAmount = req.body?.actual_amount !== undefined ? req.body.actual_amount : before.actual_amount;
+    const note = req.body?.note !== undefined ? String(req.body.note).trim().slice(0, 2000) : before.note;
+
+    if (!VALID_SCHEDULER_STATUS.includes(status)) { await client.query('ROLLBACK'); return res.status(400).json({ error: `status harus salah satu: ${VALID_SCHEDULER_STATUS.join(', ')}.` }); }
+    if (!fundingSourceCode) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'funding_source_code wajib diisi.' }); }
+    if (Number.isNaN(scheduledAmount) || scheduledAmount < 0) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'scheduled_amount harus angka >= 0.' }); }
+
+    const r = await client.query(
+      `UPDATE bct_funding_scheduler_plan SET
+         scheduled_time = $1, funding_source_code = $2, scheduled_amount = $3, status = $4,
+         is_active = $5, actual_amount = $6, note = $7, updated_by = $8, updated_at = NOW()
+       WHERE id = $9 RETURNING *`,
+      [scheduledTime, fundingSourceCode, scheduledAmount, status, isActive, actualAmount, note, req.user?.username || null, schedulerId]
+    );
+
+    if (status === 'MISSED' && before.status !== 'MISSED') {
+      await client.query(
+        `INSERT INTO bct_alerts (bank_account_id, alert_type, status, message) VALUES ($1,'SCHEDULER_MISSED','OPEN',$2)
+         ON CONFLICT (bank_account_id, alert_type) WHERE status = 'OPEN' DO NOTHING`,
+        [id, `Scheduler ${fundingSourceCode} ${scheduledTime} ditandai MISSED oleh ${req.user?.username || 'admin'}.`]
+      );
+    }
+    await logAudit(client, {
+      entityType: 'FUNDING_SCHEDULER_PLAN', entityId: schedulerId, action: 'UPDATE',
+      actorUserId: req.user?.id, actorUsername: req.user?.username, before, after: r.rows[0], notes: req.body?.reason || null,
+    });
+    await client.query('COMMIT');
+    res.json({ success: true, scheduler: r.rows[0] });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    if (String(e.message).includes('uq_bct_scheduler_plan_active')) {
+      return res.status(409).json({ error: 'Sudah ada scheduler aktif pada jam tersebut.' });
+    }
+    console.error('funding-scheduler scheduler-plan put error:', e.message);
+    res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+// GET /banks/:id/funding-scheduler/baseline-check — data quality check (spec section 29), read-only.
+router.get('/banks/:id/funding-scheduler/baseline-check', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'id tidak valid.' });
+    const [planRes, schedulerRes] = await Promise.all([
+      pool.query(`SELECT hour_of_day, average_burn, planned_balance FROM bct_hourly_balance_plan WHERE bank_account_id = $1 AND is_active = TRUE ORDER BY hour_of_day`, [id]),
+      pool.query(`SELECT scheduled_time, scheduled_amount FROM bct_funding_scheduler_plan WHERE bank_account_id = $1 AND is_active = TRUE ORDER BY scheduled_time`, [id]),
+    ]);
+    const rows = planRes.rows;
+    const schedulerByHour = new Map();
+    for (const s of schedulerRes.rows) {
+      const h = parseInt(String(s.scheduled_time).slice(0, 2), 10);
+      schedulerByHour.set(h, (schedulerByHour.get(h) || 0) + Number(s.scheduled_amount));
+    }
+    const results = [];
+    for (let i = 1; i < rows.length; i++) {
+      const prev = rows[i - 1], cur = rows[i];
+      if (prev.planned_balance === null || cur.average_burn === null || cur.planned_balance === null) continue;
+      const check = validateBaselineFormula({
+        previousPlanned: Number(prev.planned_balance), expectedBurn: Number(cur.average_burn),
+        schedulerAmount: schedulerByHour.get(cur.hour_of_day) || 0, currentPlanned: Number(cur.planned_balance),
+      });
+      results.push({ hour: cur.hour_of_day, ...check });
+    }
+    res.json({ success: true, checks: results, mismatches: results.filter(r => r.valid === false) });
+  } catch (e) {
+    console.error('funding-scheduler baseline-check error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });

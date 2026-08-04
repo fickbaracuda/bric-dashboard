@@ -109,7 +109,7 @@ Sudah lengkap di CLAUDE.md (`warroom.js` bagian B).
 | Rekonsiliasi BRI BI-FAST | `warroom-reconciliation-bri-bifast.js` (1401 baris) | adapter `reconciliation/briBifastAdapter.js` |
 | Rekonsiliasi BNI | `warroom-reconciliation-bni.js` | adapter `reconciliation/bniAdapter.js` |
 | Rekonsiliasi BCA | `warroom-reconciliation-bca.js` | adapter `reconciliation/bcaAdapter.js` |
-| **Balance Control Tower** | `balance-control-tower.js` (1610 baris) | lihat §7 |
+| **Balance Control Tower** | `balance-control-tower.js` (2053 baris, termasuk Funding Scheduler Adjustment Assistant §7.1) | lihat §7 |
 | **Finance Balance Requests** | `finance-balance-requests.js` | lihat §8 |
 
 ### 3.5 Admin/Ops
@@ -308,6 +308,33 @@ detail, DAN alert supaya tidak ada 2 formula jalan bersamaan):
 
 **Doc lengkap belum ada file terpisah** — lihat langsung `backend/src/routes/
 balance-control-tower.js` dan `backend/src/utils/balanceControlTower.js`.
+
+### 7.1 Funding Scheduler Adjustment Assistant *(enhancement, dibangun pada sesi ini)*
+
+Reminder + decision support FA: CANCEL/REDUCE/KEEP/ADD untuk scheduler
+funding (BNI/BRI — sumber dana, BUKAN `bct_bank_accounts`) berikutnya,
+berdasarkan Actual Balance vs Planned Balance per jam (baseline BNI
+Multibiller, seed 24 jam + 8 scheduler, scoped ke bank OCBC). ADVISORY
+ONLY — tidak pernah transfer/cancel/edit scheduler bank otomatis. Reuse
+penuh resolver actual balance existing (`computeOperationalCalculationForBank`
+utk OCBC, fallback snapshot manual/API utk bank lain) — tidak ada saldo
+baru.
+
+Tabel baru: `bct_hourly_balance_plan`, `bct_funding_scheduler_plan`,
+`bct_funding_recommendation_history`. Reuse: `bct_balance_policies` (+2
+kolom toleransi), `bct_alerts` (+6 alert_type, dedupe TERPISAH dari
+`syncAlertsForBank` biar tidak saling auto-resolve). Engine murni JS
+(testable tanpa DB) di `backend/src/balanceControlTower/fundingSchedulerEngine.js`,
+41 test case di `backend/scripts/test-funding-scheduler.js`. Endpoint di
+bawah `/api/warroom/balance-control-tower/banks/:id/funding-scheduler*`
+(router sama, RBAC sama). Frontend: tab baru "Funding Scheduler Control" di
+`WarRoomBalanceControlTower.jsx` (bukan halaman/menu terpisah).
+
+**Doc lengkap**: `docs/BALANCE_CONTROL_TOWER_SCHEDULER.md` (formula,
+skema, API, RBAC, batasan/known limitations — termasuk catatan penting
+kenapa scheduler plan adalah template recurring harian, bukan instance
+per-tanggal, dan kenapa toleransi baru numpang di form Policy existing
+alih-alih endpoint partial baru).
 
 ---
 
