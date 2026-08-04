@@ -354,6 +354,32 @@ sendiri).
 
 ---
 
+## 8b. Balance & Funding *(fitur BARU standalone, dibangun pada sesi ini)*
+
+Reminder & decision support CANCEL/REDUCE/KEEP/ADD scheduler funding
+untuk 6 bank (OCBC/Mandiri/BRI/BRI_BIFAST/BNI/BCA) — **TIDAK REUSE apa
+pun** dari Balance Control Tower lama (§7): tabel baru semua prefix
+`balance_funding_*`, router baru `/api/balance-funding`, engine/adapter
+baru di `backend/src/balanceFunding/`, halaman frontend baru
+`BalanceFunding.jsx` (CSS `wbf-*`), menu sidebar standalone "Balance &
+Funding" (bukan di dalam BCT). ADVISORY ONLY — tidak transfer/cancel bank
+otomatis.
+
+Actual balance tiap bank **wajib** dari modul Rekonsiliasi bank yang sama
+(§6) — hasil audit source code (Balance Source Matrix lengkap di
+`docs/BALANCE_FUNDING.md` §2):
+- **OCBC**: `recon_sync_batches.raw_summary.available_balance` — HIGH.
+- **BCA**: `raw_summary.current_balance.saldo_akhir` — HIGH/MEDIUM tergantung `source` flag.
+- **MANDIRI**: `recon_bank_transactions.close_balance` baris terakhir — MEDIUM/LOW.
+- **BRI** & **BRI_BIFAST**: `recon_bank_transactions.balance` baris terakhir — MEDIUM/LOW.
+- **BNI**: **SELALU UNAVAILABLE** — file mutasi BNI tidak punya kolom saldo sama sekali (sudah didisclaim eksplisit di kode existing), bukan keterbatasan sementara.
+
+Funding source ≠ target bank (scheduler OCBC boleh didanai dari MANDIRI
+atau BRI). Doc lengkap: `docs/BALANCE_FUNDING.md` (formula, skema, API,
+RBAC, known limitations).
+
+---
+
 ## 9. Frontend — Peta Lengkap Terkini
 
 ### 9.1 Sidebar (struktur aktual saat ini — CLAUDE.md sudah ketinggalan di bagian ini)

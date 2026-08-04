@@ -866,6 +866,14 @@ export default function Sidebar({ onClose }) {
           </Accordion>
         </div>
 
+        {/* Balance & Funding — standalone, TERPISAH dari Balance Control Tower lama */}
+        <div className="sidebar-menu-sep" />
+        <NavLink to="/balance-funding" onClick={onClose}
+          className={({ isActive }) => 'sidebar-link' + (isActive ? ' sidebar-link--active' : '')}>
+          <i className="ti ti-adjustments-alt" aria-hidden="true" style={{ color: '#0EA5E9' }} />
+          <span>Balance &amp; Funding</span>
+        </NavLink>
+
         {/* Server Monitor (admin only) */}
         {!isReconOnly && user?.role === 'admin' && (
           <>

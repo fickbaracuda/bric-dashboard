@@ -42,6 +42,7 @@ const reconciliationBniRoutes = require('./routes/warroom-reconciliation-bni');
 const reconciliationBcaRoutes = require('./routes/warroom-reconciliation-bca');
 const financeBalanceRequestsRoutes = require('./routes/finance-balance-requests');
 const balanceControlTowerRoutes = require('./routes/balance-control-tower');
+const balanceFundingRoutes = require('./routes/balance-funding');
 const systemRoutes        = require('./routes/system');
 const requireAuth         = require('./middleware/auth');
 
@@ -90,6 +91,7 @@ app.use('/api/scoreboard', requireAuth, scoreboardRoutes);
 app.use('/api/users',      requireAuth, usersRoutes);
 app.use('/api/finance/balance-requests', requireAuth, financeBalanceRequestsRoutes);
 app.use('/api/warroom/balance-control-tower', requireAuth, balanceControlTowerRoutes);
+app.use('/api/balance-funding', requireAuth, balanceFundingRoutes);
 app.use('/api/winme',          requireAuth, winmeRoutes);
 app.use('/api/paymentagent',   requireAuth, paymentAgentRoutes);
 app.use('/api/dompetdigital',  requireAuth, dompetDigitalRoutes);

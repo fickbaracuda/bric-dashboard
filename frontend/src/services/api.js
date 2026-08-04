@@ -658,6 +658,33 @@ export const snoozeBctAlert = (id, snoozedUntil) =>
 export const resolveBctAlert = (id, reason) =>
   axios.post(`${BCT_BASE}/alerts/${id}/resolve`, { reason }, { headers: authHeaders() }).then(r => r.data);
 
+/* Balance & Funding — STANDALONE dari Balance Control Tower lama (router/tabel terpisah) */
+const BF_BASE = `${API_URL}/api/balance-funding`;
+export const getBfOverview = () =>
+  axios.get(`${BF_BASE}/overview`, { params: { t: Date.now() }, headers: authHeaders() }).then(r => r.data);
+export const getBfBank = (bankCode) =>
+  axios.get(`${BF_BASE}/banks/${bankCode}`, { params: { t: Date.now() }, headers: authHeaders() }).then(r => r.data);
+export const getBfPlan = (bankCode) =>
+  axios.get(`${BF_BASE}/banks/${bankCode}/plan`, { params: { t: Date.now() }, headers: authHeaders() }).then(r => r.data);
+export const updateBfPlan = (bankCode, payload) =>
+  axios.put(`${BF_BASE}/banks/${bankCode}/plan`, payload, { headers: authHeaders() }).then(r => r.data);
+export const updateBfHourlyPlan = (bankCode, hour, payload) =>
+  axios.put(`${BF_BASE}/banks/${bankCode}/plan/hourly/${hour}`, payload, { headers: authHeaders() }).then(r => r.data);
+export const getBfSchedules = (bankCode) =>
+  axios.get(`${BF_BASE}/banks/${bankCode}/schedules`, { params: { t: Date.now() }, headers: authHeaders() }).then(r => r.data);
+export const createBfSchedule = (bankCode, payload) =>
+  axios.post(`${BF_BASE}/banks/${bankCode}/schedules`, payload, { headers: authHeaders() }).then(r => r.data);
+export const updateBfSchedule = (bankCode, id, payload) =>
+  axios.put(`${BF_BASE}/banks/${bankCode}/schedules/${id}`, payload, { headers: authHeaders() }).then(r => r.data);
+export const getBfRecommendations = (bankCode, params = {}) =>
+  axios.get(`${BF_BASE}/banks/${bankCode}/recommendations`, { params: { ...params, t: Date.now() }, headers: authHeaders() }).then(r => r.data);
+export const acknowledgeBfRecommendation = (id, note) =>
+  axios.post(`${BF_BASE}/recommendations/${id}/acknowledge`, { note }, { headers: authHeaders() }).then(r => r.data);
+export const getBfAlerts = (params = {}) =>
+  axios.get(`${BF_BASE}/alerts`, { params: { ...params, t: Date.now() }, headers: authHeaders() }).then(r => r.data);
+export const acknowledgeBfAlert = (id) =>
+  axios.post(`${BF_BASE}/alerts/${id}/acknowledge`, {}, { headers: authHeaders() }).then(r => r.data);
+
 export const getPaymentAgentData = async (bulan) => {
   const res = await axios.get(`${API_URL}/api/paymentagent`, {
     params: { bulan },

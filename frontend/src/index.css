@@ -6296,3 +6296,79 @@ body {
   .wrfs-ack-box { width: 100%; }
 }
 
+/* ══════════════════════════════════════════════════════════════════════
+   BALANCE & FUNDING (wbf-*) — fitur standalone, TERPISAH dari Balance
+   Control Tower lama (wbf-* tidak share satu class pun dengan bct, bctcc,
+   atau wrfs prefix). Pakai CSS variables generik supaya otomatis ikut
+   light/dark theme.
+   ══════════════════════════════════════════════════════════════════════ */
+.wbf-bank-selector { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+.wbf-bank-tab {
+  display: flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 20px;
+  border: 1px solid var(--border); background: var(--bg-card); color: var(--text-2);
+  font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.wbf-bank-tab--active { background: var(--primary-bg, #F0FBF7); border-color: #0EA5E9; color: #0EA5E9; }
+.wbf-bank-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+
+.wbf-badge { display: inline-block; padding: 3px 10px; border-radius: 8px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+
+.wbf-overview-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+.wbf-overview-card {
+  background: var(--bg-card); border: 1px solid var(--border); border-top: 4px solid; border-radius: 12px;
+  padding: 16px; cursor: pointer; transition: box-shadow .15s;
+}
+.wbf-overview-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,.08); }
+.wbf-overview-card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.wbf-overview-bank-name { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 15px; color: var(--text-1); }
+.wbf-overview-row { display: flex; justify-content: space-between; font-size: 12.5px; color: var(--text-3); padding: 4px 0; }
+.wbf-overview-row b { color: var(--text-1); font-size: 13px; }
+.wbf-overview-reco { margin-top: 10px; padding: 8px 10px; border-radius: 8px; font-size: 12.5px; font-weight: 700; display: flex; align-items: center; gap: 6px; }
+.wbf-empty { grid-column: 1 / -1; text-align: center; padding: 40px; color: var(--text-3); }
+
+.wbf-detail-header { border-left: 4px solid; background: var(--bg-card); border-radius: 10px; padding: 14px 18px; margin-bottom: 14px; }
+.wbf-detail-title { display: flex; align-items: center; gap: 8px; font-size: 18px; font-weight: 800; color: var(--text-1); }
+.wbf-detail-sub { font-size: 12.5px; color: var(--text-3); margin-top: 4px; }
+.wbf-detail-warnings { margin-top: 8px; font-size: 12px; color: #B45309; display: flex; flex-direction: column; gap: 3px; }
+
+.wbf-alert { display: flex; align-items: flex-start; gap: 12px; border-left: 4px solid; border-radius: 8px; padding: 12px 16px; margin-bottom: 14px; }
+.wbf-alert i { font-size: 20px; margin-top: 2px; flex-shrink: 0; }
+.wbf-alert-text { font-size: 13px; color: var(--text-2); margin-top: 3px; line-height: 1.5; }
+
+.wbf-kpi-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 14px; }
+.wbf-kpi-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+.wbf-kpi-label { font-size: 11px; font-weight: 600; color: var(--text-3); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px; }
+.wbf-kpi-value { font-size: 20px; font-weight: 700; color: var(--text-1); }
+.wbf-kpi-sub { font-size: 11px; color: var(--text-3); margin-top: 4px; }
+.wbf-kpi-card--alert { border-color: #FCA5A5; background: #FFF5F5; }
+[data-theme="dark"] .wbf-kpi-card--alert { background: rgba(239,68,68,.10); }
+
+.wbf-reco-card { display: flex; align-items: flex-start; gap: 16px; flex-wrap: wrap; border: 2px solid; border-radius: 14px; padding: 20px 24px; margin-bottom: 18px; }
+.wbf-reco-icon { font-size: 34px; flex-shrink: 0; }
+.wbf-reco-body { flex: 1; min-width: 220px; }
+.wbf-reco-label { font-size: 19px; font-weight: 800; }
+.wbf-reco-amount { font-size: 26px; font-weight: 800; margin-top: 2px; }
+.wbf-reco-reason { font-size: 13px; color: var(--text-2); margin-top: 6px; line-height: 1.5; max-width: 640px; }
+.wbf-ack-box { min-width: 240px; display: flex; flex-direction: column; gap: 8px; }
+.wbf-ack-box textarea { resize: vertical; min-height: 44px; }
+.wbf-ack-ok { color: #059669; font-size: 12.5px; font-weight: 600; }
+
+.wbf-dq-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; padding: 16px; }
+.wbf-dq-grid > div { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.wbf-dq-grid span { color: var(--text-3); text-transform: uppercase; font-size: 10.5px; letter-spacing: .03em; }
+.wbf-dq-grid b { color: var(--text-1); font-size: 13px; }
+
+.wbf-plan-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; align-items: end; margin-bottom: 8px; }
+.wbf-plan-form label { display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; color: var(--text-3); font-weight: 600; }
+
+@media (max-width: 1100px) {
+  .wbf-kpi-grid { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 640px) {
+  .wbf-kpi-grid { grid-template-columns: repeat(2, 1fr); }
+  .wbf-reco-card { flex-direction: column; }
+  .wbf-ack-box { width: 100%; }
+  .wbf-overview-grid { grid-template-columns: 1fr; }
+  .wbf-bank-selector { overflow-x: auto; flex-wrap: nowrap; padding-bottom: 4px; }
+}
+
