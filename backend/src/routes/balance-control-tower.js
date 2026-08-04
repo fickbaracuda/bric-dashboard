@@ -1335,9 +1335,18 @@ async function maybePersistRecommendationHistory(client, bankId, result) {
   const ns = result.next_scheduler;
   const nextId = ns ? ns.id : null;
   const adjustment = ns ? ns.adjustment_amount : null;
+  // Normalisasi KEDUA sisi ke Number sebelum dibandingkan -- next_scheduler_id
+  // dari Postgres (BIGINT) pulang sbg string via node-pg, sedangkan nextId di
+  // sini bisa jadi string (dari row DB) atau number tergantung jalur -- tanpa
+  // normalisasi ini, "7" !== 7 selalu true dan dedupe TIDAK PERNAH match,
+  // membuat baris riwayat baru tiap kali GET dipanggil (bukan tiap material
+  // change spec section 35).
+  const latestNextId = latest && latest.next_scheduler_id !== null && latest.next_scheduler_id !== undefined
+    ? Number(latest.next_scheduler_id) : null;
+  const currentNextId = nextId !== null && nextId !== undefined ? Number(nextId) : null;
   const changed = !latest
     || latest.recommendation !== result.recommendation
-    || (latest.next_scheduler_id === null ? null : Number(latest.next_scheduler_id)) !== nextId
+    || latestNextId !== currentNextId
     || Number(latest.adjustment_amount ?? 0) !== Number(adjustment ?? 0);
   if (!changed) return latest;
 
