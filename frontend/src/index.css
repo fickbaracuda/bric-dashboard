@@ -6374,8 +6374,8 @@ body {
 
 /* ══════════════════════════════════════════════════════════════
    MGM PA — PB Lifecycle & Productivity Control Tower (prefix mgm-)
-   Isolated dari domain war-room lain. Layout dasar (wr-*/wrd-*) tetap
-   dipakai apa adanya — di sini hanya elemen yang genuinely BARU.
+   Isolated dari domain war-room lain. Layout dasar (wr- / wrd- classes)
+   tetap dipakai apa adanya — di sini hanya elemen yang genuinely BARU.
 ══════════════════════════════════════════════════════════════ */
 .mgm-kpi-delta { font-size: 11px; font-weight: 600; margin-top: 4px; }
 
