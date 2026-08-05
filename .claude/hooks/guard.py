@@ -102,15 +102,24 @@ if tool_name in ("Bash", "PowerShell"):
             )
 
     # 8) otomatisasi gerbang konfirmasi manual (BACKUP/MIGRATE/DEPLOY) via pipe/redirect/expect.
-    #    Dicek PER STATEMENT (dipisah newline/&&/||/;), bukan seluruh command mentah —
-    #    supaya command lain yang SEKADAR MENYEBUT nama script ini (mis. pesan commit git
-    #    yang mendeskripsikan aturan ini) tidak ikut ke-block gara-gara ada '<'/'|' di
-    #    bagian LAIN dari command (mis. heredoc git commit -m).
+    #    Dicek PER STATEMENT (dipisah newline/&&/||/;), dan HARUS berupa EKSEKUSI script-nya
+    #    (python .../safe_deploy.py, dst) yang diberi stdin lewat pipe/redirect/expect —
+    #    bukan sekadar command LAIN (git diff/grep/cat/ls) yang menyebut nama filenya sebagai
+    #    argumen, dan bukan sekadar teks (mis. pesan commit git) yang mendeskripsikan aturan ini.
+    safety_script_pattern = r"(?:scripts/safe_deploy\.py|scripts/backup_db\.py|\S*_migration_remote\.py)"
     statements = re.split(r"&&|\|\||;|\n", cmd)
     for stmt in statements:
+        invokes_safety_script = re.search(rf"python\d?(\.exe)?\s+\S*{safety_script_pattern}", stmt)
+        if not invokes_safety_script:
+            continue
         stmt_low = stmt.lower()
-        touches_safety_script = any(s in stmt for s in SAFETY_SCRIPTS) or "_migration_remote.py" in stmt
-        if touches_safety_script and re.search(r"[|<]|\bexpect\b|\byes\b\s", stmt):
+        fed_stdin = (
+            re.search(r"\|\s*python", stmt_low)  # sesuatu di-pipe MASUK ke invocation python ini
+            or re.search(rf"{safety_script_pattern}\S*[^|]*<", stmt_low)  # redirect stdin < setelah nama script
+            or "expect" in stmt_low
+            or re.search(r"\byes\b\s", stmt_low)
+        )
+        if fed_stdin:
             block(
                 "BLOCKED: terdeteksi upaya mengotomatisasi gerbang konfirmasi manual "
                 "(BACKUP/MIGRATE/DEPLOY) lewat pipe/redirect/expect/yes pada baris: "
