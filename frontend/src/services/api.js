@@ -6,10 +6,15 @@ const API_URL = import.meta.env.VITE_API_URL || '';
 // 5-minute in-memory cache — skips re-fetch when navigating between war-room pages
 const _cache = new Map();
 const WARROOM_TTL = 5 * 60 * 1000;
-function withCache(key, fn) {
+function withCache(key, fn, force = false) {
   const hit = _cache.get(key);
-  if (hit && Date.now() - hit.ts < WARROOM_TTL) return Promise.resolve(hit.data);
+  if (!force && hit && Date.now() - hit.ts < WARROOM_TTL) return Promise.resolve(hit.data);
   return fn().then(data => { _cache.set(key, { data, ts: Date.now() }); return data; });
+}
+// Buang semua entry cache MGM PA — dipanggil setelah action mutation (CRUD)
+// supaya panel yang lagi kebuka tidak menampilkan data 5 menit basi.
+function clearMgmCache() {
+  [..._cache.keys()].filter(k => k.startsWith('mgm-analytics-')).forEach(k => _cache.delete(k));
 }
 
 function authHeaders() {
@@ -314,15 +319,39 @@ export const getPAArpuAnalytics = () =>
   withCache('pa-arpu-analytics', () =>
     axios.get(`${API_URL}/api/warroom/pa-arpu/analytics`, { headers: authHeaders() }).then(r => r.data));
 
-/* WAR-ROOM — MGM PA */
-export const getMgmAnalytics = (bulan) =>
-  withCache(`mgm-analytics-${bulan || 'latest'}`, () => {
-    const params = bulan ? { bulan } : {};
-    return axios.get(`${API_URL}/api/warroom/mgm/analytics`, { params, headers: authHeaders() }).then(r => r.data);
-  });
-export const searchMgmOutlet = async (q, bulan) => {
-  const params = { q, ...(bulan ? { bulan } : {}) };
+/* WAR-ROOM — MGM PA — PB Lifecycle & Productivity Control Tower */
+// params: { periode, compare, pb, provinsi, kota, tipe_outlet, pembayaran_via, force }
+export const getMgmAnalytics = (params = {}) => {
+  const { force, ...query } = params;
+  return withCache(`mgm-analytics-${JSON.stringify(query)}`, () =>
+    axios.get(`${API_URL}/api/warroom/mgm/analytics`, { params: query, headers: authHeaders() }).then(r => r.data),
+  force);
+};
+
+// Outlet list & action queue harus SELALU fresh (bukan snapshot analytics 5 menit) — no cache.
+export const getMgmOutlets = async (params = {}) => {
+  const res = await axios.get(`${API_URL}/api/warroom/mgm/outlets`, { params, headers: authHeaders() });
+  return res.data;
+};
+
+export const searchMgmOutlet = async (q, periode) => {
+  const params = { q, ...(periode ? { periode } : {}) };
   const res = await axios.get(`${API_URL}/api/warroom/mgm/search`, { params, headers: authHeaders() });
+  return res.data;
+};
+
+export const getMgmActions = async (params = {}) => {
+  const res = await axios.get(`${API_URL}/api/warroom/mgm/actions`, { params, headers: authHeaders() });
+  return res.data;
+};
+export const upsertMgmAction = async (payload) => {
+  const res = await axios.post(`${API_URL}/api/warroom/mgm/actions`, payload, { headers: authHeaders() });
+  clearMgmCache();
+  return res.data;
+};
+export const updateMgmAction = async (id, payload) => {
+  const res = await axios.put(`${API_URL}/api/warroom/mgm/actions/${id}`, payload, { headers: authHeaders() });
+  clearMgmCache();
   return res.data;
 };
 

@@ -29,6 +29,7 @@ const bumdesRoutes        = require('./routes/warroom-bumdes');
 const lpdRoutes           = require('./routes/warroom-lpd');
 const dataRawRoutes       = require('./routes/data-raw');
 const hunterRoutes        = require('./routes/warroom-hunter');
+const mgmRoutes           = require('./routes/warroom-mgm');
 const qrisCtrlRoutes      = require('./routes/warroom-qris-control-tower');
 const paymentAgentProdukRoutes = require('./routes/warroom-payment-agent-produk');
 const dmCtRoutes          = require('./routes/warroom-dm-control-tower');
@@ -129,8 +130,17 @@ app.get('/api/warroom/farming/followup',  requireAuth, farmingRoutes.followupGet
 app.post('/api/warroom/farming/followup', requireAuth, farmingRoutes.followupUpsertHandler);
 app.post('/api/warroom/pa-produk/sync',     warroomRoutes.paProdukSyncHandler); // token auth, no JWT
 app.post('/api/warroom/pa-arpu/sync',      warroomRoutes.paArpuSyncHandler);   // token auth, no JWT
-app.post('/api/warroom/mgm/sync',          warroomRoutes.mgmSyncHandler);       // token auth, no JWT
-app.get('/api/warroom/mgm/analytics',      requireAuth, warroomRoutes.mgmAnalyticsHandler);
+// MGM PA — PB Lifecycle & Productivity Control Tower (backend/src/routes/warroom-mgm.js).
+// Handler legacy (mgmSyncHandler/mgmAnalyticsHandler di warroom.js, tabel mgm_aktivasi/
+// mgm_registrasi) SENGAJA dipertahankan tapi TIDAK diregister lagi di sini — hanya SATU
+// handler aktif per endpoint /api/warroom/mgm/*.
+app.post('/api/warroom/mgm/sync',            mgmRoutes.syncHandler);       // token auth, no JWT
+app.get('/api/warroom/mgm/analytics',        requireAuth, mgmRoutes.analyticsHandler);
+app.get('/api/warroom/mgm/outlets',          requireAuth, mgmRoutes.outletsHandler);
+app.get('/api/warroom/mgm/search',           requireAuth, mgmRoutes.searchHandler);
+app.get('/api/warroom/mgm/actions',          requireAuth, mgmRoutes.actionsHandler);
+app.post('/api/warroom/mgm/actions',         requireAuth, mgmRoutes.upsertActionHandler);
+app.put('/api/warroom/mgm/actions/:id',      requireAuth, mgmRoutes.updateActionHandler);
 app.post('/api/warroom/dm-fastpay/sync',     dmFastpayRoutes.syncHandler);      // token auth, no JWT
 app.get('/api/warroom/dm-fastpay/analytics', requireAuth, dmFastpayRoutes.analyticsHandler);
 app.post('/api/warroom/instaqris-trx/sync',     iqTrxRoutes.syncHandler);        // token auth, no JWT
