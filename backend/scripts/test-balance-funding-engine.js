@@ -250,6 +250,127 @@ test('confidence LOW tetap boleh rekomendasi tapi warning muncul (spec: LOW = sh
   assert.ok(r.warnings.includes('saldo tidak fully verified'));
 });
 
+// ── MANDIRI baseline (spec: opening 200jt, 24 hourly rows, 9 scheduler) ──
+// Angka identik dgn backend/scripts/seed-balance-funding-mandiri.js -- lihat
+// docs/BALANCE_FUNDING.md bagian Mandiri utk penjelasan lengkap 19:00.
+const MANDIRI_HOURLY_PLAN = [
+  { hour_of_day: 0, nominal_average: 0, planned_balance: 200000000 },
+  { hour_of_day: 1, nominal_average: 0, planned_balance: 200000000 },
+  { hour_of_day: 2, nominal_average: 0, planned_balance: 200000000 },
+  { hour_of_day: 3, nominal_average: 0, planned_balance: 200000000 },
+  { hour_of_day: 4, nominal_average: 0, planned_balance: 200000000 },
+  { hour_of_day: 5, nominal_average: 69846664, planned_balance: 280153336 },
+  { hour_of_day: 6, nominal_average: 16512556, planned_balance: 263640780 },
+  { hour_of_day: 7, nominal_average: 109210049, planned_balance: 304430731 },
+  { hour_of_day: 8, nominal_average: 133352061, planned_balance: 171078670 },
+  { hour_of_day: 9, nominal_average: 177751110, planned_balance: 293327560 },
+  { hour_of_day: 10, nominal_average: 198012542, planned_balance: 95315018 },
+  { hour_of_day: 11, nominal_average: 109536265, planned_balance: 285778753 },
+  { hour_of_day: 12, nominal_average: 131177461, planned_balance: 154601292 },
+  { hour_of_day: 13, nominal_average: 76144273, planned_balance: 278457019 },
+  { hour_of_day: 14, nominal_average: 97408968, planned_balance: 181048051 },
+  { hour_of_day: 15, nominal_average: 104362960, planned_balance: 276685091 },
+  { hour_of_day: 16, nominal_average: 103322079, planned_balance: 173363012 },
+  { hour_of_day: 17, nominal_average: 124230446, planned_balance: 349132566 },
+  { hour_of_day: 18, nominal_average: 154325742, planned_balance: 194806824 },
+  { hour_of_day: 19, nominal_average: 168905616, planned_balance: 325901208 },
+  { hour_of_day: 20, nominal_average: 107143604, planned_balance: 218757604 },
+  { hour_of_day: 21, nominal_average: 102199771, planned_balance: 366557833 },
+  { hour_of_day: 22, nominal_average: 29855806, planned_balance: 336702027 },
+  { hour_of_day: 23, nominal_average: 0, planned_balance: 336702027 },
+];
+const MANDIRI_SCHEDULES = [
+  { id: 101, target_bank_code: 'MANDIRI', scheduled_time: '05:00', funding_source_code: 'MANDIRI', scheduled_amount: 150000000, status: 'SCHEDULED' },
+  { id: 102, target_bank_code: 'MANDIRI', scheduled_time: '07:00', funding_source_code: 'MANDIRI', scheduled_amount: 150000000, status: 'SCHEDULED' },
+  { id: 103, target_bank_code: 'MANDIRI', scheduled_time: '09:00', funding_source_code: 'MANDIRI', scheduled_amount: 300000000, status: 'SCHEDULED' },
+  { id: 104, target_bank_code: 'MANDIRI', scheduled_time: '11:00', funding_source_code: 'MANDIRI', scheduled_amount: 300000000, status: 'SCHEDULED' },
+  { id: 105, target_bank_code: 'MANDIRI', scheduled_time: '13:00', funding_source_code: 'MANDIRI', scheduled_amount: 200000000, status: 'SCHEDULED' },
+  { id: 106, target_bank_code: 'MANDIRI', scheduled_time: '15:00', funding_source_code: 'MANDIRI', scheduled_amount: 200000000, status: 'SCHEDULED' },
+  { id: 107, target_bank_code: 'MANDIRI', scheduled_time: '17:00', funding_source_code: 'MANDIRI', scheduled_amount: 300000000, status: 'SCHEDULED' },
+  { id: 108, target_bank_code: 'MANDIRI', scheduled_time: '19:00', funding_source_code: 'MANDIRI', scheduled_amount: 300000000, status: 'SCHEDULED' },
+  { id: 109, target_bank_code: 'MANDIRI', scheduled_time: '21:00', funding_source_code: 'BRI', scheduled_amount: 250000000, status: 'SCHEDULED' },
+];
+function mandiriBalanceInfo(balance, overrides = {}) {
+  return { balance, confidence: 'HIGH', business_date: jakartaBusinessDate(jakartaTime(9, 0)), balance_timestamp: jakartaTime(9, 0), warnings: [], ...overrides };
+}
+
+test('MANDIRI baseline: 24 baris hourly plan tersedia', () => {
+  assert.strictEqual(MANDIRI_HOURLY_PLAN.length, 24);
+});
+test('MANDIRI baseline: 9 baris scheduler tersedia', () => {
+  assert.strictEqual(MANDIRI_SCHEDULES.length, 9);
+});
+test('MANDIRI baseline: opening balance 200jt tercermin di jam 00:00-04:00 (no scheduler, avg=0)', () => {
+  for (let h = 0; h <= 4; h++) {
+    assert.strictEqual(MANDIRI_HOURLY_PLAN[h].planned_balance, 200000000);
+  }
+});
+test('MANDIRI baseline: scheduler 05:00/07:00/09:00/11:00/13:00/15:00/17:00 semua MANDIRI->MANDIRI', () => {
+  const times = ['05:00', '07:00', '09:00', '11:00', '13:00', '15:00', '17:00'];
+  for (const t of times) {
+    const s = MANDIRI_SCHEDULES.find(x => x.scheduled_time === t);
+    assert.strictEqual(s.target_bank_code, 'MANDIRI');
+    assert.strictEqual(s.funding_source_code, 'MANDIRI');
+  }
+});
+test('MANDIRI baseline: scheduler 19:00 -- discrepancy raw "18:00" diselesaikan via validasi matematis, bukan tebakan', () => {
+  // 18:00 planned VALID tanpa scheduler apa pun (349132566 - 154325742 = 194806824).
+  const h18 = MANDIRI_HOURLY_PLAN.find(r => r.hour_of_day === 18);
+  assert.strictEqual(round(MANDIRI_HOURLY_PLAN.find(r => r.hour_of_day === 17).planned_balance - h18.nominal_average), h18.planned_balance);
+  // 19:00 planned HANYA valid kalau scheduler Rp300jt masuk DI baris ini.
+  const h19 = MANDIRI_HOURLY_PLAN.find(r => r.hour_of_day === 19);
+  assert.strictEqual(round(h18.planned_balance + 300000000 - h19.nominal_average), h19.planned_balance);
+  const s19 = MANDIRI_SCHEDULES.find(x => x.scheduled_time === '19:00');
+  assert.strictEqual(s19.scheduled_amount, 300000000);
+});
+test('MANDIRI baseline: scheduler 21:00 funding_source=BRI, target_bank tetap MANDIRI (bukan BRI)', () => {
+  const s21 = MANDIRI_SCHEDULES.find(x => x.scheduled_time === '21:00');
+  assert.strictEqual(s21.funding_source_code, 'BRI');
+  assert.strictEqual(s21.target_bank_code, 'MANDIRI');
+  assert.strictEqual(s21.scheduled_amount, 250000000);
+});
+test('MANDIRI baseline: seluruh 24 baris konsisten dgn formula prev+scheduler-avg=planned (toleransi Rp1)', () => {
+  let prev = 200000000;
+  const schedByHour = new Map(MANDIRI_SCHEDULES.map(s => [parseInt(s.scheduled_time.slice(0, 2), 10), s.scheduled_amount]));
+  for (const row of MANDIRI_HOURLY_PLAN) {
+    const sched = schedByHour.get(row.hour_of_day) || 0;
+    const computed = round(prev + sched - row.nominal_average);
+    assert.ok(Math.abs(computed - row.planned_balance) <= 1, `hour=${row.hour_of_day} computed=${computed} vs source=${row.planned_balance}`);
+    prev = row.planned_balance;
+  }
+});
+test('MANDIRI end-to-end @09:00 exact jam scheduler -- current-hour plan resolve benar', () => {
+  const r = calculateBankRecommendation({
+    now: jakartaTime(9, 0), targetBankCode: 'MANDIRI', hourlyPlan: MANDIRI_HOURLY_PLAN, schedules: MANDIRI_SCHEDULES,
+    balanceInfo: mandiriBalanceInfo(400000000),
+  });
+  assert.strictEqual(r.current_hour, 9);
+  assert.strictEqual(r.current_plan.planned_balance, 293327560);
+});
+test('MANDIRI end-to-end @09:00 -- next scheduler resolve ke 11:00 (bukan 09:00 sendiri, sudah lewat menit ini)', () => {
+  const r = calculateBankRecommendation({
+    now: jakartaTime(9, 0), targetBankCode: 'MANDIRI', hourlyPlan: MANDIRI_HOURLY_PLAN, schedules: MANDIRI_SCHEDULES,
+    balanceInfo: mandiriBalanceInfo(400000000),
+  });
+  assert.strictEqual(r.next_schedule.scheduled_time, '11:00');
+  assert.strictEqual(r.next_schedule.target_planned_balance, 285778753);
+});
+test('MANDIRI end-to-end @20:00 -- next scheduler resolve ke 21:00, funding_source BRI ikut terbawa ke response', () => {
+  const r = calculateBankRecommendation({
+    now: jakartaTime(20, 0), targetBankCode: 'MANDIRI', hourlyPlan: MANDIRI_HOURLY_PLAN, schedules: MANDIRI_SCHEDULES,
+    balanceInfo: mandiriBalanceInfo(300000000),
+  });
+  assert.strictEqual(r.next_schedule.scheduled_time, '21:00');
+  assert.strictEqual(r.next_schedule.funding_source_code, 'BRI');
+});
+test('MANDIRI end-to-end -- rekomendasi dihasilkan (bukan lagi INSUFFICIENT_DATA) begitu plan tersedia', () => {
+  const r = calculateBankRecommendation({
+    now: jakartaTime(9, 0), targetBankCode: 'MANDIRI', hourlyPlan: MANDIRI_HOURLY_PLAN, schedules: MANDIRI_SCHEDULES,
+    balanceInfo: mandiriBalanceInfo(400000000),
+  });
+  assert.ok(['CANCEL', 'REDUCE', 'KEEP', 'ADD'].includes(r.recommendation), `unexpected: ${r.recommendation}`);
+});
+
 // ── Runner ──────────────────────────────────────────────────────────────
 let pass = 0, fail = 0;
 for (const { name, fn } of tests) {

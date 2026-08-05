@@ -112,28 +112,61 @@ async function getBcaBalance(pool) {
 }
 
 // ── MANDIRI ───────────────────────────────────────────────────────────────
+const MANDIRI_LOOKBACK_BATCHES = 30; // ~1 bulan sync harian -- cukup utk lompati batch yg close_balance-nya rusak/kosong tanpa mundur tak terbatas
+
+/**
+ * Sebuah batch dianggap "close_balance tidak terpercaya" kalau SEMUA baris
+ * non-null close_balance-nya persis 0 (100%) -- statement bank asli TIDAK
+ * PERNAH persis Rp0 di setiap baris selama berhari-hari; pola ini artinya
+ * kolom itu tidak benar-benar terisi oleh sumbernya (Apps Script/sheet),
+ * BUKAN saldo Rp0 yang authoritative. Ditemukan lewat investigasi produksi:
+ * batch business_date <= 2026-07-27 terisi normal (100% non-zero), SEMUA
+ * batch setelahnya (2026-07-28 dst) 100% nol di setiap baris -- indikasi
+ * regresi di pipeline sync Mandiri, bukan kondisi rekening riil. Guard ini
+ * TIDAK mengubah/menyentuh logic Rekonsiliasi Mandiri sama sekali -- murni
+ * lapisan kehati-hatian di resolver Balance & Funding sendiri.
+ */
+function isMandiriCloseBalanceTrustworthy(bankRows) {
+  if (!bankRows.length) return false;
+  return bankRows.some(r => r.closeBalance !== 0);
+}
+
 async function getMandiriBalance(pool) {
-  const batchRes = await pool.query(
+  const batchesRes = await pool.query(
     `SELECT id, business_date::text AS business_date, synced_at, account_no
      FROM recon_sync_batches WHERE bank_code = 'MANDIRI' AND status = 'success'
-     ORDER BY business_date DESC, synced_at DESC LIMIT 1`
+     ORDER BY business_date DESC, synced_at DESC LIMIT $1`,
+    [MANDIRI_LOOKBACK_BATCHES]
   );
-  if (!batchRes.rows.length) return unavailable('MANDIRI', 'Belum ada batch rekonsiliasi Mandiri yang sukses.');
-  const batch = batchRes.rows[0];
+  if (!batchesRes.rows.length) return unavailable('MANDIRI', 'Belum ada batch rekonsiliasi Mandiri yang sukses.');
 
-  const rowsRes = await pool.query(
-    `SELECT close_balance, source_row_number, debit, credit
-     FROM recon_bank_transactions
-     WHERE batch_id = $1 AND close_balance IS NOT NULL AND source_row_number IS NOT NULL
-     ORDER BY source_row_number ASC`,
-    [batch.id]
-  );
-  if (!rowsRes.rows.length) return unavailable('MANDIRI', 'Tidak ada baris mutasi Mandiri dengan close_balance pada batch terakhir.');
+  let usedBatch = null;
+  let bankRows = null;
+  let skippedUntrustedBatches = 0;
+  for (const batch of batchesRes.rows) {
+    const rowsRes = await pool.query(
+      `SELECT close_balance, source_row_number, debit, credit
+       FROM recon_bank_transactions
+       WHERE batch_id = $1 AND close_balance IS NOT NULL AND source_row_number IS NOT NULL
+       ORDER BY source_row_number ASC`,
+      [batch.id]
+    );
+    if (!rowsRes.rows.length) continue;
+    const candidateRows = rowsRes.rows.map(r => ({
+      closeBalance: numOrNull(r.close_balance), sourceRowNumber: Number(r.source_row_number),
+      debitAmount: numOrNull(r.debit) || 0, creditAmount: numOrNull(r.credit) || 0,
+    }));
+    if (!isMandiriCloseBalanceTrustworthy(candidateRows)) { skippedUntrustedBatches++; continue; }
+    usedBatch = batch; bankRows = candidateRows; break;
+  }
 
-  const bankRows = rowsRes.rows.map(r => ({
-    closeBalance: numOrNull(r.close_balance), sourceRowNumber: Number(r.source_row_number),
-    debitAmount: numOrNull(r.debit) || 0, creditAmount: numOrNull(r.credit) || 0,
-  }));
+  if (!usedBatch) {
+    return unavailable('MANDIRI',
+      `close_balance tidak tersedia/valid pada ${MANDIRI_LOOKBACK_BATCHES} batch rekonsiliasi Mandiri terakhir` +
+      (skippedUntrustedBatches ? ` (${skippedUntrustedBatches} batch dilewati karena close_balance 0 di semua baris -- indikasi kolom tidak terisi sumbernya, bukan saldo Rp0 riil)` : '') + '.'
+    );
+  }
+
   const validation = validateMandiriBalance(bankRows);
   const sorted = [...bankRows].sort((a, b) => a.sourceRowNumber - b.sourceRowNumber);
   // ASC: baris teratas (source_row_number terkecil) = mutasi TERLAMA -> terbaru = index terakhir.
@@ -147,11 +180,14 @@ async function getMandiriBalance(pool) {
     warnings.push(`Validasi kontinuitas saldo Mandiri: ${validation.status} (${validation.matched}/${validation.checked} baris cocok).`);
   }
   warnings.push('Saldo Mandiri diturunkan dari close_balance baris mutasi terakhir (bukan field ringkasan resmi terpisah).');
+  if (usedBatch.business_date !== batchesRes.rows[0].business_date) {
+    warnings.push(`Batch terbaru (${batchesRes.rows[0].business_date}) close_balance-nya tidak terpercaya (0 di semua baris) -- memakai batch valid terakhir (${usedBatch.business_date}). Cek pipeline sync Mandiri.`);
+  }
 
   return {
-    bank_code: 'MANDIRI', account_no: batch.account_no || null, balance: latestRow.closeBalance,
-    balance_timestamp: batch.synced_at, business_date: batch.business_date,
-    source: 'recon_bank_transactions.close_balance', source_batch_id: String(batch.id),
+    bank_code: 'MANDIRI', account_no: usedBatch.account_no || null, balance: latestRow.closeBalance,
+    balance_timestamp: usedBatch.synced_at, business_date: usedBatch.business_date,
+    source: 'recon_bank_transactions.close_balance', source_batch_id: String(usedBatch.id),
     verification_status: `ROW_CHRONOLOGY_${validation.status}`, confidence, warnings,
   };
 }

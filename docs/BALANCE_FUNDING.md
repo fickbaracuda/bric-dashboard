@@ -30,7 +30,7 @@ reconciliation-*.js` dan `backend/src/reconciliation/*Adapter.js` per bank.
 |---|---|---|---|---|
 | **OCBC** | Nilai resmi statement, dikirim apa adanya oleh Apps Script | `recon_sync_batches.raw_summary.available_balance` | `recon_sync_batches.business_date` | **HIGH** |
 | **BCA** | Footer "Saldo Akhir" statement, forwarded verbatim | `recon_sync_batches.raw_summary.current_balance.saldo_akhir` (flag `source='sheet_footer'`) | `recon_sync_batches.business_date` | **HIGH** kalau `source='sheet_footer'`, **MEDIUM** kalau fallback `row_order_fallback`/`balance_continuity`, **UNAVAILABLE** kalau kosong dua-duanya |
-| **MANDIRI** | Kolom `close_balance` per baris mutasi (SALDO AKHIR statement asli, bukan hasil hitung app) — TIDAK ada field ringkasan resmi terpisah (`raw_summary` Mandiri secara desain SELALU kosong, Apps Script client tidak pernah mengirimnya) | `recon_bank_transactions.close_balance`, baris terakhir per arah kronologi (`validateMandiriBalance()` auto-deteksi ASC/DESC via continuity match ≥95%) | `recon_sync_batches.business_date` | **MEDIUM** kalau continuity BALANCED, **LOW** kalau UNBALANCED/UNDETERMINED |
+| **MANDIRI** | Kolom `close_balance` per baris mutasi (SALDO AKHIR statement asli, bukan hasil hitung app) — TIDAK ada field ringkasan resmi terpisah (`raw_summary` Mandiri secara desain SELALU kosong, Apps Script client tidak pernah mengirimnya). Adapter mundur sampai 30 batch terakhir untuk mencari batch dengan `close_balance` yang genuinely terisi (lihat §14b.2). | `recon_bank_transactions.close_balance`, baris terakhir per arah kronologi (`validateMandiriBalance()` auto-deteksi ASC/DESC via continuity match ≥95%) dari batch valid terbaru | `recon_bank_transactions.business_date` (batch yang benar-benar dipakai, bisa lebih lama dari batch paling baru — lihat §14b.2) | **MEDIUM** kalau continuity BALANCED, **LOW** kalau UNBALANCED/UNDETERMINED, **UNAVAILABLE** kalau 30 batch terakhir semuanya close_balance 0 |
 | **BRI** | Kolom `balance` (SALDO_AKHIR_MUTASI) per baris, real nilai statement, divalidasi per-baris saat sync (`balance_check_status`) | `recon_bank_transactions.balance`, baris terakhir (`business_date DESC, effective_date_time DESC, sequence_no DESC`) | `recon_bank_transactions.business_date` | **MEDIUM** kalau `balance_check_status='BALANCED'`, **LOW** kalau tidak |
 | **BRI_BIFAST** | Sama pola BRI (kolom `balance` generik, tabel sama), TAPI rekening/settlement rail terpisah dari BRI biasa (bank_code beda, default account_no sendiri: `36001999999306`) | `recon_bank_transactions.balance` (scope `bank_code='BRI_BIFAST'`) | `recon_bank_transactions.business_date` | **MEDIUM/LOW** (sama logika BRI, tapi kurang teruji — tidak ada `synced_at` tiebreak eksplisit di query existing manapun) |
 | **BNI** | **TIDAK TERSEDIA secara struktural** — file mutasi BNI tidak memuat kolom saldo apa pun (opening/closing/balance). Kode existing SUDAH mendisclaim ini secara eksplisit: *"Nilai ini menunjukkan arus dana ... bukan saldo rekening aktual karena data tidak memuat opening balance."* Satu-satunya proxy (`funding_summary.net_cash_movement`) adalah net cash-flow, BUKAN saldo. | — | — | **SELALU `UNAVAILABLE`** |
@@ -228,6 +228,93 @@ Total 46 test, semua pass.
   Balance & Funding tidak memicu mutasi data rekonsiliasi apa pun (diuji
   di production smoke test: cek 6 halaman Rekonsiliasi tetap identik
   sebelum/sesudah).
+
+## 14b. Mandiri Baseline *(ditambahkan pada sesi lanjutan — plan Mandiri, sesudah OCBC)*
+
+### 14b.1 Plan
+
+Opening balance **Rp200.000.000**, timezone Asia/Jakarta, 24 baris hourly
+plan + 9 baris scheduler. Seed: `backend/scripts/seed-balance-funding-
+mandiri.js` — data-only (tidak ada migration baru, tabel `balance_funding_*`
+sudah ada), idempotent (upsert plan+hourly, `ON CONFLICT DO NOTHING` untuk
+scheduler supaya tidak menimpa perubahan manual FA lewat UI kalau script
+dijalankan ulang). Validasi matematis 24 baris (`prev_planned + scheduler −
+nominal_average ≈ current_planned`, toleransi Rp1) dijalankan **sebelum**
+menulis apa pun — script berhenti (exit 1) kalau ada satu saja baris tidak
+cocok.
+
+| Waktu | Funding Source | Nominal |
+|---|---|---|
+| 05:00 | MANDIRI → MANDIRI | Rp150.000.000 |
+| 07:00 | MANDIRI → MANDIRI | Rp150.000.000 |
+| 09:00 | MANDIRI → MANDIRI | Rp300.000.000 |
+| 11:00 | MANDIRI → MANDIRI | Rp300.000.000 |
+| 13:00 | MANDIRI → MANDIRI | Rp200.000.000 |
+| 15:00 | MANDIRI → MANDIRI | Rp200.000.000 |
+| 17:00 | MANDIRI → MANDIRI | Rp300.000.000 |
+| 19:00 | MANDIRI → MANDIRI | Rp300.000.000 (lihat catatan 19:00 di bawah) |
+| 21:00 | **BRI** → MANDIRI | Rp250.000.000 (funding source BRI, target bank tetap MANDIRI) |
+
+**Catatan 19:00** — source mentah FA menulis label "Data Schedule 18:00"
+untuk funding Rp300jt ini. Validasi matematis 24 baris HANYA konsisten
+kalau funding itu masuk di baris **19:00**:
+- 18:00 valid **tanpa** scheduler apa pun: `349.132.566 − 154.325.742 =
+  194.806.824` (cocok persis dengan planned_balance source).
+- 19:00 **hanya** cocok kalau +Rp300jt masuk di baris itu:
+  `194.806.824 + 300.000.000 − 168.905.616 = 325.901.208` (cocok persis).
+
+`scheduled_time` di-set ke `19:00` mengikuti bukti matematis, bukan label
+mentah — discrepancy ini disimpan sebagai catatan audit di kolom `note`
+baris scheduler tsb (bisa dilihat lewat `GET /banks/MANDIRI/schedules` atau
+tab Manage Plan admin), **bukan** dihilangkan diam-diam.
+
+### 14b.2 Investigasi Actual Balance Mandiri Rp0 (root cause & fix)
+
+Sebelum baseline ini ditambahkan, kartu Mandiri di Overview menampilkan
+**Actual Balance Rp0, confidence LOW**. Investigasi produksi (query
+langsung ke `recon_bank_transactions`, dibandingkan berturut-turut per
+`business_date`) menemukan:
+
+| business_date | Baris `close_balance` nonzero |
+|---|---|
+| 2026-07-27 | 3.388 / 3.388 (100% terisi) |
+| 2026-07-28 s.d. 2026-08-05 | **0 / N** (100% nol, di SEMUA baris, SETIAP hari) |
+
+Sebuah statement bank asli tidak pernah persis Rp0 di setiap baris selama
+9 hari berturut-turut — ini indikasi kolom `close_balance` berhenti terisi
+oleh pipeline sync Mandiri sejak 2026-07-28 (regresi di luar scope Balance
+& Funding), **bukan** saldo Rp0 yang authoritative. Adapter lama (`getMandiriBalance`)
+mengambil batch TERBARU apa pun kondisinya, sehingga menampilkan Rp0 palsu
+dengan percaya diri (confidence LOW, tapi tetap sebuah ANGKA, bukan
+UNAVAILABLE).
+
+**Fix** (di `backend/src/balanceFunding/bankBalanceAdapters.js`, TIDAK
+menyentuh `warroom-reconciliation-mandiri.js`/`mandiriAdapter.js` sama
+sekali): `getMandiriBalance()` sekarang mundur sampai 30 batch sukses
+terakhir, melewati batch yang `close_balance`-nya 0 di **semua** baris
+(`isMandiriCloseBalanceTrustworthy()`), dan memakai batch valid TERBARU
+yang ditemukan. Kalau tidak ada satu pun dari 30 batch itu yang punya
+close_balance genuine → `BALANCE_UNAVAILABLE` (bukan Rp0). Kalau yang
+dipakai bukan batch paling baru, `business_date`/`balance_timestamp` ikut
+batch itu (lebih lama) — sehingga gate `BALANCE_STALE` di decision engine
+otomatis aktif kalau umurnya sudah lewat `stale_after_minutes`, TANPA
+perlu logic staleness tambahan.
+
+Hasil setelah fix: Mandiri sekarang menampilkan saldo asli dari
+**2026-07-27** (batch valid terakhir), dengan warning eksplisit
+menjelaskan kenapa bukan batch hari ini. Ini **tidak menyelesaikan**
+masalah sync Mandiri yang mendasarinya (di luar scope task ini, perlu
+tim Rekonsiliasi Mandiri cek Apps Script/sheet) — hanya memastikan
+Balance & Funding tidak menampilkan angka palsu selama masalah itu belum
+diperbaiki.
+
+### 14b.3 Test
+
+11 test baru di `test-balance-funding-engine.js` (baseline math, 19:00
+discrepancy, 21:00 cross-bank funding source, current-hour/next-scheduler
+resolve) + 2 test baru di `test-balance-funding-adapters.js` (skip batch
+close_balance-0, UNAVAILABLE kalau semua batch dalam lookback rusak).
+Total 59 test (42 engine + 17 adapter), semua pass.
 
 ## 15. Known Limitations
 

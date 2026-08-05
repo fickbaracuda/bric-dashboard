@@ -71,7 +71,7 @@ test('BCA: tidak ada apa pun -> UNAVAILABLE', async () => {
 // ── MANDIRI (integrasi dgn validateMandiriBalance asli, bukan mock) ──
 test('MANDIRI: baris balanced ASC -> ambil close_balance TERAKHIR (source_row_number terbesar), MEDIUM', async () => {
   const pool = mockPool([
-    { rows: [{ id: 7, business_date: '2026-08-04', synced_at: new Date(), account_no: '456' }] },
+    { rows: [{ id: 7, business_date: '2026-08-04', synced_at: new Date(), account_no: '456' }] }, // daftar batch (LIMIT 30, disini cuma 1)
     { rows: [
       { close_balance: 100, source_row_number: 1, debit: 0, credit: 0 },
       { close_balance: 150, source_row_number: 2, debit: 0, credit: 50 },
@@ -82,13 +82,42 @@ test('MANDIRI: baris balanced ASC -> ambil close_balance TERAKHIR (source_row_nu
   assert.strictEqual(r.balance, 130); // ASC -> terbaru = row terakhir (source_row_number=3)
   assert.strictEqual(r.confidence, 'MEDIUM');
 });
-test('MANDIRI: tidak ada baris close_balance -> UNAVAILABLE', async () => {
+test('MANDIRI: tidak ada baris close_balance sama sekali -> UNAVAILABLE', async () => {
   const pool = mockPool([
     { rows: [{ id: 7, business_date: '2026-08-04', synced_at: new Date() }] },
     { rows: [] },
   ]);
   const r = await getMandiriBalance(pool);
   assert.strictEqual(r.confidence, 'UNAVAILABLE');
+});
+test('MANDIRI: batch terbaru close_balance 0 di SEMUA baris (sync rusak) -> lewati, pakai batch valid berikutnya', async () => {
+  const pool = mockPool([
+    { rows: [
+      { id: 20, business_date: '2026-08-04', synced_at: new Date('2026-08-04T10:00:00Z'), account_no: null }, // rusak (semua 0)
+      { id: 19, business_date: '2026-07-27', synced_at: new Date('2026-07-27T10:00:00Z'), account_no: null }, // valid
+    ] },
+    { rows: [ // batch 20 -- semua close_balance 0
+      { close_balance: 0, source_row_number: 1, debit: 10000, credit: 0 },
+      { close_balance: 0, source_row_number: 2, debit: 5000, credit: 0 },
+    ] },
+    { rows: [ // batch 19 -- ada nonzero, dipercaya
+      { close_balance: 500000000, source_row_number: 1, debit: 0, credit: 0 },
+      { close_balance: 480000000, source_row_number: 2, debit: 20000000, credit: 0 },
+    ] },
+  ]);
+  const r = await getMandiriBalance(pool);
+  assert.strictEqual(r.balance, 480000000); // dari batch 19 (valid), bukan batch 20 (rusak)
+  assert.strictEqual(r.business_date, '2026-07-27');
+  assert.ok(r.warnings.some(w => w.includes('tidak terpercaya')));
+});
+test('MANDIRI: SEMUA batch dalam lookback close_balance 0 -> UNAVAILABLE, bukan Rp0 palsu', async () => {
+  const pool = mockPool([
+    { rows: [{ id: 20, business_date: '2026-08-04', synced_at: new Date() }] },
+    { rows: [{ close_balance: 0, source_row_number: 1, debit: 100, credit: 0 }] },
+  ]);
+  const r = await getMandiriBalance(pool);
+  assert.strictEqual(r.confidence, 'UNAVAILABLE');
+  assert.strictEqual(r.balance, null); // TIDAK PERNAH Rp0 palsu -- null + UNAVAILABLE
 });
 
 // ── BRI / BRI_BIFAST ──
