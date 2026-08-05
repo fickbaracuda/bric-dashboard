@@ -422,3 +422,176 @@ Kalau laptop hilang/dicuri, atau ingin kembali wajib password manual:
 - `~/.ssh/config` juga di luar folder project, tidak ikut Git.
 - `git status` dicek setelah setup ini — tidak ada file baru terkait SSH
   key yang muncul di daftar perubahan repo.
+
+---
+
+## 14. Deploy Hardening — Cegah CPU Saturation & Downtime Saat Deploy (2026-08)
+
+### 14.1 Masalah yang ditemukan (audit read-only, sebelum kode apa pun diubah)
+
+`scripts/safe_deploy.py` versi lama menjalankan `npm run build` **langsung
+di VPS production**, tanpa cek kondisi server apa pun dulu. Audit read-only
+(nproc/free/uptime/df/pm2/ps, tidak mengubah apa pun) menemukan spesifikasi
+VPS produksi ternyata SANGAT terbatas:
+
+| Yang dicek | Nilai nyata (idle) |
+|---|---|
+| CPU | **2 vCPU** |
+| RAM total | 1.6 GB |
+| RAM available (idle) | **~324 MB** |
+| Swap | **0 (tidak ada sama sekali)** |
+| bric-backend (Node) RSS | ~750 MB (45% dari RAM) |
+| Disk terpakai | 74% (10GB tersisa dari 40GB) |
+
+Build frontend (Vite/esbuild/rollup, bundle ~1.9MB) di server sekecil ini
+bisa memenuhi 100% CPU di kedua core sekaligus, DAN karena **tidak ada
+swap**, kalau build butuh RAM lebih dari sisa ~324MB, Linux OOM-killer bisa
+memilih korban — dan proses Node backend (RSS terbesar di server) adalah
+kandidat paling mungkin. Ini menjelaskan kenapa deploy bisa membuat
+production tidak dapat diakses, bukan cuma "lambat".
+
+Ditemukan juga bug laten: `deploy_common.run_remote()` memakai
+`paramiko Channel.exec_command(timeout=N)` — timeout itu **hanya
+menghentikan pembacaan lokal**, TIDAK PERNAH mengirim sinyal ke proses di
+server. Build yang macet/lambat sebelumnya bisa terus berjalan di server
+**selamanya**, tak terlihat, walau script lokal sudah melaporkan gagal.
+
+### 14.2 Resource Preflight Gate
+
+Modul baru `scripts/deploy_resource_guard.py` — dicek SEBELUM build mulai
+(dan SEBELUM langkah manapun yang menyentuh production), fail-closed
+(field yang gagal dibaca dianggap TIDAK aman, bukan diloloskan):
+
+| Kondisi | Ambang batas | Alasan |
+|---|---|---|
+| Load average 1 menit | >= 0.7 × jumlah CPU (1.4 di server 2-core) | Headroom nyata sebelum build menambah beban lagi |
+| RAM available | < 250 MB | Baseline idle server cuma ~324MB — build butuh ruang tumbuh |
+| Swap terpakai | > 50 MB | Tanpa swap, mulai swapping = tanda RAM sudah kritis |
+| Disk tersisa | < 3 GB | Backup/release/pg_dump butuh ruang; disk penuh = kegagalan membingungkan |
+| Backend `/health` | harus 200 | Jangan tambah beban ke server yang sudah bermasalah |
+| Query PostgreSQL aktif >30 detik | > 3 | Proxy aktivitas berat (termasuk kemungkinan sync/import besar) |
+
+Kalau salah satu gagal: **"Deploy ditunda karena resource server sedang
+tinggi."** + daftar alasan spesifik, production TIDAK disentuh sama sekali.
+
+Selama build berjalan, threshold ABORT lebih longgar (build sendiri wajar
+menaikkan CPU) tapi tetap ada batas: load1 >= 1.6×CPU ATAU RAM available
+< 100MB, **berturut-turut selama 15 detik (3x cek tiap 5 detik)** —
+supaya lonjakan sesaat (mis. minifier lagi kerja keras) tidak langsung
+membatalkan build yang sebenarnya akan selesai normal. Ada juga batas
+waktu keras 480 detik (8 menit) apa pun kondisinya.
+
+### 14.3 Change-Aware Deploy
+
+`scripts/deploy_change_classifier.py` — file yang berubah antara HEAD lama
+dan baru (`git diff --name-only`) diklasifikasi:
+- Hanya `frontend/` berubah → build + release, **PM2 TIDAK di-reload**.
+- Hanya `backend/` berubah → **build DILEWATI sepenuhnya**, PM2 reload saja.
+- `docs/`, `scripts/`, `.claude/`, `CLAUDE.md`, dll → **tidak build/reload
+  apa pun**.
+- File yang tidak bisa diklasifikasi (root-level script lama dsb) TIDAK
+  memicu build/reload (konservatif ke arah "jangan kerja ekstra tanpa
+  alasan jelas", karena file semacam itu terbukti secara struktur tidak
+  pernah mempengaruhi runtime frontend/backend).
+
+### 14.4 Build Low-Priority & Termonitor
+
+Kalau build memang perlu (frontend berubah), dijalankan via
+`scripts/deploy_build_monitor.py`:
+- `ionice -c2 -n7 nice -n 15` (fallback otomatis ke `nice` saja kalau
+  `ionice` tidak ada di server — TIDAK pernah gagal hanya karena tooling
+  ini absen).
+- Dijalankan via `setsid` supaya punya process group sendiri, di
+  background, dipantau lewat **polling terpisah** (bukan satu
+  `exec_command` panjang) — ini yang memperbaiki bug paramiko-timeout di
+  atas: sekarang PID grup benar-benar diketahui & bisa dikirim sinyal.
+- Kalau resource kritis berkepanjangan atau melebihi 8 menit: **HANYA
+  process group build ini** yang dihentikan (`kill -TERM` lalu `-KILL`
+  kalau perlu). **TIDAK PERNAH** `pkill node`/`killall node`, **TIDAK
+  PERNAH** menyentuh proses PM2.
+
+### 14.5 Atomic Frontend Release
+
+`scripts/deploy_release_manager.py` menggantikan `cp -r dist/* /var/www/bric/`
+lama (partial-copy yang bisa membuat nginx menyajikan CAMPURAN file lama+
+baru selama proses copy berjalan, dan sulit di-rollback instan):
+
+```
+/var/www/bric-releases/<timestamp>/   <- isi dist lengkap per rilis
+/var/www/bric                          <- SYMLINK ke salah satu folder di atas
+```
+
+Kompatibel 100% dengan `nginx-bric.conf` existing (`root /var/www/bric;`)
+— **TIDAK PERLU** ubah konfigurasi atau reload nginx sama sekali, nginx
+otomatis mengikuti target symlink saat ini (tidak ada `open_file_cache` di
+config yang bisa bikin cache basi).
+
+Switch rilis = re-point symlink (atomic di level filesystem — `ln -sfn`
+ke nama sementara lalu `mv -T` menimpa symlink lama, bukan `ln -sfn`
+langsung, supaya atomicity tidak bergantung pada versi coreutils).
+Rollback = re-point ke rilis sebelumnya, sama-sama instan.
+
+**Bootstrap** (sekali saja, terdeteksi otomatis): saat `/var/www/bric`
+masih direktori asli (belum pernah pakai pola ini), dikonversi lewat satu
+`mv` (pindahkan isi lama jadi arsip rilis) diikuti satu `ln -sfn`
+dieksekusi back-to-back dalam SATU koneksi SSH — window downtime
+sub-detik, jauh lebih singkat dari `cp -r` lama yang bisa makan waktu
+detik-an dengan window inkonsistensi yang jauh lebih panjang.
+
+**Ini menggantikan mekanisme backup `cp -r ... _backup_<timestamp>` yang
+lama** — BUKAN menghapus jaminan keamanannya (rilis lama tetap tersimpan
+utuh, rollback tetap tersedia), tapi memperkuatnya (rollback instan &
+atomic, bukan copy ulang yang lambat & rawan partial-state) sekaligus
+mengurangi tekanan disk (folder `_backup_*` lama menumpuk ~230MB per
+deploy tanpa pernah dibersihkan — 10 folder = ~2.3GB dari 10GB yang
+tersisa saat audit). Rilis lama di-prune otomatis (retensi 5, rilis yang
+SEDANG live tidak pernah ikut dihapus).
+
+### 14.6 Deploy Lock
+
+`scripts/deploy_lock.py` — lock disimpan DI SERVER (`.deploy.lock.d/`,
+dibuat via `mkdir` yang atomic di level filesystem POSIX), mencegah dua
+`safe_deploy.py --execute` berjalan bersamaan (mis. dari 2 komputer
+developer sekaligus) — dua build berbarengan di server 2-vCPU/1.6GB akan
+melipatgandakan tekanan yang justru ingin dicegah. Lock STALE (>20 menit,
+mis. proses lama terputus SSH-nya) otomatis diambil alih, bukan mengunci
+deploy selamanya.
+
+### 14.7 Mode Prebuilt Frontend (opsional)
+
+```
+python scripts/safe_deploy.py --execute --prebuilt-frontend <path.tar.gz> --prebuilt-checksum <sha256>
+```
+
+Build TIDAK dilakukan di VPS sama sekali — tarball hasil build LOKAL
+diupload, **checksum SHA-256 diverifikasi SEBELUM dipakai** (deploy
+DIHENTIKAN kalau tidak cocok, artifact tidak pernah dipakai begitu saja),
+lalu di-extract ke release baru & di-switch atomic sama seperti mode
+build-di-VPS. **Belum jadi default** — build lokal di komputer Windows
+developer saat ini tidak bisa dijalankan langsung dari repo ini (Node.js
+tidak ada di PATH lokal, lihat `CLAUDE.md`). Mode ini disiapkan untuk
+dipakai dari komputer/CI yang punya Node terpasang.
+
+### 14.8 Yang TIDAK berubah
+
+- Ketiga gerbang manual (`BACKUP`/`MIGRATE`/`DEPLOY`) **tetap wajib diketik
+  manual** — `input()` interaktif tidak disentuh sama sekali. `.claude/
+  hooks/guard.py` bahkan memblokir AI mengedit `scripts/safe_deploy.py`
+  langsung (perubahan ini melewati file staging + Authorized Release
+  Maintainer memindahkannya manual, bukan AI menimpa file safety-gate
+  sendiri).
+- Cek file-safety-tooling-vs-file-tak-dikenal di git status server (langkah
+  1) — logic-nya sama persis, tidak diubah.
+- Backend tetap HANYA boleh dikelola lewat
+  `sudo -u admin pm2 reload bric-backend` — tidak ada `pkill`/`nohup`.
+
+### 14.9 Test
+
+`scripts/test_deploy_hardening.py` — murni (tidak ada koneksi SSH
+sungguhan, memakai fake runner terskenario mirip pola mock di test JS
+repo ini): parser resource (`free`/`uptime`/`df`), evaluasi gate resource
+(server sehat vs 7 skenario gagal berbeda), klasifikasi perubahan
+(frontend-only/backend-only/docs-only/mixed/kosong/tak-terklasifikasi),
+deploy lock (fresh/blocked/stale-takeover/release), release manager
+(verify contents/bootstrap/switch/prune), checksum. **31 test, semua
+pass.** Run: `python scripts/test_deploy_hardening.py`
