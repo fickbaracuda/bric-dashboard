@@ -29,6 +29,15 @@ global.Utilities = {
 global.PropertiesService = { getScriptProperties: () => ({ getProperty: () => 'test-token' }) };
 global.Logger = { log: () => {} };
 
+// warroom-mgm.js fail-fast kalau MGM_SYNC_TOKEN/MGM_PA_SYNC_TOKEN kosong —
+// isi dummy HANYA supaya require() di process test ini tidak crash duluan
+// sebelum sempat menguji apa pun (skenario fail-fast sungguhan diuji lewat
+// subprocess terpisah di bawah, bukan lewat require in-process ini). Bukan
+// token asli, tidak pernah dicetak.
+if (!process.env.MGM_SYNC_TOKEN && !process.env.MGM_PA_SYNC_TOKEN) {
+  process.env.MGM_SYNC_TOKEN = 'test-fake-token-for-inline-testing-only';
+}
+
 const assert = require('assert');
 const path = require('path');
 const {
@@ -207,6 +216,64 @@ test('safeBoolean(1) -> true, safeBoolean(0) -> false', () => {
 console.log('\n-- Extra: safeNumber guard --');
 test('safeNumber(undefined) -> 0', () => {
   assert.strictEqual(safeNumber(undefined), 0);
+});
+
+// ─────────────────────────────────────────────────────────────────
+// MGM_SYNC_TOKEN — env-only, fail-fast. Nilai token ASLI TIDAK PERNAH
+// dipakai/dicetak di sini — semua contoh di bawah pakai string dummy
+// ("test-fake-token-not-real", dst.) yang bukan credential sungguhan.
+// Modul di-load di subprocess terpisah (bukan require() langsung di
+// process ini) karena guard `if (!MGM_SYNC_TOKEN) throw` jalan sekali
+// saat module pertama kali di-load — subprocess memastikan tiap skenario
+// env diuji dari kondisi module-cache yang bersih.
+// ─────────────────────────────────────────────────────────────────
+console.log('\n-- MGM_SYNC_TOKEN: env-only config + fail-fast --');
+const { spawnSync } = require('child_process');
+const routePath = path.join(__dirname, '../src/routes/warroom-mgm.js');
+
+function tryLoadWarroomMgm(envOverrides) {
+  // MGM_SYNC_TOKEN & MGM_PA_SYNC_TOKEN SELALU di-set eksplisit (walau ke '')
+  // supaya .env lokal (kalau ada) tidak diam-diam mengisi nilai lewat
+  // dotenv.config() di db.js — dotenv tidak menimpa key yang sudah ada.
+  const env = {
+    ...process.env,
+    MGM_SYNC_TOKEN: '', MGM_PA_SYNC_TOKEN: '',
+    ...envOverrides,
+  };
+  return spawnSync(process.execPath, ['-e', `require(${JSON.stringify(routePath)}); console.log('MODULE_LOADED_OK');`], {
+    env, encoding: 'utf8', timeout: 15000,
+  });
+}
+
+test('module gagal load (fail-fast) kalau MGM_SYNC_TOKEN & MGM_PA_SYNC_TOKEN kosong dua-duanya', () => {
+  const res = tryLoadWarroomMgm({});
+  assert.notStrictEqual(res.status, 0, 'proses harus exit non-zero');
+  assert.ok(/MGM_SYNC_TOKEN or MGM_PA_SYNC_TOKEN must be configured/.test(res.stderr || ''), `stderr harus sebut pesan error yang jelas, dapat: ${res.stderr}`);
+});
+test('module berhasil load kalau HANYA MGM_SYNC_TOKEN terisi', () => {
+  const res = tryLoadWarroomMgm({ MGM_SYNC_TOKEN: 'test-fake-token-not-real' });
+  assert.strictEqual(res.status, 0, `harus exit 0, stderr: ${res.stderr}`);
+  assert.ok(/MODULE_LOADED_OK/.test(res.stdout || ''));
+});
+test('module berhasil load kalau HANYA MGM_PA_SYNC_TOKEN terisi (alias lama tetap didukung)', () => {
+  const res = tryLoadWarroomMgm({ MGM_PA_SYNC_TOKEN: 'test-fake-legacy-token-not-real' });
+  assert.strictEqual(res.status, 0, `harus exit 0, stderr: ${res.stderr}`);
+  assert.ok(/MODULE_LOADED_OK/.test(res.stdout || ''));
+});
+test('tidak ada token literal (bric2026...) tersisa di warroom-mgm.js', () => {
+  const src = require('fs').readFileSync(routePath, 'utf8');
+  assert.ok(!/bric2026/i.test(src), 'source tidak boleh mengandung literal token legacy apa pun');
+});
+
+const { safeTokenEqual } = require('../src/routes/warroom-mgm')._internal;
+test('safeTokenEqual: token benar diterima (pakai nilai dummy, bukan token asli)', () => {
+  assert.strictEqual(safeTokenEqual('dummy-correct-value-abc', 'dummy-correct-value-abc'), true);
+});
+test('safeTokenEqual: token salah ditolak', () => {
+  assert.strictEqual(safeTokenEqual('dummy-wrong-value', 'dummy-correct-value-abc'), false);
+});
+test('safeTokenEqual: panjang beda ditolak tanpa error', () => {
+  assert.strictEqual(safeTokenEqual('short', 'a-much-longer-dummy-value'), false);
 });
 
 console.log(`\n=== Selesai: ${pass} pass, ${fail} fail ===`);

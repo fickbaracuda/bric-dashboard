@@ -8,11 +8,19 @@ const {
   buildPeriodAnalytics,
 } = require('../lib/mgm-utils');
 
-// Part 2A: baca dari env dulu, fallback ke token MGM_PA_SYNC_TOKEN legacy yang
-// sudah dipakai Apps Script existing, supaya tidak ada downtime saat migrasi
-// nama env var. TODO: hapus fallback literal setelah MGM_SYNC_TOKEN dipastikan
-// di-set di server.
-const MGM_SYNC_TOKEN = process.env.MGM_SYNC_TOKEN || process.env.MGM_PA_SYNC_TOKEN || 'bric2026mgmpasecret';
+// Env-only — TIDAK ADA fallback literal (endpoint ini belum pernah live di
+// production, jadi tidak butuh kompatibilitas zero-downtime seperti Part 2A
+// di domain lain). MGM_PA_SYNC_TOKEN dipertahankan sebagai alias sementara
+// karena itu yang sudah ter-set di server; MGM_SYNC_TOKEN adalah nama baru.
+const MGM_SYNC_TOKEN =
+  process.env.MGM_SYNC_TOKEN ||
+  process.env.MGM_PA_SYNC_TOKEN;
+
+if (!MGM_SYNC_TOKEN) {
+  throw new Error(
+    'MGM_SYNC_TOKEN or MGM_PA_SYNC_TOKEN must be configured'
+  );
+}
 
 function safeTokenEqual(a, b) {
   const bufA = Buffer.from(String(a || ''));
