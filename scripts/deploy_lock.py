@@ -7,10 +7,17 @@ berbeda di saat yang sama, atau proses lama yang belum benar-benar selesai
 karena SSH terputus). Dua deploy build berbarengan di server 2-vCPU/1.6GB
 akan melipatgandakan tekanan CPU/RAM persis yang ingin dicegah audit ini.
 
-Lock disimpan di SERVER (bukan lokal) -- `{remote_project}/.deploy.lock`,
-berisi PID (proses safe_deploy.py di komputer yang menjalankannya -- bukan
-PID di server, murni informasi) + timestamp + hostname lokal, supaya lock
-tetap efektif walau dijalankan dari komputer berbeda-beda.
+Lock disimpan di SERVER (bukan lokal), TAPI SENGAJA DI LUAR folder git repo
+(`/tmp/`, bukan `{remote_project}/.deploy.lock`) -- versi awal modul ini
+menaruh lock DI DALAM repo, dan itu menyebabkan bug nyata: langkah 1
+safe_deploy.py sendiri (cek `git status --porcelain` utk file tak dikenal)
+mendeteksi folder lock yang baru dibuat sebagai "perubahan tak dikenal" dan
+membatalkan diri sendiri. Ditaruh di /tmp menghindari kelas bug ini sama
+sekali, tidak perlu whitelist git-status apa pun.
+
+Isi lock: PID (proses safe_deploy.py di komputer yang menjalankannya --
+bukan PID di server, murni informasi) + timestamp + hostname lokal, supaya
+lock tetap efektif walau dijalankan dari komputer berbeda-beda.
 
 STALE LOCK HANDLING: kalau file lock sudah ada TAPI usianya melebihi
 `stale_after_minutes`, dianggap peninggalan proses yang crash/terputus --
@@ -23,12 +30,16 @@ import socket
 import time
 
 
-LOCK_FILE_REL = ".deploy.lock"
+LOCK_DIR_ABS = "/tmp/bric_safe_deploy.lock.d"  # di luar git repo SENGAJA -- lihat catatan di atas
 DEFAULT_STALE_AFTER_MINUTES = 20  # build normal + semua langkah lain harusnya jauh di bawah ini
 
 
 def _lock_path(remote_project: str) -> str:
-    return f"{remote_project}/{LOCK_FILE_REL}"
+    # `remote_project` dipertahankan sbg parameter (dipanggil safe_deploy.py
+    # dgn argumen itu) demi kompatibilitas tanda tangan fungsi, TAPI TIDAK
+    # dipakai lagi -- lock SENGAJA path absolut tetap di /tmp, tidak relatif
+    # ke folder project mana pun.
+    return LOCK_DIR_ABS
 
 
 def _local_identity() -> str:
@@ -51,7 +62,7 @@ def acquire_lock(run_remote_fn, client, remote_project: str, stale_after_minutes
 
     Return (acquired: bool, message: str).
     """
-    lock_dir = _lock_path(remote_project) + ".d"  # pakai mkdir, bukan file biasa -- atomic
+    lock_dir = _lock_path(remote_project)  # pakai mkdir, bukan file biasa -- atomic
     identity = _local_identity()
     now_epoch = int(time.time())
 
@@ -95,7 +106,7 @@ def acquire_lock(run_remote_fn, client, remote_project: str, stale_after_minutes
 
 def release_lock(run_remote_fn, client, remote_project: str):
     """Lepas lock (best-effort -- dipanggil di `finally`, tidak melempar exception kalau gagal)."""
-    lock_dir = _lock_path(remote_project) + ".d"
+    lock_dir = _lock_path(remote_project)
     try:
         run_remote_fn(client, f"rm -rf {lock_dir}")
     except Exception:
