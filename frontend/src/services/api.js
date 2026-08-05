@@ -6,9 +6,9 @@ const API_URL = import.meta.env.VITE_API_URL || '';
 // 5-minute in-memory cache — skips re-fetch when navigating between war-room pages
 const _cache = new Map();
 const WARROOM_TTL = 5 * 60 * 1000;
-function withCache(key, fn) {
+function withCache(key, fn, force = false) {
   const hit = _cache.get(key);
-  if (hit && Date.now() - hit.ts < WARROOM_TTL) return Promise.resolve(hit.data);
+  if (!force && hit && Date.now() - hit.ts < WARROOM_TTL) return Promise.resolve(hit.data);
   return fn().then(data => { _cache.set(key, { data, ts: Date.now() }); return data; });
 }
 
@@ -315,11 +315,11 @@ export const getPAArpuAnalytics = () =>
     axios.get(`${API_URL}/api/warroom/pa-arpu/analytics`, { headers: authHeaders() }).then(r => r.data));
 
 /* WAR-ROOM — MGM PA */
-export const getMgmAnalytics = (bulan) =>
+export const getMgmAnalytics = (bulan, { force = false } = {}) =>
   withCache(`mgm-analytics-${bulan || 'latest'}`, () => {
     const params = bulan ? { bulan } : {};
     return axios.get(`${API_URL}/api/warroom/mgm/analytics`, { params, headers: authHeaders() }).then(r => r.data);
-  });
+  }, force);
 export const searchMgmOutlet = async (q, bulan) => {
   const params = { q, ...(bulan ? { bulan } : {}) };
   const res = await axios.get(`${API_URL}/api/warroom/mgm/search`, { params, headers: authHeaders() });

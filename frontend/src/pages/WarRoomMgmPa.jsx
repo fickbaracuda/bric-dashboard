@@ -24,7 +24,11 @@ function fmt(n) {
   if (num >= 1_000)     return (num / 1_000).toFixed(1) + 'Rb';
   return num.toLocaleString('id-ID');
 }
+// Angka utuh tanpa singkatan Rb/Jt — dipakai utk Total TRX (harus "677", bukan "677Rb")
+function fmtInt(n) { return n == null ? '-' : Number(n).toLocaleString('id-ID'); }
+function fmtPct(n) { return n == null ? '—' : `${Number(n).toLocaleString('id-ID', { maximumFractionDigits: 2 })}%`; }
 function fmtRp(n) { return n == null ? '-' : 'Rp ' + fmt(n); }
+function fmtRpFull(n) { return n == null ? '-' : 'Rp' + Math.round(Number(n)).toLocaleString('id-ID'); }
 function fmtBulan(b) {
   if (!b) return '-';
   const [y, m] = b.split('-');
@@ -161,10 +165,10 @@ export default function WarRoomMgmPa() {
 
   useEffect(() => { fetchData(bulan); }, [bulan]);
 
-  async function fetchData(b) {
+  async function fetchData(b, force = false) {
     setLoading(true); setError(null);
     try {
-      const json = await getMgmAnalytics(b);
+      const json = await getMgmAnalytics(b, { force });
       setData(json);
       if (!b && json.bulan) setBulan(json.bulan);
     } catch (e) {
@@ -232,9 +236,6 @@ export default function WarRoomMgmPa() {
   );
 
   const s = data.summary;
-  const konversiRate = Math.round(
-    (parseInt(s.reg_sudah_aktif) / Math.max(parseInt(s.total_registrasi), 1)) * 100
-  );
 
   const TABS = [
     { id: 'overview', label: 'Overview',        icon: 'ti-layout-dashboard' },
@@ -265,12 +266,24 @@ export default function WarRoomMgmPa() {
                 ))}
               </select>
             )}
-            <button className="wr-btn-update" onClick={() => fetchData(bulan)} disabled={loading}
+            <button className="wr-btn-update" onClick={() => fetchData(bulan, true)} disabled={loading}
               style={{ minWidth: 36, padding: '6px 10px' }}>
               <i className="ti ti-refresh" style={loading ? SPIN : undefined} />
             </button>
           </div>
         </div>
+
+        {/* ── Data Quality Warning ── */}
+        {s.reg_status_unknown > 0 && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            background: '#FEF3C7', color: '#92400E', fontSize: 13,
+            padding: '10px 14px', borderRadius: 8, marginBottom: 12
+          }}>
+            <i className="ti ti-alert-triangle" />
+            Data belum sepenuhnya valid: terdapat {fmt(s.reg_status_unknown)} outlet registrasi dengan status is_active tidak dikenal (tidak dihitung sebagai aktif maupun belum aktif).
+          </div>
+        )}
 
         {/* ── KPI Cards ── */}
         <div className="wrd-kpi-grid wrd-kpi-grid-4">
@@ -283,11 +296,15 @@ export default function WarRoomMgmPa() {
             sub={`${fmt(s.reg_belum_aktif)} belum aktif`}
             color={COLOR_REG} />
           <KPICard label="KONVERSI REG → AKTIF"
-            value={`${konversiRate}%`}
+            value={fmtPct(s.conversion_rate)}
             sub={`${fmt(s.reg_sudah_aktif)} dari ${fmt(s.total_registrasi)}`}
             color={COLOR_KONVERSI} />
+          <KPICard label="RASIO AKTIF VS BELUM AKTIF"
+            value={fmtPct(s.active_inactive_ratio)}
+            sub={`${fmt(s.reg_sudah_aktif)} aktif : ${fmt(s.reg_belum_aktif)} belum`}
+            color="#0EA5E9" />
           <KPICard label="TOTAL TRX"
-            value={fmt(s.total_trx)}
+            value={fmtInt(s.total_trx)}
             sub={`Rev: ${fmtRp(s.total_rev)}`}
             color="#8B5CF6" />
         </div>
@@ -360,20 +377,22 @@ export default function WarRoomMgmPa() {
               <ChartCard title={`Ringkasan — ${fmtBulan(bulan)}`}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '4px 0' }}>
                   {[
-                    { label: 'Total Aktivasi',     val: fmt(s.total_aktivasi),   color: COLOR_AKTIV },
-                    { label: 'Aktif Bertransaksi',  val: fmt(s.aktiv_aktif),      color: '#059669' },
-                    { label: 'Total Registrasi',    val: fmt(s.total_registrasi), color: COLOR_REG },
-                    { label: 'Reg Sudah Aktif',     val: fmt(s.reg_sudah_aktif),  color: COLOR_AKTIV },
-                    { label: 'Reg Belum Aktif',     val: fmt(s.reg_belum_aktif),  color: COLOR_KONVERSI },
-                    { label: 'Total TRX',           val: fmt(s.total_trx),        color: '#8B5CF6' },
-                    { label: 'Total Revenue',       val: fmtRp(s.total_rev),      color: '#EC4899' },
+                    { label: 'Total Aktivasi',              val: fmt(s.total_aktivasi),      color: COLOR_AKTIV },
+                    { label: 'Aktif Bertransaksi',           val: fmt(s.aktiv_aktif),          color: '#059669' },
+                    { label: 'Total Registrasi',             val: fmt(s.total_registrasi),     color: COLOR_REG },
+                    { label: 'Registrasi Sudah Aktif',       val: fmt(s.reg_sudah_aktif),       color: COLOR_AKTIV },
+                    { label: 'Registrasi Belum Aktif',       val: fmt(s.reg_belum_aktif),       color: COLOR_KONVERSI },
+                    { label: 'Registrasi Status Unknown',    val: fmt(s.reg_status_unknown),    color: s.reg_status_unknown > 0 ? '#DC2626' : 'var(--text-3)' },
+                    { label: 'Rasio Aktif vs Belum Aktif',   val: fmtPct(s.active_inactive_ratio), color: '#0EA5E9' },
+                    { label: 'Total TRX',                    val: fmtInt(s.total_trx),          color: '#8B5CF6' },
+                    { label: 'Total Revenue',                val: fmtRp(s.total_rev),           color: '#EC4899', title: fmtRpFull(s.total_rev) },
                   ].map((item, i) => (
                     <div key={i} style={{
                       display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                       padding: '7px 12px', background: 'var(--bg-page)', borderRadius: 8
                     }}>
                       <span style={{ fontSize: 13, color: 'var(--text-2)' }}>{item.label}</span>
-                      <span style={{ fontWeight: 700, color: item.color }}>{item.val}</span>
+                      <span style={{ fontWeight: 700, color: item.color }} title={item.title}>{item.val}</span>
                     </div>
                   ))}
                 </div>
@@ -592,12 +611,13 @@ export default function WarRoomMgmPa() {
                           <td style={{ fontSize: 12 }}>{r.nama_kota || '-'}</td>
                           <td style={{ fontSize: 12 }}>{r.tanggal_registrasi ? String(r.tanggal_registrasi).substring(0, 10) : '-'}</td>
                           <td>
-                            <span className="wrd-badge" style={{
-                              background: r.tanggal_aktifasi ? COLOR_AKTIV + '20' : COLOR_KONVERSI + '20',
-                              color: r.tanggal_aktifasi ? COLOR_AKTIV : COLOR_KONVERSI, fontSize: 10
-                            }}>
-                              {r.tanggal_aktifasi ? 'Sudah Aktif' : 'Belum Aktif'}
-                            </span>
+                            {r.is_active === 1 ? (
+                              <span className="wrd-badge" style={{ background: COLOR_AKTIV + '20', color: COLOR_AKTIV, fontSize: 10 }}>Sudah Aktif</span>
+                            ) : r.is_active === 0 ? (
+                              <span className="wrd-badge" style={{ background: COLOR_KONVERSI + '20', color: COLOR_KONVERSI, fontSize: 10 }}>Belum Aktif</span>
+                            ) : (
+                              <span className="wrd-badge" style={{ background: '#9CA3AF20', color: '#6B7280', fontSize: 10 }}>Unknown</span>
+                            )}
                           </td>
                         </tr>
                       ))}
@@ -769,10 +789,13 @@ export default function WarRoomMgmPa() {
                               <td style={{ fontSize: 12 }}>{r.tanggal_registrasi ? String(r.tanggal_registrasi).substring(0, 10) : '-'}</td>
                               <td style={{ fontSize: 12 }}>{r.tanggal_aktifasi  ? String(r.tanggal_aktifasi).substring(0, 10)  : '-'}</td>
                               <td>
-                                <span className="wrd-badge" style={{
-                                  background: r.tanggal_aktifasi ? COLOR_AKTIV + '20' : COLOR_KONVERSI + '20',
-                                  color: r.tanggal_aktifasi ? COLOR_AKTIV : COLOR_KONVERSI, fontSize: 10
-                                }}>{r.tanggal_aktifasi ? 'Sudah Aktif' : 'Belum Aktif'}</span>
+                                {r.is_active === 1 ? (
+                                  <span className="wrd-badge" style={{ background: COLOR_AKTIV + '20', color: COLOR_AKTIV, fontSize: 10 }}>Sudah Aktif</span>
+                                ) : r.is_active === 0 ? (
+                                  <span className="wrd-badge" style={{ background: COLOR_KONVERSI + '20', color: COLOR_KONVERSI, fontSize: 10 }}>Belum Aktif</span>
+                                ) : (
+                                  <span className="wrd-badge" style={{ background: '#9CA3AF20', color: '#6B7280', fontSize: 10 }}>Unknown</span>
+                                )}
                               </td>
                             </tr>
                           ))}

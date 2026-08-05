@@ -876,6 +876,23 @@ router.get('/pa-arpu/analytics', async (req, res) => {
 // TODO Part 2B/2C: hapus fallback literal setelah MGM_PA_SYNC_TOKEN dipastikan di-set di server.
 const MGM_SYNC_TOKEN = process.env.MGM_PA_SYNC_TOKEN || 'bric2026mgmpasecret';
 
+// is_active WAJIB dinormalisasi strict — '0' truthy di JS pernah bikin salah klasifikasi
+// (lihat insiden cleanNum Speedcash di CLAUDE.md). Nilai selain 0/1/'0'/'1' = unknown (null),
+// BUKAN otomatis dianggap 0 — kolom is_active nullable di kedua tabel mgm_*.
+function normalizeIsActive(value) {
+  if (value === 1 || value === '1') return 1;
+  if (value === 0 || value === '0') return 0;
+  const normalized = String(value ?? '').trim();
+  if (normalized === '1') return 1;
+  if (normalized === '0') return 0;
+  return null;
+}
+
+function toNum(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
 async function mgmSyncHandler(req, res) {
   const token = req.headers['x-sync-token'] || req.body?.token;
   if (token !== MGM_SYNC_TOKEN) return res.status(401).json({ error: 'Unauthorized' });
@@ -890,8 +907,27 @@ async function mgmSyncHandler(req, res) {
     await client.query('BEGIN');
     let aktUpsert = 0, regUpsert = 0;
 
+    const aktAudit = {
+      source_rows: aktivasi.length, valid_id_rows: 0, blank_id_count: 0,
+      unique_id_count: 0, duplicate_id_count: 0,
+      total_trx: 0, total_revenue: 0, invalid_trx_count: 0, invalid_revenue_count: 0,
+    };
+    const seenAktIds = new Set();
+
     for (const r of aktivasi) {
-      if (!r.id_outlet) continue;
+      const idOutlet = String(r.id_outlet ?? '').trim();
+      if (!idOutlet) { aktAudit.blank_id_count++; continue; }
+      aktAudit.valid_id_rows++;
+      if (seenAktIds.has(idOutlet)) aktAudit.duplicate_id_count++;
+      else seenAktIds.add(idOutlet);
+
+      if (r.trx != null && r.trx !== '' && !Number.isFinite(Number(r.trx))) aktAudit.invalid_trx_count++;
+      if (r.rev != null && r.rev !== '' && !Number.isFinite(Number(r.rev))) aktAudit.invalid_revenue_count++;
+      const trx = toNum(r.trx);
+      const rev = toNum(r.rev);
+      aktAudit.total_trx += trx;
+      aktAudit.total_revenue += rev;
+
       await client.query(`
         INSERT INTO mgm_aktivasi
           (bulan, upline, id_outlet, nama_pemilik, tipe_outlet, balance, is_active,
@@ -904,16 +940,34 @@ async function mgmSyncHandler(req, res) {
           nama_propinsi=EXCLUDED.nama_propinsi, tanggal_aktifasi=EXCLUDED.tanggal_aktifasi,
           trx=EXCLUDED.trx, rev=EXCLUDED.rev, synced_at=NOW()
       `, [
-        bulan, r.upline || null, r.id_outlet, r.nama_pemilik || null,
-        r.tipe_outlet || null, r.balance || 0, r.is_active || 0,
+        bulan, r.upline || null, idOutlet, r.nama_pemilik || null,
+        r.tipe_outlet || null, toNum(r.balance), normalizeIsActive(r.is_active),
         r.nama_kota || null, r.nama_propinsi || null,
-        r.tanggal_aktifasi || null, r.trx || 0, r.rev || 0
+        r.tanggal_aktifasi || null, trx, rev
       ]);
       aktUpsert++;
     }
+    aktAudit.unique_id_count = seenAktIds.size;
+
+    const regAudit = {
+      source_rows: registrasi.length, valid_id_rows: 0, blank_id_count: 0,
+      unique_id_count: 0, duplicate_id_count: 0,
+      active_1_count: 0, inactive_0_count: 0, unknown_is_active_count: 0,
+    };
+    const seenRegIds = new Set();
 
     for (const r of registrasi) {
-      if (!r.id_outlet) continue;
+      const idOutlet = String(r.id_outlet ?? '').trim();
+      if (!idOutlet) { regAudit.blank_id_count++; continue; }
+      regAudit.valid_id_rows++;
+      if (seenRegIds.has(idOutlet)) regAudit.duplicate_id_count++;
+      else seenRegIds.add(idOutlet);
+
+      const isActive = normalizeIsActive(r.is_active);
+      if (isActive === 1) regAudit.active_1_count++;
+      else if (isActive === 0) regAudit.inactive_0_count++;
+      else regAudit.unknown_is_active_count++;
+
       await client.query(`
         INSERT INTO mgm_registrasi
           (bulan, upline, id_outlet, nama_pemilik, tipe_outlet, balance, is_active,
@@ -927,16 +981,20 @@ async function mgmSyncHandler(req, res) {
           tanggal_registrasi=EXCLUDED.tanggal_registrasi,
           tanggal_aktifasi=EXCLUDED.tanggal_aktifasi, synced_at=NOW()
       `, [
-        bulan, r.upline || null, r.id_outlet, r.nama_pemilik || null,
-        r.tipe_outlet || null, r.balance || 0, r.is_active || 0,
+        bulan, r.upline || null, idOutlet, r.nama_pemilik || null,
+        r.tipe_outlet || null, toNum(r.balance), isActive,
         r.nama_kota || null, r.nama_propinsi || null,
         r.tanggal_registrasi || null, r.tanggal_aktifasi || null
       ]);
       regUpsert++;
     }
+    regAudit.unique_id_count = seenRegIds.size;
 
     await client.query('COMMIT');
-    res.json({ ok: true, bulan, aktivasi: aktUpsert, registrasi: regUpsert });
+    res.json({
+      ok: true, bulan, aktivasi: aktUpsert, registrasi: regUpsert,
+      audit: { aktivasi: aktAudit, registrasi: regAudit },
+    });
   } catch (e) {
     await client.query('ROLLBACK');
     console.error('mgmSyncHandler error:', e);
@@ -966,14 +1024,30 @@ async function mgmAnalyticsHandler(req, res) {
       provinsiRes, trendRes, recentAktivRes, recentRegRes
     ] = await Promise.all([
       pool.query(`
+        WITH registrasi_summary AS (
+          SELECT
+            COUNT(*)::int AS total_registrasi,
+            COUNT(*) FILTER (WHERE is_active = 1)::int AS reg_sudah_aktif,
+            COUNT(*) FILTER (WHERE is_active = 0)::int AS reg_belum_aktif,
+            COUNT(*) FILTER (WHERE is_active IS NULL)::int AS reg_status_unknown
+          FROM mgm_registrasi WHERE bulan = $1
+        ),
+        aktivasi_summary AS (
+          SELECT
+            COUNT(DISTINCT NULLIF(TRIM(id_outlet), ''))::int AS total_aktivasi,
+            COUNT(*) FILTER (WHERE is_active = 1)::int AS aktiv_aktif,
+            COALESCE(SUM(trx), 0)::bigint AS total_trx,
+            COALESCE(SUM(rev), 0) AS total_rev
+          FROM mgm_aktivasi WHERE bulan = $1
+        )
         SELECT
-          (SELECT COUNT(*) FROM mgm_aktivasi WHERE bulan=$1)::int AS total_aktivasi,
-          (SELECT COALESCE(SUM(trx),0) FROM mgm_aktivasi WHERE bulan=$1)::bigint AS total_trx,
-          (SELECT COALESCE(SUM(rev),0) FROM mgm_aktivasi WHERE bulan=$1) AS total_rev,
-          (SELECT COUNT(*) FROM mgm_aktivasi WHERE bulan=$1 AND is_active=1)::int AS aktiv_aktif,
-          (SELECT COUNT(*) FROM mgm_registrasi WHERE bulan=$1)::int AS total_registrasi,
-          (SELECT COUNT(*) FROM mgm_registrasi WHERE bulan=$1 AND tanggal_aktifasi IS NOT NULL)::int AS reg_sudah_aktif,
-          (SELECT COUNT(*) FROM mgm_registrasi WHERE bulan=$1 AND tanggal_aktifasi IS NULL)::int AS reg_belum_aktif
+          a.total_aktivasi, a.total_trx, a.total_rev, a.aktiv_aktif,
+          r.total_registrasi, r.reg_sudah_aktif, r.reg_belum_aktif, r.reg_status_unknown,
+          CASE WHEN r.total_registrasi > 0
+               THEN ROUND(r.reg_sudah_aktif * 100.0 / r.total_registrasi, 2) END AS conversion_rate,
+          CASE WHEN r.reg_belum_aktif > 0
+               THEN ROUND(r.reg_sudah_aktif * 100.0 / r.reg_belum_aktif, 2) END AS active_inactive_ratio
+        FROM registrasi_summary r CROSS JOIN aktivasi_summary a
       `, [bulan]),
 
       pool.query(`
@@ -1000,7 +1074,7 @@ async function mgmAnalyticsHandler(req, res) {
 
       pool.query(`
         SELECT upline, COUNT(*)::int as jumlah_rekrut,
-               COUNT(*) FILTER (WHERE tanggal_aktifasi IS NOT NULL)::int as sudah_aktif
+               COUNT(*) FILTER (WHERE is_active = 1)::int as sudah_aktif
         FROM mgm_registrasi WHERE bulan=$1 AND upline IS NOT NULL
         GROUP BY upline ORDER BY jumlah_rekrut DESC LIMIT 15
       `, [bulan]),
@@ -1008,9 +1082,9 @@ async function mgmAnalyticsHandler(req, res) {
       pool.query(`
         SELECT upline,
                COUNT(*)::int as total_reg,
-               COUNT(*) FILTER (WHERE tanggal_aktifasi IS NOT NULL)::int as sudah_aktif,
+               COUNT(*) FILTER (WHERE is_active = 1)::int as sudah_aktif,
                ROUND(
-                 COUNT(*) FILTER (WHERE tanggal_aktifasi IS NOT NULL) * 100.0 / NULLIF(COUNT(*),0)
+                 COUNT(*) FILTER (WHERE is_active = 1) * 100.0 / NULLIF(COUNT(*),0)
                ,1) as pct_konversi
         FROM mgm_registrasi WHERE bulan=$1 AND upline IS NOT NULL
         GROUP BY upline HAVING COUNT(*) >= 3
@@ -1127,3 +1201,5 @@ module.exports.paProdukSyncHandler  = paProdukSyncHandler;
 module.exports.paArpuSyncHandler    = paArpuSyncHandler;
 module.exports.mgmSyncHandler       = mgmSyncHandler;
 module.exports.mgmAnalyticsHandler  = mgmAnalyticsHandler;
+module.exports.normalizeIsActive    = normalizeIsActive;
+module.exports.toNum                = toNum;
