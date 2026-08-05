@@ -120,7 +120,10 @@ async function main() {
          ON CONFLICT (plan_id, hour_of_day) DO UPDATE SET
            hour_label = EXCLUDED.hour_label, nominal_average = EXCLUDED.nominal_average,
            transaksi_trf = EXCLUDED.transaksi_trf, planned_balance = EXCLUDED.planned_balance, updated_at = NOW()`,
-        [plan.id, row.hour, `${String(row.hour).padStart(2, '0')}:00 - ${String(row.hour).padStart(2, '0')}:59`, row.avg, row.trf, row.planned]
+        // hour_label VARCHAR(10) -- format singkat "HH:00" (sama konvensi OCBC),
+        // BUKAN "HH:00 - HH:59" (13 char, melebihi kolom). hour_of_day (integer)
+        // tetap source of truth, hour_label murni kosmetik.
+        [plan.id, row.hour, `${String(row.hour).padStart(2, '0')}:00`, row.avg, row.trf, row.planned]
       );
     }
     console.log(`Hourly plan: ${HOURLY_PLAN.length} baris upsert.`);
