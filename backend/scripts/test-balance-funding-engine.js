@@ -6,11 +6,12 @@
 
 const assert = require('assert');
 const {
-  RECOMMENDATION, PLAN_STATUS,
+  RECOMMENDATION, PLAN_STATUS, URGENCY,
   getJakartaParts, jakartaBusinessDate, timeStringToMinutes,
   calculateVariance, findNextSchedule, calculateBurnUntilNextSchedule,
   calculateProjectedBalance, calculateRequiredFunding, calculateFundingRecommendation,
-  deriveScheduleDisplayStatus, calculateBankRecommendation,
+  deriveScheduleDisplayStatus, deriveScheduleOverdueMinutes, deriveSchedulerUrgency,
+  scheduledTimeToAbsolute, needsFinanceActionAlert, calculateBankRecommendation,
 } = require('../src/balanceFunding/balanceFundingEngine');
 
 const tests = [];
@@ -148,12 +149,84 @@ test('batas persis CANCEL (required == tolerance)', () => {
   assert.strictEqual(r.recommendation, RECOMMENDATION.CANCEL);
 });
 
-// ── deriveScheduleDisplayStatus ──
-test('deriveScheduleDisplayStatus: lewat waktu, masih SCHEDULED -> COMPLETED', () => {
-  assert.strictEqual(deriveScheduleDisplayStatus({ scheduled_time: '09:00', status: 'SCHEDULED' }, 14 * 60), 'COMPLETED');
+// ── deriveScheduleDisplayStatus / overdue (spec section 4 -- Balance Position
+// Time & Funding Countdown enhancement: scheduler lewat waktu tapi masih
+// SCHEDULED sekarang SCHEDULER_OVERDUE, BUKAN diam-diam 'COMPLETED') ──
+test('deriveScheduleDisplayStatus: lewat waktu, masih SCHEDULED -> SCHEDULER_OVERDUE', () => {
+  assert.strictEqual(deriveScheduleDisplayStatus({ scheduled_time: '09:00', status: 'SCHEDULED' }, 14 * 60), 'SCHEDULER_OVERDUE');
+});
+test('deriveScheduleDisplayStatus: lewat waktu, status CONFIRMED -> tetap SCHEDULER_OVERDUE', () => {
+  assert.strictEqual(deriveScheduleDisplayStatus({ scheduled_time: '09:00', status: 'CONFIRMED' }, 14 * 60), 'SCHEDULER_OVERDUE');
 });
 test('deriveScheduleDisplayStatus: CANCELLED tetap CANCELLED', () => {
   assert.strictEqual(deriveScheduleDisplayStatus({ scheduled_time: '09:00', status: 'CANCELLED' }, 14 * 60), 'CANCELLED');
+});
+test('deriveScheduleDisplayStatus: sudah eksplisit COMPLETED -> tetap COMPLETED', () => {
+  assert.strictEqual(deriveScheduleDisplayStatus({ scheduled_time: '09:00', status: 'COMPLETED' }, 14 * 60), 'COMPLETED');
+});
+test('deriveScheduleDisplayStatus: belum lewat -> UPCOMING', () => {
+  assert.strictEqual(deriveScheduleDisplayStatus({ scheduled_time: '15:00', status: 'SCHEDULED' }, 14 * 60), 'UPCOMING');
+});
+test('deriveScheduleOverdueMinutes: TERLAMBAT 5 menit', () => {
+  assert.strictEqual(deriveScheduleOverdueMinutes({ scheduled_time: '09:00', status: 'SCHEDULED' }, 9 * 60 + 5), 5);
+});
+test('deriveScheduleOverdueMinutes: belum overdue -> null', () => {
+  assert.strictEqual(deriveScheduleOverdueMinutes({ scheduled_time: '15:00', status: 'SCHEDULED' }, 14 * 60), null);
+});
+
+// ── deriveSchedulerUrgency (spec section 5 -- ambang batas urgency) ──
+test('deriveSchedulerUrgency: >60 menit -> NORMAL', () => {
+  assert.strictEqual(deriveSchedulerUrgency(61), URGENCY.NORMAL);
+});
+test('deriveSchedulerUrgency: persis 60 menit -> WATCH', () => {
+  assert.strictEqual(deriveSchedulerUrgency(60), URGENCY.WATCH);
+});
+test('deriveSchedulerUrgency: persis 31 menit -> WATCH', () => {
+  assert.strictEqual(deriveSchedulerUrgency(31), URGENCY.WATCH);
+});
+test('deriveSchedulerUrgency: persis 30 menit -> WARNING', () => {
+  assert.strictEqual(deriveSchedulerUrgency(30), URGENCY.WARNING);
+});
+test('deriveSchedulerUrgency: persis 16 menit -> WARNING', () => {
+  assert.strictEqual(deriveSchedulerUrgency(16), URGENCY.WARNING);
+});
+test('deriveSchedulerUrgency: persis 15 menit -> URGENT', () => {
+  assert.strictEqual(deriveSchedulerUrgency(15), URGENCY.URGENT);
+});
+test('deriveSchedulerUrgency: 1 menit -> URGENT', () => {
+  assert.strictEqual(deriveSchedulerUrgency(1), URGENCY.URGENT);
+});
+test('deriveSchedulerUrgency: 0 menit -> URGENT', () => {
+  assert.strictEqual(deriveSchedulerUrgency(0), URGENCY.URGENT);
+});
+test('deriveSchedulerUrgency: negatif (lewat) -> OVERDUE', () => {
+  assert.strictEqual(deriveSchedulerUrgency(-5), URGENCY.OVERDUE);
+});
+test('deriveSchedulerUrgency: null/non-numerik -> null', () => {
+  assert.strictEqual(deriveSchedulerUrgency(null), null);
+});
+
+// ── scheduledTimeToAbsolute (spec section 3 -- absolute instant utk countdown lokal frontend) ──
+test('scheduledTimeToAbsolute: 18:00 business_date 2026-07-15 -> instant WIB benar', () => {
+  const d = scheduledTimeToAbsolute('2026-07-15', '18:00');
+  assert.strictEqual(d.toISOString(), '2026-07-15T11:00:00.000Z'); // 18:00 WIB = 11:00 UTC
+});
+test('scheduledTimeToAbsolute: businessDate kosong -> null', () => {
+  assert.strictEqual(scheduledTimeToAbsolute(null, '18:00'), null);
+});
+
+// ── needsFinanceActionAlert (spec section 6) ──
+test('needsFinanceActionAlert: ADD + URGENT -> true', () => {
+  assert.strictEqual(needsFinanceActionAlert('ADD', URGENCY.URGENT), true);
+});
+test('needsFinanceActionAlert: CANCEL + OVERDUE -> true', () => {
+  assert.strictEqual(needsFinanceActionAlert('CANCEL', URGENCY.OVERDUE), true);
+});
+test('needsFinanceActionAlert: KEEP + URGENT -> false (spec: KEEP tidak pernah alert kritikal)', () => {
+  assert.strictEqual(needsFinanceActionAlert('KEEP', URGENCY.URGENT), false);
+});
+test('needsFinanceActionAlert: ADD + WATCH (belum dekat) -> false', () => {
+  assert.strictEqual(needsFinanceActionAlert('ADD', URGENCY.WATCH), false);
 });
 
 // ── calculateBankRecommendation — end-to-end pakai contoh OCBC section 54 ──
@@ -189,6 +262,90 @@ test('OCBC @14:00 actual 550.709.919 -> KEEP', () => {
     balanceInfo: balanceInfo(550709919),
   });
   assert.strictEqual(r.recommendation, RECOMMENDATION.KEEP);
+});
+
+// ── Countdown/urgency terpasang di next_schedule (spec section 3/5) ──
+test('next_schedule punya minutes_to_next_scheduler & next_scheduler_time & urgency', () => {
+  const r = calculateBankRecommendation({
+    now: jakartaTime(14, 20), targetBankCode: 'OCBC', hourlyPlan: OCBC_HOURLY_PLAN, schedules: OCBC_SCHEDULES,
+    balanceInfo: balanceInfo(550709919, { balance_timestamp: jakartaTime(14, 20) }),
+  });
+  assert.strictEqual(r.next_schedule.scheduled_time, '15:00');
+  assert.strictEqual(r.next_schedule.minutes_to_next_scheduler, 40);
+  assert.strictEqual(r.next_schedule.urgency, URGENCY.WATCH); // 40 menit -> WATCH (31-60)
+  assert.strictEqual(r.next_schedule.next_scheduler_time.toISOString(), '2026-07-15T08:00:00.000Z'); // 15:00 WIB = 08:00 UTC
+});
+
+// ── Finance Action Alert end-to-end (spec section 6) -- fixture kecil
+// tersendiri (bukan OCBC section-54) supaya kategori ADD/REDUCE/CANCEL/KEEP
+// bisa dikontrol persis dekat scheduler (burn_until_next mengecil drastis
+// mendekati jam scheduler, menggeser ambang batas dibanding awal jam --
+// dibuktikan sendiri: fixture OCBC section-54 di jam 14:50 tidak bisa
+// mencapai kategori ADD sama sekali sedekat itu ke scheduler 15:00).
+// target_planned_balance jam 11 = 5.000.000, existing scheduler = 2.000.000,
+// tolerance = 100.000, nominal_average jam 10 = 0 (burn=0 apa pun waktunya).
+const ALERT_HOURLY_PLAN = [
+  { hour_of_day: 10, nominal_average: 0, planned_balance: 1000000 },
+  { hour_of_day: 11, nominal_average: 0, planned_balance: 5000000 },
+];
+const ALERT_SCHEDULES = [
+  { id: 1, target_bank_code: 'OCBC', scheduled_time: '11:00', funding_source_code: 'MANDIRI', scheduled_amount: 2000000, status: 'SCHEDULED' },
+];
+function alertBalanceInfo(balance, ts) {
+  return { balance, confidence: 'HIGH', business_date: jakartaBusinessDate(ts), balance_timestamp: ts, warnings: [] };
+}
+test('ADD + URGENT (10 menit lagi) -> finance_action_alert true', () => {
+  const now = jakartaTime(10, 50);
+  const r = calculateBankRecommendation({
+    now, targetBankCode: 'OCBC', hourlyPlan: ALERT_HOURLY_PLAN, schedules: ALERT_SCHEDULES,
+    balanceInfo: alertBalanceInfo(0, now), schedulerTolerance: 100000,
+  });
+  assert.strictEqual(r.recommendation, RECOMMENDATION.ADD);
+  assert.strictEqual(r.next_schedule.urgency, URGENCY.URGENT);
+  assert.strictEqual(r.next_schedule.minutes_to_next_scheduler, 10);
+  assert.strictEqual(r.next_schedule.finance_action_alert, true);
+});
+test('CANCEL + URGENT (10 menit lagi) -> finance_action_alert true', () => {
+  const now = jakartaTime(10, 50);
+  const r = calculateBankRecommendation({
+    now, targetBankCode: 'OCBC', hourlyPlan: ALERT_HOURLY_PLAN, schedules: ALERT_SCHEDULES,
+    balanceInfo: alertBalanceInfo(6000000, now), schedulerTolerance: 100000,
+  });
+  assert.strictEqual(r.recommendation, RECOMMENDATION.CANCEL);
+  assert.strictEqual(r.next_schedule.urgency, URGENCY.URGENT);
+  assert.strictEqual(r.next_schedule.finance_action_alert, true);
+});
+test('REDUCE + URGENT (10 menit lagi) -> finance_action_alert true', () => {
+  const now = jakartaTime(10, 50);
+  const r = calculateBankRecommendation({
+    now, targetBankCode: 'OCBC', hourlyPlan: ALERT_HOURLY_PLAN, schedules: ALERT_SCHEDULES,
+    balanceInfo: alertBalanceInfo(4000000, now), schedulerTolerance: 100000,
+  });
+  assert.strictEqual(r.recommendation, RECOMMENDATION.REDUCE);
+  assert.strictEqual(r.next_schedule.urgency, URGENCY.URGENT);
+  assert.strictEqual(r.next_schedule.finance_action_alert, true);
+});
+test('KEEP + URGENT (10 menit lagi) -> finance_action_alert TETAP false (spec: KEEP tidak pernah alert kritikal)', () => {
+  const now = jakartaTime(10, 50);
+  const r = calculateBankRecommendation({
+    now, targetBankCode: 'OCBC', hourlyPlan: ALERT_HOURLY_PLAN, schedules: ALERT_SCHEDULES,
+    balanceInfo: alertBalanceInfo(3000000, now), schedulerTolerance: 100000,
+  });
+  assert.strictEqual(r.recommendation, RECOMMENDATION.KEEP);
+  assert.strictEqual(r.next_schedule.urgency, URGENCY.URGENT); // urgency tetap dihitung apa adanya...
+  assert.strictEqual(r.next_schedule.finance_action_alert, false); // ...tapi TIDAK memicu alert krn KEEP
+});
+test('BALANCE_STALE tetap punya urgency/countdown next_schedule (murni fungsi waktu, independen saldo)', () => {
+  const staleTimestamp = new Date(jakartaTime(14, 50).getTime() - 120 * 60000);
+  const r = calculateBankRecommendation({
+    now: jakartaTime(14, 50), targetBankCode: 'OCBC', hourlyPlan: OCBC_HOURLY_PLAN, schedules: OCBC_SCHEDULES,
+    balanceInfo: balanceInfo(1600000000, { balance_timestamp: staleTimestamp }),
+    staleAfterMinutes: 60,
+  });
+  assert.strictEqual(r.recommendation, RECOMMENDATION.BALANCE_STALE);
+  assert.strictEqual(r.next_schedule.minutes_to_next_scheduler, 10);
+  assert.strictEqual(r.next_schedule.urgency, URGENCY.URGENT);
+  assert.strictEqual(r.next_schedule.finance_action_alert, false); // BALANCE_STALE bukan ADD/REDUCE/CANCEL
 });
 
 // ── Fail-safe gates (spec section 6/40/41/42/67) ──

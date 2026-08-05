@@ -564,7 +564,10 @@ function joinQrisPipeline(merchantRows, kycRows, verifRows, ptenRows, { now = ne
 // JSONB per id_outlet (upsert, bukan insert-per-bulan), mirip pola data-raw.js
 // tapi dengan primary key id_outlet langsung supaya join di joinQrisPipeline()
 // tidak perlu transformasi balik dari kolom DB ke nama header sheet.
-const SYNC_TOKEN = 'bric2026bimasaktisecret';
+// Part 2A: baca dari env dulu, fallback ke nilai lama agar Apps Script existing tidak putus.
+// TODO Part 2B/2C: hapus fallback literal setelah APPS_SCRIPT_TOKEN dipastikan di-set di server.
+// CATATAN: perubahan ini HANYA mengganti sumber token, TIDAK mengubah stage/SLA/priority engine di bawah.
+const SYNC_TOKEN = process.env.APPS_SCRIPT_TOKEN || 'bric2026bimasaktisecret';
 const CHUNK = 500;
 
 const CTRL_TABLES = {

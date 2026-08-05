@@ -45,6 +45,16 @@ const PLAN_STATUS_META = {
 };
 function planStatusMeta(s) { return PLAN_STATUS_META[s] || { label: s || '-', color: '#6B7280', bg: '#F3F4F6' }; }
 
+const URGENCY_META = {
+  NORMAL: { label: 'Normal', color: '#059669', bg: '#DCFCE7' },
+  WATCH: { label: 'Watch', color: '#2563EB', bg: '#DBEAFE' },
+  WARNING: { label: 'Warning', color: '#D97706', bg: '#FFEDD5' },
+  URGENT: { label: 'Urgent', color: '#DC2626', bg: '#FEE2E2' },
+  OVERDUE: { label: 'Overdue', color: '#991B1B', bg: '#FEE2E2' },
+};
+function urgencyMeta(u) { return URGENCY_META[u] || { label: '-', color: '#6B7280', bg: '#F3F4F6' }; }
+const ACTIONABLE_RECO = new Set(['ADD', 'REDUCE', 'CANCEL']);
+
 const CONFIDENCE_META = {
   HIGH: { label: 'HIGH', color: '#059669', bg: '#DCFCE7' },
   MEDIUM: { label: 'MEDIUM', color: '#D97706', bg: '#FFEDD5' },
@@ -78,12 +88,131 @@ function fmtDateTime(v) {
   return d.toLocaleString('id-ID', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'Asia/Jakarta' }) + ' WIB';
 }
 
+/**
+ * Balance Position Time: pecah balance_info jadi bagian siap-tampil sesuai
+ * presisi sumbernya. TIDAK PERNAH mengarang jam kalau precision='DATE'
+ * (OCBC/BCA -- source cuma punya tanggal, lihat backend bankBalanceAdapters.js)
+ * -- spec section 1/2/11: jangan samakan posisi saldo dgn waktu sync, dan
+ * jangan fallback ke NOW() kalau tidak bisa dibuktikan.
+ */
+function positionTimeParts(balanceInfo) {
+  const bp = balanceInfo?.balance_position_time;
+  const precision = balanceInfo?.balance_position_precision;
+  const ageMin = balanceInfo?.balance_age_minutes;
+  if (!bp) return { available: false };
+  const d = new Date(bp);
+  if (Number.isNaN(d.getTime())) return { available: false };
+  if (precision === 'MINUTE') {
+    const clock = d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Jakarta', hour12: false }) + ' WIB';
+    const age = ageMin === null || ageMin === undefined ? null : (ageMin < 1 ? 'baru saja' : `${ageMin} menit lalu`);
+    return { available: true, precision, clockOrDate: clock, ageLabel: age };
+  }
+  // DATE precision (OCBC/BCA) -- tampilkan sbg tanggal, BUKAN klaim jam:menit yang tidak bisa dibuktikan.
+  const dateStr = d.toLocaleDateString('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Asia/Jakarta' });
+  const days = ageMin === null || ageMin === undefined ? null : Math.floor(ageMin / 1440);
+  const age = days === null ? null : (days <= 0 ? 'data hari ini' : `${days} hari lalu`);
+  return { available: true, precision, clockOrDate: dateStr, ageLabel: age };
+}
+
+/** Teks persis spec section 9 ("Saldo terakhir posisi HH:mm WIB — X menit lalu. Tunggu data terbaru..."). */
+function staleMessage(balanceInfo) {
+  const pos = positionTimeParts(balanceInfo);
+  if (!pos.available) return 'Waktu posisi saldo tidak tersedia. Tunggu data terbaru sebelum mengambil keputusan funding.';
+  return `Saldo terakhir posisi ${pos.clockOrDate}${pos.ageLabel ? ' — ' + pos.ageLabel : ''}. Tunggu data terbaru sebelum mengambil keputusan funding.`;
+}
+
+/** Re-render berkala TANPA hit API (spec section 3) -- cuma dorong ulang komponen supaya countdown lokal ikut bergerak. */
+function useTick(intervalMs) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick(t => t + 1), intervalMs);
+    return () => clearInterval(id);
+  }, [intervalMs]);
+}
+
+/** Countdown lokal dari next_scheduler_time absolute (spec section 3) -- akurat walau data terakhir fetch beberapa menit lalu. */
+function localMinutesToScheduler(nextSchedule) {
+  if (!nextSchedule?.next_scheduler_time) return nextSchedule?.minutes_to_next_scheduler ?? null;
+  const ms = new Date(nextSchedule.next_scheduler_time).getTime() - Date.now();
+  if (Number.isNaN(ms)) return nextSchedule?.minutes_to_next_scheduler ?? null;
+  return Math.round(ms / 60000);
+}
+/** Urgency lokal dari countdown yang sama (mirror murni dari ambang batas backend, spec section 5) -- dipakai supaya badge tetap benar walau user diam di halaman lewat ambang batas tanpa refresh. */
+function localUrgency(minutes) {
+  if (minutes === null || minutes === undefined || !Number.isFinite(minutes)) return null;
+  if (minutes < 0) return 'OVERDUE';
+  if (minutes <= 15) return 'URGENT';
+  if (minutes <= 30) return 'WARNING';
+  if (minutes <= 60) return 'WATCH';
+  return 'NORMAL';
+}
+function countdownLabel(minutes) {
+  if (minutes === null || minutes === undefined) return '-';
+  if (minutes < 0) return `TERLAMBAT ${Math.abs(minutes)} MENIT`;
+  if (minutes === 0) return 'Sekarang';
+  return `${minutes} menit lagi`;
+}
+
 function Kpi({ label, value, sub, alert }) {
   return (
     <div className={'wbf-kpi-card' + (alert ? ' wbf-kpi-card--alert' : '')}>
       <div className="wbf-kpi-label">{label}</div>
       <div className="wbf-kpi-value">{value}</div>
       {sub && <div className="wbf-kpi-sub">{sub}</div>}
+    </div>
+  );
+}
+
+/**
+ * Finance Action Alert (spec section 6) — HANYA muncul kalau
+ * next_schedule.finance_action_alert true (backend: recommendation
+ * actionable ADD/REDUCE/CANCEL DAN scheduler <=15 menit lagi/overdue).
+ * KEEP TIDAK PERNAH memicu ini, walau scheduler dekat.
+ */
+function FinanceActionAlert({ result, balanceInfo }) {
+  const ns = result?.next_schedule;
+  if (!ns?.finance_action_alert) return null;
+  const reco = result.recommendation;
+  const minutes = localMinutesToScheduler(ns);
+  const pos = positionTimeParts(balanceInfo);
+
+  if (reco === 'ADD') {
+    return (
+      <div className="wbf-finance-alert">
+        <div className="wbf-finance-alert-title">🔴 FUNDING PERLU DITAMBAH</div>
+        <div className="wbf-finance-alert-grid">
+          <div><span>Posisi saldo</span><b>{pos.available ? pos.clockOrDate : '-'}</b></div>
+          <div><span>Next Scheduler</span><b>{ns.funding_source_code} {ns.scheduled_time}</b></div>
+          <div><span>Waktu tersisa</span><b>{countdownLabel(minutes)}</b></div>
+          <div><span>Saran</span><b>Tambahkan {fmtRp(ns.adjustment_amount)}</b></div>
+        </div>
+        <div className="wbf-finance-alert-cta">Segera konfirmasi ke tim Finance sebelum scheduler diproses.</div>
+      </div>
+    );
+  }
+  if (reco === 'CANCEL') {
+    return (
+      <div className="wbf-finance-alert">
+        <div className="wbf-finance-alert-title">🔴 SCHEDULER PERLU DIBATALKAN</div>
+        <div className="wbf-finance-alert-grid">
+          <div><span>Scheduler</span><b>{ns.funding_source_code} {ns.scheduled_time} — {fmtRp(ns.scheduled_amount)}</b></div>
+          <div><span>Waktu tersisa</span><b>{countdownLabel(minutes)}</b></div>
+        </div>
+        <div className="wbf-finance-alert-text">Saldo diproyeksikan sudah mencukupi.</div>
+        <div className="wbf-finance-alert-cta">Segera konfirmasi ke tim Finance agar scheduler tidak terlanjur diproses.</div>
+      </div>
+    );
+  }
+  // REDUCE
+  return (
+    <div className="wbf-finance-alert">
+      <div className="wbf-finance-alert-title">🔴 FUNDING PERLU DIKURANGI</div>
+      <div className="wbf-finance-alert-grid">
+        <div><span>Scheduler</span><b>{ns.funding_source_code} {ns.scheduled_time}</b></div>
+        <div><span>Waktu tersisa</span><b>{countdownLabel(minutes)}</b></div>
+        <div><span>Saran</span><b>Kurangi {fmtRp(Math.abs(ns.adjustment_amount))}</b></div>
+      </div>
+      <div className="wbf-finance-alert-cta">Segera konfirmasi ke tim Finance sebelum scheduler diproses.</div>
     </div>
   );
 }
@@ -146,6 +275,7 @@ export default function BalanceFunding() {
 
 // ─────────────────────────────────────────────────────────────────────────
 function OverviewTab({ banks, onSelectBank }) {
+  useTick(30000); // countdown lokal ikut bergerak tanpa hit API (spec section 3)
   return (
     <div className="wbf-overview-grid">
       {banks.map(b => {
@@ -155,18 +285,43 @@ function OverviewTab({ banks, onSelectBank }) {
         const ns = result.next_schedule;
         const reco = recoMeta(result.recommendation);
         const conf = confidenceMeta(b.balance_info?.confidence);
+        const pos = positionTimeParts(b.balance_info);
+        const minutes = ns ? localMinutesToScheduler(ns) : null;
+        const urgency = ns ? localUrgency(minutes) : null;
+        // Urgency HANYA ditonjolkan (badge merah dsb) kalau recommendation actionable -- KEEP tidak pernah dibuat merah (spec section 5).
+        const showUrgencyBadge = urgency && ACTIONABLE_RECO.has(result.recommendation);
+        const um = urgencyMeta(urgency);
         return (
           <div key={b.bank_code} className="wbf-overview-card" onClick={() => onSelectBank(b.bank_code)} style={{ borderTopColor: meta.color }}>
             <div className="wbf-overview-card-header">
               <div className="wbf-overview-bank-name"><span className="wbf-bank-dot" style={{ background: meta.color }} /> {meta.label}</div>
               <span className="wbf-badge" style={{ color: conf.color, background: conf.bg }}>{conf.label}</span>
             </div>
-            <div className="wbf-overview-row"><span>Actual Balance</span><b>{fmtRp(b.balance_info?.balance)}</b></div>
-            <div className="wbf-overview-row"><span>Planned Balance</span><b>{cp ? fmtRp(cp.planned_balance) : '-'}</b></div>
+
+            <div className="wbf-overview-block">
+              <div className="wbf-overview-label">Actual Balance</div>
+              <div className="wbf-overview-value">{fmtRp(b.balance_info?.balance)}</div>
+              <div className="wbf-overview-position">
+                {pos.available ? `Posisi ${pos.clockOrDate}${pos.ageLabel ? ' • ' + pos.ageLabel : ''}` : 'Waktu posisi saldo tidak tersedia'}
+              </div>
+            </div>
+
+            <div className="wbf-overview-row"><span>Plan</span><b>{cp ? fmtRp(cp.planned_balance) : '-'}</b></div>
             <div className="wbf-overview-row"><span>Variance</span><b style={{ color: cp ? planStatusMeta(cp.status).color : undefined }}>{cp ? fmtRpSigned(cp.variance) : '-'}</b></div>
-            <div className="wbf-overview-row"><span>Next Scheduler</span><b>{ns ? `${ns.funding_source_code} ${ns.scheduled_time}` : '-'}</b></div>
+
+            <div className="wbf-overview-row wbf-overview-row--next">
+              <span>Next</span>
+              <b>{ns ? `${ns.funding_source_code} • ${ns.scheduled_time}` : '-'}</b>
+            </div>
+            {ns && (
+              <div className="wbf-overview-countdown" style={showUrgencyBadge ? { color: um.color } : undefined}>
+                {countdownLabel(minutes)}
+              </div>
+            )}
+
             <div className="wbf-overview-reco" style={{ color: reco.color, background: reco.bg }}>
               <i className={'ti ' + reco.icon} /> {reco.label}
+              {showUrgencyBadge && <span className="wbf-badge" style={{ color: um.color, background: um.bg, marginLeft: 'auto' }}>{um.label}</span>}
             </div>
           </div>
         );
@@ -178,6 +333,7 @@ function OverviewTab({ banks, onSelectBank }) {
 
 // ─────────────────────────────────────────────────────────────────────────
 function BankDetailTab({ bankCode, isAdmin, isFinanceOrOps, onAcknowledged }) {
+  useTick(1000); // countdown & "sekarang" di operational strip ikut bergerak tanpa hit API (spec section 3)
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -233,19 +389,51 @@ function BankDetailTab({ bankCode, isAdmin, isFinanceOrOps, onAcknowledged }) {
   const planMeta = cp ? planStatusMeta(cp.status) : planStatusMeta(null);
   const conf = confidenceMeta(data.balance_info?.confidence);
   const canAcknowledge = isFinanceOrOps && !['INSUFFICIENT_DATA', 'BALANCE_UNAVAILABLE'].includes(result.recommendation);
+  const pos = positionTimeParts(data.balance_info);
+  const minutesToNext = ns ? localMinutesToScheduler(ns) : null;
+  const urgency = ns ? localUrgency(minutesToNext) : null;
+  const showUrgencyBadge = urgency && ACTIONABLE_RECO.has(result.recommendation);
+  const um = urgencyMeta(urgency);
+  const nowWib = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Jakarta', hour12: false }) + ' WIB';
 
   return (
     <div className="wbf-detail">
       <div className="wbf-detail-header" style={{ borderLeftColor: meta.color }}>
         <div className="wbf-detail-title"><span className="wbf-bank-dot" style={{ background: meta.color }} /> {meta.label} Balance &amp; Funding</div>
         <div className="wbf-detail-sub">
-          Actual source: <b>{data.balance_info?.source || '-'}</b> · Last balance: <b>{fmtDateTime(data.balance_info?.balance_timestamp)}</b> ·
+          Actual source: <b>{data.balance_info?.source || '-'}</b> · Sync terakhir: <b>{fmtDateTime(data.balance_info?.last_sync_at)}</b> ·
           Confidence: <span className="wbf-badge" style={{ color: conf.color, background: conf.bg, marginLeft: 4 }}>{conf.label}</span>
         </div>
         {data.balance_info?.warnings?.length > 0 && (
           <div className="wbf-detail-warnings">{data.balance_info.warnings.map((w, i) => <div key={i}><i className="ti ti-alert-triangle" /> {w}</div>)}</div>
         )}
       </div>
+
+      {/* Operational strip (spec section 10) -- SEKARANG/POSISI SALDO/NEXT SCHEDULER/STATUS, harus terlihat tanpa scroll panjang. */}
+      <div className="wbf-opstrip">
+        <div className="wbf-opstrip-item">
+          <div className="wbf-opstrip-label">Sekarang</div>
+          <div className="wbf-opstrip-value">{nowWib}</div>
+        </div>
+        <div className="wbf-opstrip-item">
+          <div className="wbf-opstrip-label">Posisi Saldo</div>
+          <div className="wbf-opstrip-value">{pos.available ? pos.clockOrDate : 'Tidak tersedia'}</div>
+          {pos.available && pos.ageLabel && <div className="wbf-opstrip-sub">{pos.ageLabel}</div>}
+        </div>
+        <div className="wbf-opstrip-item">
+          <div className="wbf-opstrip-label">Next Scheduler</div>
+          <div className="wbf-opstrip-value">{ns ? `${ns.funding_source_code} • ${ns.scheduled_time}` : '-'}</div>
+          {ns && <div className="wbf-opstrip-sub">{countdownLabel(minutesToNext)}</div>}
+        </div>
+        <div className="wbf-opstrip-item">
+          <div className="wbf-opstrip-label">Status</div>
+          <div className="wbf-opstrip-value" style={showUrgencyBadge ? { color: um.color } : undefined}>
+            {showUrgencyBadge ? um.label.toUpperCase() : (result.recommendation === 'BALANCE_STALE' ? 'DATA STALE' : '-')}
+          </div>
+        </div>
+      </div>
+
+      <FinanceActionAlert result={result} balanceInfo={data.balance_info} />
 
       {cp && (cp.status === 'ABOVE_PLAN' || cp.status === 'BELOW_PLAN') && (
         <div className="wbf-alert" style={{ borderLeftColor: planMeta.color, background: planMeta.bg }}>
@@ -256,7 +444,13 @@ function BankDetailTab({ bankCode, isAdmin, isFinanceOrOps, onAcknowledged }) {
           </div>
         </div>
       )}
-      {(result.recommendation === 'BALANCE_UNAVAILABLE' || result.recommendation === 'BALANCE_STALE' || result.recommendation === 'INSUFFICIENT_DATA') && (
+      {result.recommendation === 'BALANCE_STALE' && (
+        <div className="wbf-alert" style={{ borderLeftColor: reco.color, background: reco.bg }}>
+          <i className={'ti ' + reco.icon} style={{ color: reco.color }} />
+          <div><b style={{ color: reco.color }}>{reco.label}</b><div className="wbf-alert-text">{staleMessage(data.balance_info)}</div></div>
+        </div>
+      )}
+      {(result.recommendation === 'BALANCE_UNAVAILABLE' || result.recommendation === 'INSUFFICIENT_DATA') && (
         <div className="wbf-alert" style={{ borderLeftColor: reco.color, background: reco.bg }}>
           <i className={'ti ' + reco.icon} style={{ color: reco.color }} />
           <div><b style={{ color: reco.color }}>{reco.label}</b><div className="wbf-alert-text">{result.reason}</div></div>
@@ -264,10 +458,10 @@ function BankDetailTab({ bankCode, isAdmin, isFinanceOrOps, onAcknowledged }) {
       )}
 
       <div className="wbf-kpi-grid">
-        <Kpi label="Actual Balance" value={fmtRp(data.balance_info?.balance)} sub={data.balance_info?.source} />
+        <Kpi label="Actual Balance" value={fmtRp(data.balance_info?.balance)} sub={pos.available ? `Posisi ${pos.clockOrDate}${pos.ageLabel ? ' • ' + pos.ageLabel : ''}` : 'Waktu posisi saldo tidak tersedia'} />
         <Kpi label="Planned Balance" value={cp ? fmtRp(cp.planned_balance) : '-'} sub={cp ? `Jam ${String(cp.hour).padStart(2, '0')}:00` : '-'} />
         <Kpi label="Variance" value={cp ? fmtRpSigned(cp.variance) : '-'} sub={planMeta.label} alert={cp?.status === 'BELOW_PLAN'} />
-        <Kpi label="Next Scheduler" value={ns ? `${ns.funding_source_code} ${ns.scheduled_time}` : '-'} sub={ns ? `Existing ${fmtRp(ns.scheduled_amount)}` : '-'} />
+        <Kpi label="Next Scheduler" value={ns ? `${ns.funding_source_code} ${ns.scheduled_time}` : '-'} sub={ns ? countdownLabel(minutesToNext) : '-'} alert={showUrgencyBadge && (urgency === 'URGENT' || urgency === 'OVERDUE')} />
         <Kpi label="Required Funding" value={ns && ns.required_funding !== null ? fmtRp(ns.required_funding) : '-'} sub={ns ? `s.d. ${ns.scheduled_time}` : '-'} />
       </div>
 
@@ -302,7 +496,15 @@ function BankDetailTab({ bankCode, isAdmin, isFinanceOrOps, onAcknowledged }) {
                   <td>{s.funding_source_code}</td>
                   <td>{fmtRp(s.scheduled_amount)}</td>
                   <td>{s.actual_amount !== null ? fmtRp(s.actual_amount) : '—'}</td>
-                  <td><span className="wbf-badge" style={{ color: '#374151', background: '#F3F4F6' }}>{s.display_status}</span></td>
+                  <td>
+                    {s.display_status === 'SCHEDULER_OVERDUE' ? (
+                      <span className="wbf-badge" style={{ color: '#991B1B', background: '#FEE2E2' }}>
+                        TERLAMBAT {s.overdue_minutes ?? '?'} MENIT
+                      </span>
+                    ) : (
+                      <span className="wbf-badge" style={{ color: '#374151', background: '#F3F4F6' }}>{s.display_status}</span>
+                    )}
+                  </td>
                   <td>{s.recommendation ? <span className="wbf-badge" style={{ color: recoMeta(s.recommendation).color, background: recoMeta(s.recommendation).bg }}>{recoMeta(s.recommendation).label}</span> : '—'}</td>
                 </tr>
               ))}
@@ -321,7 +523,11 @@ function BankDetailTab({ bankCode, isAdmin, isFinanceOrOps, onAcknowledged }) {
           <div><span>Verification</span><b>{data.balance_info?.verification_status || '-'}</b></div>
           <div><span>Business Date</span><b>{data.balance_info?.business_date || '-'}</b></div>
           <div><span>Account</span><b>{data.balance_info?.account_no || '-'}</b></div>
-          <div><span>Last Sync</span><b>{fmtDateTime(data.balance_info?.balance_timestamp)}</b></div>
+          <div>
+            <span>Posisi Saldo</span>
+            <b>{pos.available ? `${pos.clockOrDate} (${pos.precision === 'MINUTE' ? 'jam:menit' : 'harian'})` : 'Tidak tersedia'}</b>
+          </div>
+          <div><span>Sync Terakhir</span><b>{fmtDateTime(data.balance_info?.last_sync_at)}</b></div>
           <div><span>Confidence</span><b style={{ color: conf.color }}>{conf.label}</b></div>
         </div>
       </div>

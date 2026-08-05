@@ -9,7 +9,7 @@
  */
 
 const { getActualBankBalance, BANK_CODES } = require('./bankBalanceAdapters');
-const { calculateBankRecommendation, deriveScheduleDisplayStatus, getJakartaParts } = require('./balanceFundingEngine');
+const { calculateBankRecommendation, deriveScheduleDisplayStatus, deriveScheduleOverdueMinutes, getJakartaParts } = require('./balanceFundingEngine');
 
 const DEFAULT_PLAN_VARIANCE_TOLERANCE = 10000000;
 const DEFAULT_SCHEDULER_TOLERANCE = 10000000;
@@ -41,10 +41,22 @@ async function computeBalanceFundingForBank({ pool, bankCode, now = new Date() }
     return { bank_code: code, error: `Bank code "${bankCode}" tidak didukung Balance & Funding.` };
   }
 
-  const [balanceInfo, plan] = await Promise.all([
-    getActualBankBalance(pool, code),
+  const [balanceInfoRaw, plan] = await Promise.all([
+    getActualBankBalance(pool, code, now),
     fetchActivePlan(pool, code),
   ]);
+
+  // balance_age_minutes (spec section 1/9): current WIB - balance_position_time,
+  // dihitung SEKALI di sini (satu-satunya tempat yg pegang `now` dan
+  // balanceInfo bersamaan) supaya konsisten dgn `now` yang sama dipakai
+  // engine utk staleness gate -- BUKAN dihitung ulang di frontend/berbeda
+  // momen. null kalau balance_position_time tidak ada (tidak bisa
+  // dibuktikan -- lihat bankBalanceAdapters.js resolveDateOnlyPosition/
+  // resolveTimePosition, "no fake timestamp").
+  const balanceAgeMinutes = balanceInfoRaw.balance_position_time
+    ? Math.max(0, Math.round((now.getTime() - new Date(balanceInfoRaw.balance_position_time).getTime()) / 60000))
+    : null;
+  const balanceInfo = { ...balanceInfoRaw, balance_age_minutes: balanceAgeMinutes };
 
   const planVarianceTolerance = plan && plan.variance_tolerance !== null && plan.variance_tolerance !== undefined
     ? Number(plan.variance_tolerance) : DEFAULT_PLAN_VARIANCE_TOLERANCE;
@@ -87,6 +99,7 @@ async function computeBalanceFundingForBank({ pool, bankCode, now = new Date() }
       actual_amount: s.actual_amount !== null && s.actual_amount !== undefined ? Number(s.actual_amount) : null,
       status: s.status,
       display_status: deriveScheduleDisplayStatus(s, minutesOfDay),
+      overdue_minutes: deriveScheduleOverdueMinutes(s, minutesOfDay),
       is_next: !!isNext,
       required_funding: isNext ? result.next_schedule.required_funding : null,
       adjustment_amount: isNext ? result.next_schedule.adjustment_amount : null,
