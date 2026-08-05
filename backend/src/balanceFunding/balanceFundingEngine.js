@@ -38,6 +38,17 @@ const PLAN_STATUS = {
 const UPCOMING_STATUSES = new Set(['SCHEDULED', 'CONFIRMED', 'ADJUSTED']);
 const CONFIRMED_INFLOW_STATUSES = new Set(['CONFIRMED', 'COMPLETED']);
 
+// Urgency metadata (Balance Position Time & Funding Countdown enhancement) --
+// murni fungsi dari "menit menuju scheduler", TIDAK mengubah formula
+// CANCEL/REDUCE/KEEP/ADD sama sekali. Ambang batas sesuai spec:
+//   > 60 menit = NORMAL, 31-60 = WATCH, 16-30 = WARNING, 0-15 = URGENT,
+//   < 0 (scheduler lewat, status masih SCHEDULED) = OVERDUE.
+const URGENCY = { NORMAL: 'NORMAL', WATCH: 'WATCH', WARNING: 'WARNING', URGENT: 'URGENT', OVERDUE: 'OVERDUE' };
+// Recommendation yang dianggap "actionable" -- urgency & Finance Action
+// Alert HANYA ditonjolkan utk ini. KEEP TIDAK PERNAH jadi alert kritikal
+// hanya krn scheduler dekat (spec section 5/6).
+const ACTIONABLE_RECOMMENDATIONS = new Set(['ADD', 'REDUCE', 'CANCEL']);
+
 function round2(n) {
   return n === null || n === undefined || !Number.isFinite(n) ? null : Math.round(n * 100) / 100;
 }
@@ -192,12 +203,62 @@ function calculateFundingRecommendation({ requiredFunding, existingScheduleAmoun
   return { recommendation: RECOMMENDATION.KEEP, adjustment_amount: 0, reason: 'Scheduler berikutnya masih sesuai kebutuhan.' };
 }
 
+/**
+ * Spec section 4: scheduler yang waktunya SUDAH LEWAT tapi statusnya masih
+ * SCHEDULED/CONFIRMED/ADJUSTED (belum ditandai COMPLETED/MISSED oleh admin)
+ * -> SCHEDULER_OVERDUE, BUKAN diam-diam dianggap 'COMPLETED'. Status
+ * eksplisit (CANCELLED/MISSED/COMPLETED) tetap dihormati apa adanya.
+ */
 function deriveScheduleDisplayStatus(schedule, currentMinutesOfDay) {
   const status = String(schedule.status || '').toUpperCase();
   if (status === 'CANCELLED' || status === 'MISSED' || status === 'COMPLETED') return status;
   const minutes = timeStringToMinutes(schedule.scheduled_time);
-  if (minutes !== null && minutes <= currentMinutesOfDay) return 'COMPLETED';
+  if (minutes !== null && minutes <= currentMinutesOfDay && UPCOMING_STATUSES.has(status)) {
+    return 'SCHEDULER_OVERDUE';
+  }
   return 'UPCOMING';
+}
+
+/** Menit keterlambatan (spec "TERLAMBAT X MENIT") -- null kalau tidak overdue. */
+function deriveScheduleOverdueMinutes(schedule, currentMinutesOfDay) {
+  if (deriveScheduleDisplayStatus(schedule, currentMinutesOfDay) !== 'SCHEDULER_OVERDUE') return null;
+  const minutes = timeStringToMinutes(schedule.scheduled_time);
+  if (minutes === null) return null;
+  return currentMinutesOfDay - minutes;
+}
+
+/** Urgency tangga (spec section 5) -- murni fungsi menit, tidak menyentuh CANCEL/REDUCE/KEEP/ADD. */
+function deriveSchedulerUrgency(minutesToScheduler) {
+  if (!isNum(minutesToScheduler)) return null;
+  const m = Number(minutesToScheduler);
+  if (m < 0) return URGENCY.OVERDUE;
+  if (m <= 15) return URGENCY.URGENT;
+  if (m <= 30) return URGENCY.WARNING;
+  if (m <= 60) return URGENCY.WATCH;
+  return URGENCY.NORMAL;
+}
+
+/**
+ * Absolute instant scheduler berikutnya (spec section 3: "countdown frontend
+ * boleh bergerak lokal berdasarkan absolute scheduler timestamp", supaya
+ * tidak perlu hit API tiap detik). Scheduler disimpan sbg HH:mm pada business
+ * date WIB yang sedang berjalan -- constructed dari businessDate + jam.
+ */
+function scheduledTimeToAbsolute(businessDate, timeStr) {
+  const minutes = timeStringToMinutes(timeStr);
+  if (minutes === null || !businessDate) return null;
+  const h = Math.floor(minutes / 60), mi = minutes % 60;
+  const d = new Date(`${businessDate}T${String(h).padStart(2, '0')}:${String(mi).padStart(2, '0')}:00+07:00`);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/**
+ * Finance Action Alert (spec section 6): HANYA saat recommendation
+ * actionable (ADD/REDUCE/CANCEL) DAN scheduler <= 15 menit lagi (URGENT)
+ * atau sudah lewat (OVERDUE). KEEP/lainnya TIDAK PERNAH memicu ini.
+ */
+function needsFinanceActionAlert(recommendation, urgency) {
+  return ACTIONABLE_RECOMMENDATIONS.has(recommendation) && (urgency === URGENCY.URGENT || urgency === URGENCY.OVERDUE);
 }
 
 /**
@@ -310,12 +371,25 @@ function calculateBankRecommendation({
   const nextMinutes = nextRaw._minutes;
   const nextHour = Math.floor(nextMinutes / 60);
   const targetRow = findHourPlan(hourlyPlan, nextHour);
+  // Countdown/urgency (spec section 3/5) -- murni fungsi waktu scheduler vs
+  // sekarang, TIDAK butuh actual balance sama sekali, jadi SELALU dihitung
+  // begitu next_schedule resolve (sama prinsipnya dgn Planned Balance/Next
+  // Scheduler basic -- tidak ikut null saat BALANCE_STALE/UNAVAILABLE).
+  const minutesToNextScheduler = nextMinutes - minutesOfDay;
   const nextScheduleBasic = {
     id: nextRaw.id, scheduled_time: nextRaw.scheduled_time, target_bank_code: nextRaw.target_bank_code,
     funding_source_code: nextRaw.funding_source_code,
     scheduled_amount: isNum(nextRaw.scheduled_amount) ? Number(nextRaw.scheduled_amount) : null, status: nextRaw.status,
     target_hour: nextHour,
     target_planned_balance: targetRow && isNum(targetRow.planned_balance) ? Number(targetRow.planned_balance) : null,
+    next_scheduler_time: scheduledTimeToAbsolute(todayBusinessDate, nextRaw.scheduled_time),
+    minutes_to_next_scheduler: minutesToNextScheduler,
+    urgency: deriveSchedulerUrgency(minutesToNextScheduler),
+    // finance_action_alert butuh `recommendation` final -- default false,
+    // di-override di return path perhitungan finansial penuh di bawah
+    // (semua early-return lain di atas TIDAK PERNAH actionable ADD/REDUCE/
+    // CANCEL, jadi default false sudah benar utk jalur-jalur itu).
+    finance_action_alert: false,
     // Field finansial (butuh actual balance trustworthy) -- default eksplisit
     // null, bukan undefined, supaya konsumen API/frontend konsisten & tidak
     // perlu bedakan "belum dihitung" vs "field tidak ada sama sekali".
@@ -393,6 +467,7 @@ function calculateBankRecommendation({
       burn_until_next: burnUntilNext, confirmed_inflows_before_next: confirmedInflows,
       projected_balance: projectedBalance, required_funding: requiredFunding,
       adjustment_amount, recommendation, recommendation_reason: reason,
+      finance_action_alert: needsFinanceActionAlert(recommendation, nextScheduleBasic.urgency),
     },
     recommendation, reason,
     warnings: [...businessDateWarnings, ...confidenceWarnings],
@@ -402,8 +477,11 @@ function calculateBankRecommendation({
 
 module.exports = {
   JAKARTA_TZ, RECOMMENDATION, PLAN_STATUS, UPCOMING_STATUSES, CONFIRMED_INFLOW_STATUSES,
+  URGENCY, ACTIONABLE_RECOMMENDATIONS,
   getJakartaParts, jakartaBusinessDate, timeStringToMinutes, minutesToTimeString,
   findHourPlan, calculateVariance, findNextSchedule, calculateBurnUntilNextSchedule,
   sumConfirmedInflowsBetween, calculateProjectedBalance, calculateRequiredFunding,
-  calculateFundingRecommendation, deriveScheduleDisplayStatus, calculateBankRecommendation,
+  calculateFundingRecommendation, deriveScheduleDisplayStatus, deriveScheduleOverdueMinutes,
+  deriveSchedulerUrgency, scheduledTimeToAbsolute, needsFinanceActionAlert,
+  calculateBankRecommendation,
 };

@@ -142,7 +142,31 @@ async function maybePersistRecommendation(client, bankCode, computed) {
   return inserted.rows[0];
 }
 
-// ── GET /overview — spec section 28, 6 card + sorting critical-first ────
+// ── Actionable sorting (spec section 8) -- urgency lebih penting daripada
+// sekadar tipe recommendation. Cuma ADD/CANCEL/REDUCE yang "actionable";
+// KEEP TIDAK PERNAH ditonjolkan mendekati atas hanya krn scheduler dekat.
+const URGENT_LIKE = new Set(['URGENT', 'OVERDUE']);
+const ACTIONABLE_RECO = new Set(['ADD', 'CANCEL', 'REDUCE']);
+function overviewSortPriority(row) {
+  const reco = row.result?.recommendation;
+  const urgency = row.result?.next_schedule?.urgency;
+  if (ACTIONABLE_RECO.has(reco)) {
+    if (URGENT_LIKE.has(urgency)) {
+      if (reco === 'ADD') return 0;
+      if (reco === 'CANCEL') return 1;
+      return 2; // REDUCE
+    }
+    if (urgency === 'WARNING') return 3;
+    return 6; // actionable lain (urgency NORMAL/WATCH/tidak ada scheduler mendekat)
+  }
+  if (reco === 'BALANCE_STALE') return 4;
+  if (reco === 'BALANCE_UNAVAILABLE') return 5;
+  if (reco === 'INSUFFICIENT_DATA' || reco === 'NO_UPCOMING_SCHEDULER') return 7;
+  if (reco === 'KEEP') return 8;
+  return 9;
+}
+
+// ── GET /overview — spec section 28/8, 6 card + sorting actionable+urgency-first ────
 router.get('/overview', async (req, res) => {
   const client = await pool.connect();
   try {
@@ -152,8 +176,15 @@ router.get('/overview', async (req, res) => {
       try { await syncAlertsForBank(client, r.bank_code, r); } catch (e) { console.error('syncAlertsForBank error:', e.message); }
       try { await maybePersistRecommendation(client, r.bank_code, r); } catch (e) { console.error('maybePersistRecommendation error:', e.message); }
     }
-    const PRIORITY = { ADD: 0, CANCEL: 1, REDUCE: 2, BALANCE_UNAVAILABLE: 3, BALANCE_STALE: 4, INSUFFICIENT_DATA: 5, NO_UPCOMING_SCHEDULER: 6, KEEP: 7 };
-    const sorted = [...rows].sort((a, b) => (PRIORITY[a.result?.recommendation] ?? 9) - (PRIORITY[b.result?.recommendation] ?? 9));
+    const sorted = [...rows].sort((a, b) => {
+      const diff = overviewSortPriority(a) - overviewSortPriority(b);
+      if (diff !== 0) return diff;
+      // Tie-break dalam tier yang sama: scheduler yang lebih dekat waktunya duluan.
+      const am = a.result?.next_schedule?.minutes_to_next_scheduler;
+      const bm = b.result?.next_schedule?.minutes_to_next_scheduler;
+      if (Number.isFinite(am) && Number.isFinite(bm)) return am - bm;
+      return 0;
+    });
     res.set('Cache-Control', 'no-store');
     res.json({ success: true, banks: sorted });
   } catch (e) {

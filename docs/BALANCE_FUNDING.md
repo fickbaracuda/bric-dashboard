@@ -316,6 +316,125 @@ resolve) + 2 test baru di `test-balance-funding-adapters.js` (skip batch
 close_balance-0, UNAVAILABLE kalau semua batch dalam lookback rusak).
 Total 59 test (42 engine + 17 adapter), semua pass.
 
+## 14c. Balance Position Time & Funding Countdown *(ditambahkan pada sesi lanjutan)*
+
+### 14c.1 Masalah yang diperbaiki
+
+Sebelum enhancement ini, `balance_timestamp` yang ditampilkan di semua UI
+(header Bank Detail, Data Quality section) sebenarnya berisi
+`recon_sync_batches.synced_at` — **waktu Apps Script melakukan sync**, BUKAN
+waktu posisi saldo yang sebenarnya. FA tidak bisa membedakan "saldo ini
+posisi jam berapa" dari "kapan terakhir sistem sinkron", padahal keduanya
+sering BERBEDA jauh (dibuktikan dari data produksi: BRI baris mutasi
+terakhir yang dipakai `effective_date_time` 2026-07-10, tapi batch-nya baru
+sync 2026-07-14 — beda 4 hari).
+
+### 14c.2 Audit sumber timestamp per bank (hasil baca kode+data produksi, bukan asumsi)
+
+| Bank | Kolom bank-provided dgn jam:menit? | balance_position_time diambil dari | Presisi |
+|---|---|---|---|
+| **MANDIRI** | Ya — `recon_bank_transactions.post_date_time` (TIMESTAMPTZ, terbukti 0% NULL di produksi) | `post_date_time` baris mutasi yang dipakai sbg `close_balance` | **MINUTE** |
+| **BRI / BRI_BIFAST** | Ya — `recon_bank_transactions.effective_date_time` (Value Date) | `effective_date_time` baris mutasi terakhir | **MINUTE** |
+| **OCBC** | **Tidak** — `recon_bank_transactions.transaction_date`/`value_date` bertipe `DATE` (bukan TIMESTAMPTZ), `raw_summary.release_date` juga cuma string tanggal (dikonfirmasi data produksi: `"05/08/2026"`, tanpa jam) | `business_date` batch, di-anchor ke **00:00:00 WIB** (satu-satunya instant yang bisa dibuktikan tanpa mengarang jam) | **DATE** |
+| **BCA** | Sama seperti OCBC — TIDAK ADA kolom jam sama sekali di sumbernya | `business_date` batch, anchor sama (00:00:00 WIB) | **DATE** |
+| **BNI** | Tidak relevan — selalu `UNAVAILABLE` | — | — |
+
+`balance_position_precision` (`'MINUTE'` \| `'DATE'` \| `null`) dikirim ke
+frontend supaya TIDAK PERNAH menampilkan klaim jam:menit utk bank yang
+sumbernya cuma punya tanggal (OCBC/BCA tampil sbg "Posisi: DD/MM/YYYY",
+BUKAN "17:42 WIB" yang dikarang).
+
+**Guard "no fake timestamp"** (`resolveDateOnlyPosition`/`resolveTimePosition`
+di `bankBalanceAdapters.js`): kalau timestamp hasil (baik dari business_date
+maupun dari kolom bank-provided) ternyata berada di **masa depan** relatif
+`now` — kondisi ANOMALI nyata ditemukan di data produksi BCA
+(`business_date = "2026-09-07"` padahal `synced_at` 2026-07-30, indikasi bug
+parsing tanggal di pipeline sync BCA, di luar scope fitur ini) —
+`balance_position_time` di-set `null` (BUKAN dipakai apa adanya / BUKAN
+fallback ke `NOW()`), confidence diturunkan, warning eksplisit ditambahkan.
+
+### 14c.3 API & field baru
+
+Semua adapter (`bankBalanceAdapters.js`) sekarang butuh param `now` (dipakai
+utk guard masa depan) — `getActualBankBalance(pool, bankCode, now)`, default
+`new Date()` kalau tidak dikirim. Return shape tiap bank bertambah:
+
+```
+balance_position_time        -- ISO instant posisi saldo genuine, atau null
+balance_position_precision   -- 'MINUTE' | 'DATE' | null
+last_sync_at                 -- waktu sync (recon_sync_batches.synced_at) -- SELALU beda field dari posisi saldo
+balance_source                -- alias balance_source utk `source` (nama field persis sesuai spec)
+balance_timestamp             -- DIPERTAHANKAN sbg alias balance_position_time (supaya STALE gate
+                                  di balanceFundingEngine.js otomatis pakai posisi asli TANPA perlu
+                                  diubah sama sekali -- lihat 14c.4)
+```
+
+`balance_age_minutes` dihitung SEKALI di `balanceFundingDataAccess.js`
+(`computeBalanceFundingForBank`, satu-satunya tempat yang pegang `now` dan
+`balanceInfo` bersamaan) — `null` kalau `balance_position_time` tidak ada.
+
+### 14c.4 Decision engine — HANYA ditambah, TIDAK diubah
+
+Formula CANCEL/REDUCE/KEEP/ADD di `balanceFundingEngine.js` **tidak
+tersentuh sama sekali**. Yang ditambahkan murni metadata additive:
+
+- `next_schedule.minutes_to_next_scheduler`, `.next_scheduler_time`
+  (absolute instant, dipakai frontend utk countdown LOKAL tanpa hit API
+  tiap detik — spec section 3), `.urgency`
+  (`NORMAL`/`WATCH`/`WARNING`/`URGENT`/`OVERDUE`, ambang batas: >60=NORMAL,
+  31-60=WATCH, 16-30=WARNING, 0-15=URGENT, <0=OVERDUE), `.finance_action_alert`
+  (`true` HANYA kalau recommendation ADD/REDUCE/CANCEL DAN urgency
+  URGENT/OVERDUE — KEEP TIDAK PERNAH memicu ini, spec section 5/6).
+- `deriveScheduleDisplayStatus()` — scheduler yg waktunya lewat tapi masih
+  status SCHEDULED/CONFIRMED/ADJUSTED sekarang `SCHEDULER_OVERDUE` (dulu
+  diam-diam jadi `'COMPLETED'`, salah — itu klaim eksekusi yang tidak
+  terbukti). `deriveScheduleOverdueMinutes()` (baru) — angka "TERLAMBAT X
+  MENIT".
+- STALE gate (existing, TIDAK diubah kodenya) otomatis membaca posisi saldo
+  asli karena `balance_timestamp` sekarang = `balance_position_time` (lihat
+  14c.3) — bukan `synced_at` lagi.
+
+### 14c.5 stale_after_minutes utk OCBC/BCA (DATE precision) — data update, BUKAN migration/DDL
+
+Default modul `stale_after_minutes` (120 menit) TIDAK COCOK utk anchor
+00:00 WIB: begitu lewat jam 02:00 WIB SETIAP HARI, OCBC/BCA akan selalu
+`BALANCE_STALE` walau baru saja sync — regresi nyata dibanding perilaku
+lama. Fix: `backend/scripts/update-balance-funding-stale-threshold-date-precision.js`
+(data-only, idempotent, guard `stale_after_minutes IS NULL` supaya tidak
+menimpa kustomisasi FA manual) — set `1440` menit (24 jam) KHUSUS OCBC/BCA,
+angka ini dipilih PERSIS supaya secara matematis setara "business_date !=
+hari ini WIB" tanpa perlu logic precision-aware baru di decision engine.
+
+### 14c.6 Frontend
+
+`frontend/src/pages/BalanceFunding.jsx` — Overview card format compact baru
+(Actual Balance + posisi saldo & age sbg info utama, Last Sync TIDAK lagi
+ditonjolkan sbg info utama sesuai spec section 2/7), countdown lokal
+(`useTick` re-render 1s di Bank Detail / 30s di Overview, TANPA hit API
+tambahan — hitung ulang dari `next_scheduler_time` absolute), badge urgency
+(HANYA ditonjolkan kalau recommendation actionable — KEEP tetap netral),
+`FinanceActionAlert` (banner dominan ADD/CANCEL/REDUCE + countdown, HANYA
+muncul saat `finance_action_alert` true), operational strip di Bank Detail
+(SEKARANG/POSISI SALDO/NEXT SCHEDULER/STATUS, tanpa scroll), teks staleness
+persis spec ("Saldo terakhir posisi HH:mm WIB — X menit lalu..."), dan teks
+"Waktu posisi saldo tidak tersedia" saat `balance_position_time` null.
+
+Actionable sorting di `/overview` (`balance-funding.js`
+`overviewSortPriority()`): ADD+URGENT → CANCEL+URGENT → REDUCE+URGENT →
+actionable+WARNING → BALANCE_STALE → BALANCE_UNAVAILABLE → actionable
+lainnya → INSUFFICIENT_DATA/NO_UPCOMING_SCHEDULER → KEEP, dgn tie-break
+`minutes_to_next_scheduler` ascending dalam tier yang sama.
+
+### 14c.7 Test
+
+26 test baru: engine (urgency ladder tiap ambang batas, overdue,
+`scheduledTimeToAbsolute`, `needsFinanceActionAlert` utk ADD/CANCEL/REDUCE
+actionable vs KEEP non-actionable, `deriveScheduleDisplayStatus` ->
+`SCHEDULER_OVERDUE`) + adapter (position_time per bank, future-date guard
+OCBC & BCA memakai angka anomali nyata dari produksi, Mandiri post_date_time
+dari baris yang dipakai bukan batch, BRI effective_date_time BEDA dari
+synced_at). Total **97 test** (71 engine + 26 adapter), semua pass.
+
 ## 15. Known Limitations
 
 1. **BNI selalu BALANCE_UNAVAILABLE** — bukan bug, struktur data sumber
@@ -335,15 +454,27 @@ Total 59 test (42 engine + 17 adapter), semua pass.
    `balance` generik + `balance_check_status`) — belum divalidasi di
    production dgn data BI-FAST riil sebanyak OCBC (yang sudah lama
    dipakai BCT). Perlu dipantau di smoke test awal.
+6. **OCBC/BCA balance_position_time cuma presisi tanggal (DATE), bukan
+   jam:menit** — bukan keterbatasan implementasi, sumbernya (statement
+   bank) memang tidak punya kolom jam sama sekali (lihat §14c.2). Frontend
+   menampilkan ini sbg tanggal ("Posisi: DD/MM/YYYY"), BUKAN jam yang
+   dikarang.
+7. **Countdown scheduler dihitung dari business date WIB hari berjalan** —
+   kalau server/browser jam-nya melenceng jauh dari waktu sebenarnya,
+   countdown lokal (`next_scheduler_time`) bisa salah; tidak ada validasi
+   clock-skew di fitur ini (di luar scope, sama seperti semua kalkulasi
+   berbasis `now` lain di modul ini).
 
 ## 16. Deployment
 
 Ikuti safe deploy flow existing (`scripts/safe_deploy.py
 --confirm-new-commit`). Urutan: commit → push → backup DB (keyword
 `BACKUP` manual) → migration (`run-balance-funding-migration.js`, keyword
-`MIGRATE` manual) → verifikasi migration → deploy (keyword `DEPLOY`
-manual) → production smoke test (termasuk regression check 6 halaman
-Rekonsiliasi).
+`MIGRATE` manual, kalau ada skema baru) / data update
+(`update-balance-funding-stale-threshold-date-precision.js`, data-only —
+lihat §14c.5) → verifikasi → deploy (keyword `DEPLOY` manual) → production
+smoke test (termasuk regression check 6 halaman Rekonsiliasi, DAN
+verifikasi `balance_position_time` per bank sesuai audit §14c.2).
 
 ## 17. Rollback
 

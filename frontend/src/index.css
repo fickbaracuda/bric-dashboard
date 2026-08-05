@@ -6326,6 +6326,14 @@ body {
 .wbf-overview-reco { margin-top: 10px; padding: 8px 10px; border-radius: 8px; font-size: 12.5px; font-weight: 700; display: flex; align-items: center; gap: 6px; }
 .wbf-empty { grid-column: 1 / -1; text-align: center; padding: 40px; color: var(--text-3); }
 
+/* Balance Position Time & Funding Countdown (Overview card compact layout, spec section 7) */
+.wbf-overview-block { padding: 6px 0 8px; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
+.wbf-overview-label { font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: .03em; }
+.wbf-overview-value { font-size: 20px; font-weight: 800; color: var(--text-1); margin-top: 2px; overflow-wrap: break-word; word-break: break-word; }
+.wbf-overview-position { font-size: 11.5px; color: var(--text-3); margin-top: 3px; }
+.wbf-overview-row--next { margin-top: 4px; }
+.wbf-overview-countdown { text-align: right; font-size: 12px; font-weight: 700; color: var(--text-2); margin-top: -2px; margin-bottom: 4px; }
+
 .wbf-detail-header { border-left: 4px solid; background: var(--bg-card); border-radius: 10px; padding: 14px 18px; margin-bottom: 14px; }
 .wbf-detail-title { display: flex; align-items: center; gap: 8px; font-size: 18px; font-weight: 800; color: var(--text-1); }
 .wbf-detail-sub { font-size: 12.5px; color: var(--text-3); margin-top: 4px; overflow-wrap: break-word; word-break: break-word; }
@@ -6334,6 +6342,33 @@ body {
 .wbf-alert { display: flex; align-items: flex-start; gap: 12px; border-left: 4px solid; border-radius: 8px; padding: 12px 16px; margin-bottom: 14px; }
 .wbf-alert i { font-size: 20px; margin-top: 2px; flex-shrink: 0; }
 .wbf-alert-text { font-size: 13px; color: var(--text-2); margin-top: 3px; line-height: 1.5; }
+
+/* Operational strip (spec section 10) -- SEKARANG/POSISI SALDO/NEXT SCHEDULER/STATUS, harus terlihat tanpa scroll panjang */
+.wbf-opstrip {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px;
+  padding: 12px 16px; margin-bottom: 14px;
+}
+.wbf-opstrip-item { min-width: 0; }
+.wbf-opstrip-label { font-size: 10.5px; color: var(--text-3); text-transform: uppercase; letter-spacing: .04em; }
+.wbf-opstrip-value { font-size: 16px; font-weight: 800; color: var(--text-1); margin-top: 2px; overflow-wrap: break-word; word-break: break-word; }
+.wbf-opstrip-sub { font-size: 11px; color: var(--text-3); margin-top: 2px; }
+
+/* Finance Action Alert (spec section 6) -- alert dominan, HANYA ADD/REDUCE/CANCEL + urgency URGENT/OVERDUE */
+.wbf-finance-alert {
+  border: 2px solid #DC2626; background: #FEE2E2; border-radius: 14px;
+  padding: 18px 22px; margin-bottom: 16px;
+}
+[data-theme="dark"] .wbf-finance-alert { background: rgba(220,38,38,.12); }
+.wbf-finance-alert-title { font-size: 18px; font-weight: 800; color: #991B1B; margin-bottom: 10px; }
+[data-theme="dark"] .wbf-finance-alert-title { color: #FCA5A5; }
+.wbf-finance-alert-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px 20px; margin-bottom: 8px; }
+.wbf-finance-alert-grid span { display: block; font-size: 10.5px; color: #991B1B; text-transform: uppercase; letter-spacing: .03em; }
+[data-theme="dark"] .wbf-finance-alert-grid span { color: #FCA5A5; }
+.wbf-finance-alert-grid b { display: block; font-size: 14px; color: var(--text-1); margin-top: 2px; }
+.wbf-finance-alert-text { font-size: 13px; color: var(--text-2); margin-bottom: 8px; }
+.wbf-finance-alert-cta { font-size: 13.5px; font-weight: 700; color: #991B1B; }
+[data-theme="dark"] .wbf-finance-alert-cta { color: #FCA5A5; }
 
 .wbf-kpi-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 14px; }
 .wbf-kpi-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; min-width: 0; }
@@ -6363,6 +6398,7 @@ body {
 
 @media (max-width: 1100px) {
   .wbf-kpi-grid { grid-template-columns: repeat(3, 1fr); }
+  .wbf-opstrip { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 640px) {
   .wbf-kpi-grid { grid-template-columns: repeat(2, 1fr); }
@@ -6370,5 +6406,6 @@ body {
   .wbf-ack-box { width: 100%; }
   .wbf-overview-grid { grid-template-columns: 1fr; }
   .wbf-bank-selector { overflow-x: auto; flex-wrap: nowrap; padding-bottom: 4px; }
+  .wbf-opstrip { grid-template-columns: 1fr 1fr; }
 }
 
