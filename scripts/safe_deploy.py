@@ -1,45 +1,77 @@
 """
 scripts/safe_deploy.py
 
-PART 2A — Draft script deploy AMAN untuk BRIC Dashboard.
-
-STATUS: DIBUAT UNTUK DISIAPKAN DULU. BELUM DIJALANKAN KE PRODUCTION.
-Jangan jalankan dengan --execute sebelum diuji & disetujui pemilik project.
+BRIC DASHBOARD — SAFE DEPLOY (Part 2A, HARDENED 2026-08 utk cegah CPU
+saturation/downtime saat deploy — lihat docs/DEPLOYMENT_SAFETY.md bagian
+"Deploy Hardening" utk detail lengkap & alasan tiap threshold).
 
 MODE DEFAULT = DRY-RUN (rencana saja):
   python scripts/safe_deploy.py
-  python scripts/safe_deploy.py --dry-run     (sama saja, ditulis eksplisit)
-  -> HANYA menampilkan langkah apa saja yang AKAN dilakukan.
-  -> TIDAK menyambung ke server sama sekali. Aman dijalankan kapan saja.
+  python scripts/safe_deploy.py --dry-run
+  -> HANYA menampilkan langkah yang AKAN dilakukan. TIDAK menyambung ke server.
 
-MODE EXECUTE (baru dipakai nanti, setelah disetujui):
+MODE EXECUTE:
   python scripts/safe_deploy.py --execute
-  -> Akan diminta mengetik "DEPLOY" dulu sebagai konfirmasi terakhir.
-  -> Baru setelah itu benar-benar menyambung ke server dan menjalankan langkah.
-  -> Kalau git pull di server menarik commit BARU (bukan "deploy kosong"),
-     proses BERHENTI dan menampilkan diff HEAD lama->baru untuk diverifikasi
-     manual dulu. Setelah commit itu diverifikasi & disetujui, jalankan ulang
-     dengan tambahan --confirm-new-commit untuk melanjutkan ke build/deploy:
-       python scripts/safe_deploy.py --execute --confirm-new-commit
+  -> Minta ketik "DEPLOY" sbg konfirmasi terakhir (TIDAK BISA dilewati lewat
+     pipe/stdin/expect/flag apa pun — lihat .claude/hooks/guard.py &
+     .claude/rules/production-safety.md, ini kontrol keras yang SENGAJA
+     tidak bisa diotomatisasi, termasuk oleh AI).
+  -> Kalau git pull menarik commit BARU, BERHENTI dulu minta verifikasi
+     manual, kecuali dijalankan ulang dgn --confirm-new-commit.
 
-URUTAN 8 LANGKAH INTI (sesuai kesepakatan keamanan):
-  1. Cek status Git di server (+ tarik kode terbaru / git pull) — kalau ada
-     perubahan yang belum di-commit di server, BERHENTI, jangan diam-diam ditimpa
-  2. Jalankan preflight check di server (--production)
-     -> Kalau preflight GAGAL, PROSES BERHENTI DI SINI. Tidak lanjut ke langkah manapun di bawah.
-  3. Build frontend di server (npm run build)
-     -> Kalau build GAGAL, PROSES BERHENTI. Tidak ada file yang disalin ke production.
-  4. Backup folder frontend production (/var/www/bric) sebelum ditimpa
-  5. Copy hasil build ke /var/www/bric
-  6. Reload backend LEWAT PM2: "sudo -u admin pm2 reload bric-backend"
-     (TIDAK PERNAH pakai pkill, TIDAK PERNAH menjalankan node manual sebagai root)
-  7. Cek http://localhost:3001/health
-  8. Kalau langkah 7 gagal -> tampilkan instruksi rollback frontend (dari folder backup langkah 4)
+MODE PREBUILT FRONTEND (opsional, spec bagian G/12/13):
+  python scripts/safe_deploy.py --execute --prebuilt-frontend <path-tarball.tar.gz> --prebuilt-checksum <sha256>
+  -> Build TIDAK dilakukan di VPS sama sekali. Tarball hasil build LOKAL
+     diupload, checksum diverifikasi SEBELUM dipakai, lalu di-extract ke
+     release baru & di-switch atomic sama seperti mode build-di-VPS.
+     CATATAN: build lokal di komputer Windows developer saat ini TIDAK bisa
+     dijalankan langsung dari repo ini (Node.js tidak ada di PATH lokal —
+     lihat CLAUDE.md) — mode ini disiapkan utk dipakai dari komputer/CI yang
+     punya Node, bukan default saat ini.
+
+PERUBAHAN UTAMA DARI VERSI SEBELUMNYA (audit CPU-saturation 2026-08-05):
+  1. Resource preflight gate SEBELUM build (CPU/RAM/swap/disk/PM2/health/
+     PG long-query) — deploy DITUNDA (bukan diteruskan) kalau server sedang
+     tidak aman. Threshold di deploy_resource_guard.py, didokumentasikan.
+  2. Change-aware: file yang berubah antara HEAD lama & baru diklasifikasi
+     (deploy_change_classifier.py) — build frontend HANYA kalau frontend/
+     berubah, PM2 reload HANYA kalau backend/ berubah.
+  3. Build (kalau memang perlu) dijalankan low-priority (ionice+nice),
+     dipantau via polling terpisah (BUKAN satu exec_command panjang —
+     memperbaiki bug nyata: paramiko exec_command timeout TIDAK membunuh
+     proses remote, cuma berhenti membaca lokal, jadi build macet bisa
+     terus jalan di server SELAMANYA tanpa perbaikan ini). Kalau resource
+     kritis berkepanjangan, HANYA process group build yang dihentikan —
+     TIDAK PERNAH pkill/killall node, TIDAK PERNAH menyentuh PM2.
+  4. Frontend release ATOMIC (releases/ + symlink, deploy_release_manager.py)
+     menggantikan `cp -r dist/* /var/www/bric/` lama yang bisa membuat nginx
+     menyajikan CAMPURAN file lama+baru selama proses copy. Rollback instan
+     (re-point symlink), rilis lama otomatis di-prune (retensi 5) supaya
+     disk tidak membengkak (disk produksi sudah 74% terpakai saat audit).
+  5. Deploy lock (deploy_lock.py) — cegah dua `--execute` berjalan bersamaan
+     ke server yang sama (mis. dari 2 komputer developer sekaligus).
+  6. Post-deploy resource check + observability (setiap tahap dicatat
+     dgn timing & snapshot resource sebelum/sesudah, TIDAK PERNAH secret).
+
+URUTAN LANGKAH (tetap tidak boleh dilompati):
+  0. Lock + kondisi awal (restart count PM2, HEAD, health) -> STOP kalau server sudah tidak aman
+  1. Cek status Git di server (file dikenal -> lanjut; tak dikenal -> STOP) + git pull
+     -> STOP kalau commit BARU tertarik (kecuali --confirm-new-commit)
+  2. Preflight check aplikasi (--production) -> STOP kalau FAIL
+  3. Klasifikasi perubahan (frontend/backend/docs-only) dari diff HEAD lama->baru
+  4. Resource gate SEBELUM build (skip seluruhnya kalau frontend tidak berubah)
+  5. Build low-priority + monitor (skip kalau frontend tidak berubah) -> STOP kalau gagal/di-abort
+  6. Verifikasi isi release baru -> STOP kalau tidak lengkap
+  7. Switch rilis ATOMIC (skip kalau tidak ada build baru)
+  8. Reload backend via PM2 HANYA kalau backend berubah
+  9. Health check -> rollback frontend otomatis kalau gagal DAN barusan switch rilis
+  10. Post-deploy resource check + verifikasi akhir (restart count, dll)
+  11. Prune rilis lama, lepas lock
 """
 
 import re
-import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -47,6 +79,17 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from deploy_common import get_deploy_config, connect_ssh, run_remote, mask  # noqa: E402
+from deploy_resource_guard import (  # noqa: E402
+    DEFAULT_THRESHOLDS, BUILD_MONITOR_DEFAULTS,
+    fetch_resource_snapshot, evaluate_resource_gate, format_snapshot_report,
+)
+from deploy_change_classifier import classify_changed_paths  # noqa: E402
+from deploy_lock import acquire_lock, release_lock  # noqa: E402
+from deploy_release_manager import (  # noqa: E402
+    new_release_dir, verify_release_contents, bootstrap_or_switch, rollback_to,
+    prune_old_releases, compute_remote_sha256, compute_local_sha256,
+)
+from deploy_build_monitor import run_build_with_monitor  # noqa: E402
 
 PM2_RELOAD_COMMAND = "sudo -u admin pm2 reload bric-backend"
 HEALTH_CHECK_URL = "http://localhost:3001/health"
@@ -135,7 +178,6 @@ def parse_git_status_paths(porcelain_output: str):
     for line in porcelain_output.splitlines():
         if not line.strip():
             continue
-        # format umum: 'XY path' atau 'XY old -> new' untuk rename
         rest = line[3:] if len(line) > 3 else line.strip()
         if " -> " in rest:
             rest = rest.split(" -> ", 1)[1]
@@ -144,8 +186,7 @@ def parse_git_status_paths(porcelain_output: str):
 
 
 def get_pm2_restart_count(client) -> "int | None":
-    """Ambil jumlah restart PM2 untuk proses bric-backend. None kalau gagal dibaca."""
-    out, _, code = run_remote(client, f"sudo -u admin pm2 jlist 2>/dev/null")
+    out, _, code = run_remote(client, "sudo -u admin pm2 jlist 2>/dev/null")
     if code != 0 or not out.strip():
         return None
     try:
@@ -158,79 +199,102 @@ def get_pm2_restart_count(client) -> "int | None":
         return None
     return None
 
+
 STEPS_PLAN = [
-    "0. Catat kondisi awal: restart count PM2, commit HEAD, health -> STOP kalau sudah tidak sehat dari awal",
-    "1. Cek status Git di server (file safety yang dikenal -> lanjut; file lain tak dikenal -> STOP) + git pull",
-    "   -> STOP juga kalau git pull ternyata menarik commit BARU (berarti bukan 'deploy kosong' lagi)",
-    "2. Jalankan preflight check di server (--production) -> STOP kalau status FAIL",
-    "3. Build frontend di server (npm run build) -> STOP kalau gagal, TIDAK ada file disalin",
-    "4. Backup folder /var/www/bric (frontend production) sebelum ditimpa",
-    "5. Copy hasil build baru ke /var/www/bric",
-    f"6. Reload backend via PM2 (user admin): {PM2_RELOAD_COMMAND}",
-    f"7. Cek kesehatan backend: {HEALTH_CHECK_URL}",
-    "8. Verifikasi akhir: PM2 tetap user admin, restart count naik wajar (persis +1)",
+    "0. Ambil deploy lock + catat kondisi awal (restart count PM2, HEAD, health, resource) -> STOP kalau server sudah tidak sehat/aman",
+    "1. Cek status Git di server (file safety dikenal -> lanjut; tak dikenal -> STOP) + git pull",
+    "   -> STOP juga kalau git pull menarik commit BARU (kecuali --confirm-new-commit)",
+    "2. Preflight check aplikasi (--production) -> STOP kalau FAIL",
+    "3. Klasifikasi perubahan (frontend/backend/docs-only) dari diff HEAD lama->baru",
+    "4. Resource gate SEBELUM build -> STOP/tunda kalau server tidak aman (DILEWATI kalau frontend tidak berubah)",
+    "5. Build frontend low-priority + monitor (DILEWATI kalau frontend tidak berubah) -> STOP kalau gagal/di-abort",
+    "6. Verifikasi isi release baru (index.html + file lengkap) -> STOP kalau tidak lengkap",
+    "7. Switch rilis frontend ATOMIC (symlink re-point, DILEWATI kalau tidak ada build baru)",
+    f"8. Reload backend via PM2 HANYA kalau backend berubah: {PM2_RELOAD_COMMAND}",
+    f"9. Cek kesehatan backend: {HEALTH_CHECK_URL} -> rollback otomatis kalau gagal & barusan switch rilis",
+    "10. Post-deploy resource check + verifikasi akhir (restart count PM2 wajar)",
+    "11. Prune rilis frontend lama (retensi 5) + lepas deploy lock",
 ]
 
 
 def print_plan():
     print("==============================================================")
-    print("  BRIC DASHBOARD — SAFE DEPLOY (Part 2A draft)")
+    print("  BRIC DASHBOARD — SAFE DEPLOY (Hardened)")
     print("==============================================================")
     print("Rencana langkah yang akan dijalankan (urutan tetap, tidak boleh dilompati):")
     for step in STEPS_PLAN:
         print(f"   {step}")
     print()
     print("Aturan keras yang dipatuhi script ini:")
-    print("   - TIDAK PERNAH memakai 'pkill'")
+    print("   - TIDAK PERNAH memakai 'pkill'/'killall node'")
     print("   - TIDAK PERNAH menjalankan backend manual sebagai root (nohup dkk)")
     print("   - Restart backend HANYA lewat perintah PM2 resmi di atas, sebagai user 'admin'")
-    print("   - Kalau build frontend gagal, TIDAK lanjut menyalin/deploy apa pun")
-    print("   - Frontend lama di-backup dulu sebelum ditimpa")
+    print("   - Build frontend HANYA kalau frontend/ benar-benar berubah, low-priority, dipantau, aman dihentikan")
+    print("   - PM2 reload HANYA kalau backend/ benar-benar berubah")
+    print("   - Kalau build gagal, TIDAK lanjut menyalin/deploy apa pun")
+    print("   - Rilis frontend ATOMIC (symlink), rilis lama tersimpan utk rollback instan")
+    print("   - Deploy ditunda (bukan dipaksa lanjut) kalau resource server sedang tidak aman")
     print()
 
 
-def backup_frontend(client, remote_frontend_path: str) -> str:
-    """Backup folder frontend production sebelum ditimpa. Return path folder backup."""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_path = f"{remote_frontend_path.rstrip('/')}_backup_{timestamp}"
-    print(f">>> Membuat backup frontend: {backup_path}")
-    out, err, code = run_remote(
-        client, f"cp -r {remote_frontend_path} {backup_path} && echo BACKUP_OK", timeout=120
-    )
-    if "BACKUP_OK" not in out:
-        raise RuntimeError(f"Gagal membuat backup frontend. Detail: {err or out}")
-    print(f"[OK] Backup frontend tersimpan di: {backup_path}")
-    return backup_path
+def log_stage(label: str):
+    ts = datetime.now().strftime("%H:%M:%S")
+    print(f"\n>>> [{ts}] {label}")
 
 
-def run_deploy(config: dict, confirm_new_commit: bool = False):
+def run_deploy(config: dict, confirm_new_commit: bool = False, prebuilt_frontend: str = None, prebuilt_checksum: str = None):
     remote_project = config["REMOTE_PROJECT_PATH"]
     remote_frontend = config["REMOTE_FRONTEND_PATH"]
+    stage_timings = {}
+
+    def timed_stage(label, fn):
+        log_stage(label)
+        t0 = time.monotonic()
+        result = fn()
+        stage_timings[label] = round(time.monotonic() - t0, 1)
+        return result
 
     print(f">>> Menyambung ke server {mask(config['VPS_HOST'])} ...")
     client = connect_ssh(config)
+    lock_acquired = False
+    switched_release = False
+    previous_release_for_rollback = None
 
     try:
-        # 0) Catat kondisi AWAL sebelum menyentuh apa pun (untuk dibandingkan nanti)
-        print("\n>>> [0/8] Catat kondisi awal (sebelum ada perubahan apa pun) ...")
+        # 0) Lock + kondisi awal
+        log_stage("[0/11] Ambil deploy lock ...")
+        lock_acquired, lock_msg = acquire_lock(run_remote, client, remote_project)
+        print(f"   {lock_msg}")
+        if not lock_acquired:
+            print("[STOP] Tidak bisa mengambil deploy lock. Deploy DIBATALKAN.")
+            return False
+
+        log_stage("[0/11] Catat kondisi awal (resource, PM2 restart count, HEAD, health) ...")
         restart_before = get_pm2_restart_count(client)
         print(f"   Jumlah restart PM2 SEBELUM deploy: {restart_before if restart_before is not None else 'tidak bisa dibaca'}")
         out, _, _ = run_remote(client, f"cd {remote_project} && git rev-parse HEAD")
         head_before = out.strip()
         print(f"   Commit HEAD server SEBELUM pull: {head_before[:12]}...")
-        out, _, _ = run_remote(client, f"curl -s {HEALTH_CHECK_URL}")
-        print(f"   Health SEBELUM deploy: {out.strip()}")
-        if "ok" not in out.lower():
+
+        snapshot_before = fetch_resource_snapshot(run_remote, client, remote_project)
+        print(f"   Snapshot resource awal:\n{format_snapshot_report(snapshot_before)}")
+
+        if snapshot_before.get("backend_healthy") is False:
             print("[STOP] Backend TIDAK sehat SEBELUM deploy dimulai. Deploy DIBATALKAN.")
             print("       Ini bukan disebabkan oleh script ini — server memang sudah bermasalah duluan.")
             return False
 
-        # 1) Cek git status dulu — bedakan 3 kategori:
-        #    a) file safety tooling yang MEMANG kita kirim manual (Part 2D, lewat SFTP)
-        #    b) file fitur yang SUDAH DIKONFIRMASI pemilik project sebagai kondisi
-        #       production yang memang disengaja (Part 2E, 2026-07-02)
-        #    c) apa pun di luar (a) dan (b) -> STOP, tidak dikenal sama sekali
-        print("\n>>> [1/8] Cek status Git di server ...")
+        ok, reasons = evaluate_resource_gate(snapshot_before, DEFAULT_THRESHOLDS)
+        if not ok:
+            print("\n[STOP] Deploy ditunda karena resource server sedang tinggi.")
+            for r in reasons:
+                print(f"       - {r}")
+            print("       Coba lagi setelah beban server turun. Production TIDAK diubah apa pun.")
+            return False
+        print("   [OK] Resource server aman untuk memulai deploy.")
+
+        # 1) Cek git status + pull (LOGIC TIDAK DIUBAH dari versi sebelumnya)
+        log_stage("[1/11] Cek status Git di server ...")
         out, err, code = run_remote(client, f"cd {remote_project} && git status --porcelain")
         changed_paths = parse_git_status_paths(out)
         safety_paths = [p for p in changed_paths if is_known_safety_path(p)]
@@ -244,30 +308,24 @@ def run_deploy(config: dict, confirm_new_commit: bool = False):
         ]
 
         if safety_paths:
-            print(f"   [INFO] {len(safety_paths)} file safety tooling belum di-commit di server")
-            print("          (WAJAR, dikirim manual lewat SFTP di Part 2D, bukan lewat git):")
+            print(f"   [INFO] {len(safety_paths)} file safety tooling belum di-commit di server (WAJAR, dikirim manual lewat SFTP):")
             for p in safety_paths:
                 print(f"            - {p}")
-
         if confirmed_paths:
-            print(f"   [INFO] {len(confirmed_paths)} file fitur yang SUDAH DIKONFIRMASI pemilik")
-            print("          project (Part 2E) sebagai kondisi production yang disengaja:")
+            print(f"   [INFO] {len(confirmed_paths)} file fitur yang SUDAH DIKONFIRMASI pemilik project sebagai kondisi production yang disengaja:")
             for p in confirmed_paths:
                 print(f"            - {p}")
-
         if unknown_paths:
             print("\n[PERINGATAN] Ditemukan perubahan file yang TIDAK DIKENALI sebagai file safety:")
             for p in unknown_paths:
                 print(f"     - {p}")
             print("Proses DIHENTIKAN — ini mengindikasikan ada perubahan fitur/kode lain")
-            print("yang belum jelas statusnya di server. Sesuai aturan, deploy tidak boleh")
-            print("lanjut sebelum ini dikonfirmasi manual oleh pemilik project.")
+            print("yang belum jelas statusnya di server. Deploy tidak boleh lanjut sebelum")
+            print("ini dikonfirmasi manual oleh pemilik project.")
             return False
+        print("[OK] Tidak ada perubahan tak dikenal di server.")
 
-        print("[OK] Tidak ada perubahan tak dikenal di server (hanya file safety yang sudah diketahui, kalau ada).")
-
-        # 1b) git pull (masih bagian dari langkah 1: "cek status + tarik kode terbaru")
-        print("\n>>> [1/8] git pull origin master ...")
+        log_stage("[1/11] git pull origin master ...")
         out, err, code = run_remote(client, f"cd {remote_project} && git pull origin master 2>&1", timeout=120)
         print(out.strip())
         if code != 0:
@@ -277,108 +335,183 @@ def run_deploy(config: dict, confirm_new_commit: bool = False):
         out, _, _ = run_remote(client, f"cd {remote_project} && git rev-parse HEAD")
         head_after = out.strip()
         if head_after != head_before:
-            print(f"\n[PERINGATAN] git pull menarik commit BARU (HEAD berubah dari {head_before[:12]} ke {head_after[:12]}).")
-            print("Ini BUKAN 'deploy kosong' lagi — ada kode baru yang belum pernah diuji lewat alur ini.")
+            print(f"\n[PERINGATAN] git pull menarik commit BARU ({head_before[:12]} -> {head_after[:12]}).")
             if not confirm_new_commit:
-                print("Proses DIHENTIKAN untuk konfirmasi manual sebelum melanjutkan build & deploy.")
-                print("(Kalau sudah diverifikasi & disetujui, jalankan ulang dengan tambahan --confirm-new-commit.)")
+                print("Proses DIHENTIKAN untuk konfirmasi manual. Jalankan ulang dengan --confirm-new-commit setelah diverifikasi.")
                 return False
-            print("[INFO] --confirm-new-commit diberikan — commit baru ini SUDAH diverifikasi/disetujui sebelumnya, lanjut.")
+            print("[INFO] --confirm-new-commit diberikan — lanjut.")
         else:
-            print(f"[OK] HEAD tidak berubah ({head_after[:12]}...) — benar-benar 'deploy kosong', tidak ada kode baru.")
+            print(f"[OK] HEAD tidak berubah ({head_after[:12]}...) — 'deploy kosong', tidak ada kode baru.")
 
-        # 2) Preflight check (mode production) di server
-        print("\n>>> [2/8] Menjalankan preflight check di server ...")
-        out, err, code = run_remote(
-            client, f"cd {remote_project} && node backend/scripts/preflight-check.js --production", timeout=60
-        )
+        # 2) Preflight check aplikasi (TIDAK DIUBAH)
+        log_stage("[2/11] Preflight check aplikasi di server ...")
+        out, err, code = run_remote(client, f"cd {remote_project} && node backend/scripts/preflight-check.js --production", timeout=60)
         print(out.strip())
         if code != 0:
-            print("[STOP] Preflight check berstatus FAIL. Deploy DIHENTIKAN sebelum menyentuh apa pun lagi.")
+            print("[STOP] Preflight check berstatus FAIL. Deploy DIHENTIKAN.")
             return False
         print("[OK] Preflight check lolos (PASS/WARNING, bukan FAIL).")
 
-        # 3) Build frontend — WAJIB cek exit code
-        print("\n>>> [3/8] Build frontend (npm run build) di server ...")
-        out, err, code = run_remote(
-            client, f"cd {remote_project}/frontend && npm run build 2>&1", timeout=300
-        )
-        print(out.strip()[-2000:])
-        if code != 0:
-            print("[STOP] Build frontend GAGAL. TIDAK ADA file yang disalin ke production.")
-            print("       Frontend production yang sedang tayang TIDAK diubah.")
-            return False
-        # Pastikan folder dist benar-benar ada & tidak kosong
-        out, err, code = run_remote(
-            client, f"[ -d {remote_project}/frontend/dist ] && ls {remote_project}/frontend/dist | wc -l"
-        )
-        if not out.strip() or out.strip() == "0":
-            print("[STOP] Folder frontend/dist kosong/tidak ada setelah build. Deploy dihentikan.")
-            return False
-        print("[OK] Build frontend berhasil.")
+        # 3) Klasifikasi perubahan
+        log_stage("[3/11] Klasifikasi perubahan (frontend/backend/docs-only) ...")
+        if head_after == head_before:
+            changed_since = []
+            print("   HEAD tidak berubah -- tidak ada file yang perlu diklasifikasi (deploy kosong).")
+        else:
+            out, _, _ = run_remote(client, f"cd {remote_project} && git diff --name-only {head_before} {head_after}")
+            changed_since = [l for l in out.strip().splitlines() if l.strip()]
+        classification = classify_changed_paths(changed_since)
+        print(f"   Frontend berubah: {classification['frontend_changed']}")
+        print(f"   Backend berubah:  {classification['backend_changed']}")
+        if classification["unclassified_paths"]:
+            print(f"   File tak terklasifikasi (tidak memicu build/reload apa pun): {classification['unclassified_paths']}")
 
-        # 4) Backup frontend production sebelum ditimpa
-        print("\n>>> [4/8] Backup frontend production ...")
-        backup_path = backup_frontend(client, remote_frontend)
+        need_build = classification["frontend_changed"] or bool(prebuilt_frontend)
+        need_pm2_reload = classification["backend_changed"]
 
-        # 5) Copy dist ke folder production
-        print("\n>>> [5/8] Menyalin hasil build ke folder production ...")
-        out, err, code = run_remote(
-            client,
-            f"cp -r {remote_project}/frontend/dist/* {remote_frontend}/ && echo COPY_OK",
-            timeout=60,
-        )
-        if "COPY_OK" not in out:
-            print(f"[STOP] Gagal menyalin frontend. Detail: {err or out}")
-            print(f"       Frontend LAMA masih ada di backup: {backup_path}")
-            return False
-        print("[OK] Frontend production sudah diperbarui.")
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        release_path = None
 
-        # 6) Reload backend LEWAT PM2 (bukan pkill / nohup manual)
-        print(f"\n>>> [6/8] Reload backend: {PM2_RELOAD_COMMAND}")
-        out, err, code = run_remote(client, PM2_RELOAD_COMMAND, timeout=60)
-        print(out.strip())
-        if code != 0:
-            print("[PERINGATAN] Perintah reload PM2 melaporkan error. Cek manual ke server.")
+        # 4-7) Build/prebuilt + verifikasi + switch atomic — HANYA kalau frontend berubah
+        if not need_build:
+            print("\n>>> [4-7/11] Frontend TIDAK berubah — build & release switch DILEWATI sepenuhnya.")
+        else:
+            log_stage("[4/11] Resource gate sebelum build ...")
+            snapshot_pre_build = fetch_resource_snapshot(run_remote, client, remote_project)
+            ok, reasons = evaluate_resource_gate(snapshot_pre_build, DEFAULT_THRESHOLDS)
+            if not ok:
+                print("\n[STOP] Deploy ditunda karena resource server sedang tinggi.")
+                for r in reasons:
+                    print(f"       - {r}")
+                return False
+            print("   [OK] Resource aman untuk build.")
 
-        # 7) Health check
-        print(f"\n>>> [7/8] Cek kesehatan backend: {HEALTH_CHECK_URL}")
+            release_path = new_release_dir(remote_frontend, ts)
+            run_remote(client, f"mkdir -p {release_path}")
+
+            if prebuilt_frontend:
+                log_stage(f"[5/11] Mode prebuilt-frontend: upload {prebuilt_frontend} ...")
+                local_checksum = prebuilt_checksum or compute_local_sha256(prebuilt_frontend)
+                remote_tarball = f"/tmp/bric_prebuilt_{ts}.tar.gz"
+                sftp = client.open_sftp()
+                sftp.put(prebuilt_frontend, remote_tarball)
+                sftp.close()
+                remote_checksum = compute_remote_sha256(run_remote, client, remote_tarball)
+                if remote_checksum != local_checksum:
+                    print(f"[STOP] Checksum tarball TIDAK COCOK (lokal {local_checksum}, di server {remote_checksum}). Deploy DIHENTIKAN, artifact tidak dipakai.")
+                    return False
+                print(f"   [OK] Checksum cocok ({remote_checksum[:16]}...).")
+                out, err, code = run_remote(client, f"tar -xzf {remote_tarball} -C {release_path} && rm -f {remote_tarball} && echo EXTRACT_OK", timeout=60)
+                if "EXTRACT_OK" not in out:
+                    print(f"[STOP] Gagal extract artifact. Detail: {err or out}")
+                    return False
+                build_result = {"success": True, "duration_seconds": 0}
+            else:
+                log_stage("[5/11] Build frontend (low-priority, dipantau) ...")
+                build_result = run_build_with_monitor(
+                    run_remote, client, f"{remote_project}/frontend", remote_project, ts,
+                    poll_interval_seconds=BUILD_MONITOR_DEFAULTS["POLL_INTERVAL_SECONDS"],
+                    critical_load1_per_cpu=BUILD_MONITOR_DEFAULTS["CRITICAL_LOAD1_PER_CPU"],
+                    critical_min_available_ram_mb=BUILD_MONITOR_DEFAULTS["CRITICAL_MIN_AVAILABLE_RAM_MB"],
+                    sustained_breaches_to_abort=BUILD_MONITOR_DEFAULTS["SUSTAINED_BREACHES_TO_ABORT"],
+                    max_build_seconds=BUILD_MONITOR_DEFAULTS["MAX_BUILD_SECONDS"],
+                    log_fn=print,
+                )
+                print(f"   {build_result['reason']} (durasi {build_result['duration_seconds']:.1f}s)")
+                if not build_result["success"]:
+                    print("[STOP] Build GAGAL/DIHENTIKAN. TIDAK ADA yang disalin ke production. Frontend production yang tayang TIDAK diubah.")
+                    return False
+                out, err, code = run_remote(client, f"cp -r {remote_project}/frontend/dist/* {release_path}/ && echo COPY_OK", timeout=60)
+                if "COPY_OK" not in out:
+                    print(f"[STOP] Gagal menyalin hasil build ke folder release. Detail: {err or out}")
+                    return False
+
+            log_stage("[6/11] Verifikasi isi release baru ...")
+            ok, msg = verify_release_contents(run_remote, client, release_path)
+            print(f"   {msg}")
+            if not ok:
+                print("[STOP] Release baru tidak lengkap. TIDAK di-switch ke production.")
+                return False
+
+            log_stage("[7/11] Switch rilis frontend ATOMIC ...")
+            previous_release_for_rollback, was_bootstrap = bootstrap_or_switch(run_remote, client, remote_frontend, release_path)
+            switched_release = True
+            if was_bootstrap:
+                print(f"   [INFO] Konversi pertama kali ke pola release+symlink. Isi lama diarsipkan di: {previous_release_for_rollback}")
+            else:
+                print(f"   [OK] Rilis di-switch. Rilis sebelumnya (utk rollback): {previous_release_for_rollback}")
+
+        # 8) PM2 reload HANYA kalau backend berubah
+        if not need_pm2_reload:
+            print("\n>>> [8/11] Backend TIDAK berubah — PM2 reload DILEWATI.")
+        else:
+            log_stage(f"[8/11] Reload backend: {PM2_RELOAD_COMMAND}")
+            out, err, code = run_remote(client, PM2_RELOAD_COMMAND, timeout=60)
+            print(out.strip())
+            if code != 0:
+                print("[PERINGATAN] Perintah reload PM2 melaporkan error. Cek manual ke server.")
+
+        # 9) Health check
+        log_stage(f"[9/11] Cek kesehatan backend: {HEALTH_CHECK_URL}")
         out, err, code = run_remote(client, f"sleep 2 && curl -s {HEALTH_CHECK_URL}", timeout=30)
         print("Response:", out.strip() or "(tidak ada response)")
 
         if "ok" not in out.lower():
             print("\n[GAGAL] Health check TIDAK menunjukkan status sehat.")
-            print("=== INSTRUKSI ROLLBACK FRONTEND ===")
-            print(f"  1. SSH ke server, lalu jalankan:")
-            print(f"     sudo rm -rf {remote_frontend}/*")
-            print(f"     sudo cp -r {backup_path}/* {remote_frontend}/")
-            print(f"  2. Backend TIDAK di-rollback otomatis oleh script ini.")
-            print(f"     Kalau backend juga bermasalah, gunakan 'git log' + 'git revert' di server,")
-            print(f"     lalu jalankan lagi: {PM2_RELOAD_COMMAND}")
-            print(f"  3. Setelah rollback, cek lagi: curl {HEALTH_CHECK_URL}")
+            if switched_release and previous_release_for_rollback:
+                log_stage("Rollback OTOMATIS frontend ke rilis sebelumnya ...")
+                try:
+                    rollback_to(run_remote, client, remote_frontend, previous_release_for_rollback)
+                    print(f"   [OK] Frontend di-rollback ke: {previous_release_for_rollback}")
+                except Exception as e:
+                    print(f"   [GAGAL] Rollback otomatis gagal: {e}")
+                    print(f"   Rollback manual: ln -sfn {previous_release_for_rollback} {remote_frontend}")
+            print("=== INSTRUKSI LANJUTAN ===")
+            print(f"  Backend TIDAK di-rollback otomatis oleh script ini.")
+            print(f"  Kalau backend juga bermasalah, gunakan 'git log' + 'git revert' di server,")
+            print(f"  lalu jalankan lagi: {PM2_RELOAD_COMMAND}")
+            print(f"  Setelah rollback, cek lagi: curl {HEALTH_CHECK_URL}")
             return False
 
-        # 8) Verifikasi akhir: user PM2 tetap admin + restart count naik wajar (bukan crash loop)
-        print("\n>>> [8/8] Verifikasi akhir (PM2 user & jumlah restart) ...")
+        # 10) Post-deploy resource check + verifikasi akhir
+        log_stage("[10/11] Post-deploy resource check + verifikasi akhir ...")
+        snapshot_after = fetch_resource_snapshot(run_remote, client, remote_project)
+        print(f"   Snapshot resource sesudah deploy:\n{format_snapshot_report(snapshot_after)}")
+        ok_after, reasons_after = evaluate_resource_gate(snapshot_after, DEFAULT_THRESHOLDS)
+        if not ok_after:
+            print("   [PERINGATAN] Resource server KRITIS setelah deploy:")
+            for r in reasons_after:
+                print(f"       - {r}")
+            print("   Deploy tetap dianggap selesai (health check sudah OK), tapi PANTAU server manual.")
+
         out, _, _ = run_remote(client, "sudo -u admin pm2 list 2>&1")
         print(out.strip())
         restart_after = get_pm2_restart_count(client)
-        print(f"   Jumlah restart PM2 SEBELUM: {restart_before if restart_before is not None else '?'}, "
-              f"SESUDAH: {restart_after if restart_after is not None else '?'}")
-        if restart_before is not None and restart_after is not None:
+        print(f"   Jumlah restart PM2 SEBELUM: {restart_before if restart_before is not None else '?'}, SESUDAH: {restart_after if restart_after is not None else '?'}")
+        if need_pm2_reload and restart_before is not None and restart_after is not None:
             delta = restart_after - restart_before
             if delta == 1:
-                print("   [OK] Restart bertambah tepat 1 kali — sesuai satu kali reload yang kita lakukan.")
+                print("   [OK] Restart bertambah tepat 1 kali.")
             elif delta > 1:
-                print(f"   [PERHATIAN] Restart bertambah {delta} kali (lebih dari 1) — backend mungkin sempat")
-                print("               crash/restart sendiri di luar reload ini. Perlu dicek log PM2 manual.")
+                print(f"   [PERHATIAN] Restart bertambah {delta} kali — cek log PM2 manual.")
             else:
                 print("   [PERHATIAN] Jumlah restart tidak bertambah seperti yang diharapkan — cek manual.")
+        elif not need_pm2_reload and restart_before is not None and restart_after is not None and restart_after != restart_before:
+            print(f"   [PERHATIAN] PM2 tidak seharusnya reload (backend tidak berubah), tapi restart count berubah ({restart_before} -> {restart_after}) — kemungkinan crash/restart di luar deploy ini, cek log PM2 manual.")
+
+        # 11) Prune rilis lama
+        if switched_release:
+            log_stage("[11/11] Prune rilis frontend lama (retensi 5) ...")
+            print(f"   {prune_old_releases(run_remote, client, remote_frontend, keep=5)}")
 
         print("\n>>> Deploy selesai. Backend melaporkan status sehat.")
-        print(f"    (Backup frontend sebelumnya masih tersimpan di: {backup_path} — belum dihapus otomatis)")
+        print("\n=== RINGKASAN TIMING TAHAP ===")
+        for label, seconds in stage_timings.items():
+            print(f"   {label}: {seconds}s")
         return True
     finally:
+        if lock_acquired:
+            release_lock(run_remote, client, remote_project)
         client.close()
 
 
@@ -386,6 +519,14 @@ def main():
     execute_mode = "--execute" in sys.argv
     explicit_dry_run = "--dry-run" in sys.argv
     confirm_new_commit = "--confirm-new-commit" in sys.argv
+
+    prebuilt_frontend = None
+    prebuilt_checksum = None
+    for i, arg in enumerate(sys.argv):
+        if arg == "--prebuilt-frontend" and i + 1 < len(sys.argv):
+            prebuilt_frontend = sys.argv[i + 1]
+        if arg == "--prebuilt-checksum" and i + 1 < len(sys.argv):
+            prebuilt_checksum = sys.argv[i + 1]
 
     print_plan()
 
@@ -403,7 +544,7 @@ def main():
         return
 
     config = get_deploy_config(interactive=True)
-    success = run_deploy(config, confirm_new_commit=confirm_new_commit)
+    success = run_deploy(config, confirm_new_commit=confirm_new_commit, prebuilt_frontend=prebuilt_frontend, prebuilt_checksum=prebuilt_checksum)
 
     print()
     print("=== Deploy SELESAI (sukses) ===" if success else "=== Deploy DIHENTIKAN / GAGAL — lihat pesan di atas ===")
