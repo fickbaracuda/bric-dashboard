@@ -221,36 +221,34 @@ function calculateBankRecommendation({
   const { hour, minute, minutesOfDay } = getJakartaParts(now);
   const todayBusinessDate = jakartaBusinessDate(now);
 
-  // ── Gate 1: confidence UNAVAILABLE -- spec section 40, tidak boleh CANCEL/REDUCE/ADD ──
-  if (!balanceInfo || balanceInfo.confidence === 'UNAVAILABLE' || !isNum(balanceInfo.balance)) {
-    return {
-      current_time: minutesToTimeString(minutesOfDay), current_hour: hour, current_plan: null,
-      next_schedule: null, recommendation: RECOMMENDATION.BALANCE_UNAVAILABLE,
-      reason: 'Saldo aktual belum dapat diverifikasi.',
-      warnings: balanceInfo ? balanceInfo.warnings : ['Tidak ada data saldo sama sekali.'],
-      missing_fields: [],
-    };
+  // ── Ketersediaan saldo -- dihitung SEKALI di depan, dipakai sbg GATE
+  // hanya utk field yang BENAR-BENAR butuh actual balance (variance,
+  // required_funding, adjustment, recommendation CANCEL/REDUCE/KEEP/ADD).
+  // Planned Balance & Next Scheduler (waktu/sumber/nominal existing) TIDAK
+  // pernah membutuhkan actual balance sama sekali -- data itu murni dari
+  // plan/scheduler config, jadi TETAP ditampilkan walau saldo aktual
+  // UNAVAILABLE/STALE (sebelumnya seluruh current_plan/next_schedule ikut
+  // null padahal cuma variance-nya yang sebenarnya tidak aman dihitung).
+  const balanceMissing = !balanceInfo || balanceInfo.confidence === 'UNAVAILABLE' || !isNum(balanceInfo.balance);
+  let balanceStale = false;
+  let staleAgeMinutes = null;
+  if (!balanceMissing && staleAfterMinutes !== null && balanceInfo.balance_timestamp) {
+    staleAgeMinutes = (now.getTime() - new Date(balanceInfo.balance_timestamp).getTime()) / 60000;
+    balanceStale = staleAgeMinutes > Number(staleAfterMinutes);
   }
+  const balanceTrustworthy = !balanceMissing && !balanceStale;
+  const balanceUnavailableReason = 'Saldo aktual belum dapat diverifikasi.';
+  const balanceStaleReason = () => `Data saldo terakhir sudah kedaluwarsa (umur ${Math.round(staleAgeMinutes)} menit, batas ${staleAfterMinutes} menit). Tunggu sinkronisasi terbaru.`;
+  const balanceGateWarnings = balanceMissing ? (balanceInfo ? balanceInfo.warnings : ['Tidak ada data saldo sama sekali.']) : [];
 
-  // ── Gate 2: staleness ──
-  if (staleAfterMinutes !== null && balanceInfo.balance_timestamp) {
-    const ageMinutes = (now.getTime() - new Date(balanceInfo.balance_timestamp).getTime()) / 60000;
-    if (ageMinutes > Number(staleAfterMinutes)) {
-      return {
-        current_time: minutesToTimeString(minutesOfDay), current_hour: hour, current_plan: null,
-        next_schedule: null, recommendation: RECOMMENDATION.BALANCE_STALE,
-        reason: `Data saldo terakhir sudah kedaluwarsa (umur ${Math.round(ageMinutes)} menit, batas ${staleAfterMinutes} menit). Tunggu sinkronisasi terbaru.`,
-        warnings: [], missing_fields: [],
-      };
-    }
-  }
-
-  // ── Gate 3: business_date mismatch -- spec section 42, warning bukan block ──
+  // ── business_date mismatch -- spec section 42, warning bukan block ──
   const businessDateWarnings = [];
-  if (balanceInfo.business_date && balanceInfo.business_date !== todayBusinessDate) {
+  if (!balanceMissing && balanceInfo.business_date && balanceInfo.business_date !== todayBusinessDate) {
     businessDateWarnings.push(`Business date saldo aktual (${balanceInfo.business_date}) berbeda dari tanggal operasional hari ini (${todayBusinessDate}).`);
   }
 
+  // ── current_plan: planned_balance/nominal_average SELALU diisi kalau
+  //    baris jam ini ada; variance/status HANYA kalau saldo trustworthy. ──
   const currentRow = findHourPlan(hourlyPlan, hour);
   const missingFields = [];
   if (!currentRow) missingFields.push(`hourly_plan[hour=${hour}]`);
@@ -258,29 +256,42 @@ function calculateBankRecommendation({
     if (!isNum(currentRow.nominal_average)) missingFields.push(`hourly_plan[hour=${hour}].nominal_average`);
     if (!isNum(currentRow.planned_balance)) missingFields.push(`hourly_plan[hour=${hour}].planned_balance`);
   }
+
+  let currentPlan = null;
+  if (currentRow) {
+    const plannedBalance = isNum(currentRow.planned_balance) ? Number(currentRow.planned_balance) : null;
+    const nominalAverage = isNum(currentRow.nominal_average) ? Number(currentRow.nominal_average) : null;
+    if (balanceTrustworthy && plannedBalance !== null) {
+      const { variance, variance_pct, status } = calculateVariance({ actualBalance: balanceInfo.balance, plannedBalance, tolerance: planVarianceTolerance });
+      currentPlan = { hour, planned_balance: plannedBalance, nominal_average: nominalAverage, variance, variance_pct, status };
+    } else {
+      currentPlan = { hour, planned_balance: plannedBalance, nominal_average: nominalAverage, variance: null, variance_pct: null, status: PLAN_STATUS.INSUFFICIENT_DATA };
+    }
+  }
+
   if (missingFields.length) {
     return {
-      current_time: minutesToTimeString(minutesOfDay), current_hour: hour,
-      current_plan: currentRow ? {
-        hour, planned_balance: isNum(currentRow.planned_balance) ? Number(currentRow.planned_balance) : null,
-        nominal_average: isNum(currentRow.nominal_average) ? Number(currentRow.nominal_average) : null,
-        variance: null, variance_pct: null, status: PLAN_STATUS.INSUFFICIENT_DATA,
-      } : null,
+      current_time: minutesToTimeString(minutesOfDay), current_hour: hour, current_plan: currentPlan,
       next_schedule: null, recommendation: RECOMMENDATION.INSUFFICIENT_DATA,
       reason: `Rencana saldo belum tersedia untuk jam ini: ${missingFields.join(', ')}.`,
       warnings: businessDateWarnings, missing_fields: missingFields,
     };
   }
 
-  const plannedBalance = Number(currentRow.planned_balance);
-  const nominalAverage = Number(currentRow.nominal_average);
-  const { variance, variance_pct, status: planStatus } = calculateVariance({
-    actualBalance: balanceInfo.balance, plannedBalance, tolerance: planVarianceTolerance,
-  });
-  const currentPlan = { hour, planned_balance: plannedBalance, nominal_average: nominalAverage, variance, variance_pct, status: planStatus };
-
+  // ── next_schedule: waktu/sumber/nominal existing/target SELALU dicoba
+  //    diisi (murni config, independen saldo); required_funding/adjustment/
+  //    recommendation HANYA kalau saldo trustworthy DAN struktur schedule valid. ──
   const { schedule: nextRaw, duplicate } = findNextSchedule(schedules, targetBankCode, minutesOfDay);
   if (!nextRaw) {
+    if (balanceMissing || balanceStale) {
+      return {
+        current_time: minutesToTimeString(minutesOfDay), current_hour: hour, current_plan: currentPlan,
+        next_schedule: null,
+        recommendation: balanceMissing ? RECOMMENDATION.BALANCE_UNAVAILABLE : RECOMMENDATION.BALANCE_STALE,
+        reason: balanceMissing ? balanceUnavailableReason : balanceStaleReason(),
+        warnings: [...businessDateWarnings, ...balanceGateWarnings], missing_fields: [],
+      };
+    }
     return {
       current_time: minutesToTimeString(minutesOfDay), current_hour: hour, current_plan: currentPlan,
       next_schedule: null, recommendation: RECOMMENDATION.NO_UPCOMING_SCHEDULER,
@@ -299,14 +310,23 @@ function calculateBankRecommendation({
   const nextMinutes = nextRaw._minutes;
   const nextHour = Math.floor(nextMinutes / 60);
   const targetRow = findHourPlan(hourlyPlan, nextHour);
+  const nextScheduleBasic = {
+    id: nextRaw.id, scheduled_time: nextRaw.scheduled_time, target_bank_code: nextRaw.target_bank_code,
+    funding_source_code: nextRaw.funding_source_code,
+    scheduled_amount: isNum(nextRaw.scheduled_amount) ? Number(nextRaw.scheduled_amount) : null, status: nextRaw.status,
+    target_hour: nextHour,
+    target_planned_balance: targetRow && isNum(targetRow.planned_balance) ? Number(targetRow.planned_balance) : null,
+    // Field finansial (butuh actual balance trustworthy) -- default eksplisit
+    // null, bukan undefined, supaya konsumen API/frontend konsisten & tidak
+    // perlu bedakan "belum dihitung" vs "field tidak ada sama sekali".
+    burn_until_next: null, confirmed_inflows_before_next: null, projected_balance: null,
+    required_funding: null, adjustment_amount: null, recommendation: null, recommendation_reason: null,
+  };
+
   if (!targetRow || !isNum(targetRow.planned_balance)) {
     return {
       current_time: minutesToTimeString(minutesOfDay), current_hour: hour, current_plan: currentPlan,
-      next_schedule: {
-        id: nextRaw.id, scheduled_time: nextRaw.scheduled_time, target_bank_code: nextRaw.target_bank_code,
-        funding_source_code: nextRaw.funding_source_code,
-        scheduled_amount: isNum(nextRaw.scheduled_amount) ? Number(nextRaw.scheduled_amount) : null, status: nextRaw.status,
-      },
+      next_schedule: nextScheduleBasic,
       recommendation: RECOMMENDATION.INSUFFICIENT_DATA,
       reason: `Target planned_balance untuk jam scheduler berikutnya (${nextRaw.scheduled_time}) belum tersedia.`,
       warnings: businessDateWarnings, missing_fields: [`hourly_plan[hour=${nextHour}].planned_balance`],
@@ -315,13 +335,27 @@ function calculateBankRecommendation({
   if (!isNum(nextRaw.scheduled_amount) || Number(nextRaw.scheduled_amount) < 0) {
     return {
       current_time: minutesToTimeString(minutesOfDay), current_hour: hour, current_plan: currentPlan,
-      next_schedule: {
-        id: nextRaw.id, scheduled_time: nextRaw.scheduled_time, target_bank_code: nextRaw.target_bank_code,
-        funding_source_code: nextRaw.funding_source_code, scheduled_amount: null, status: nextRaw.status,
-      },
+      next_schedule: nextScheduleBasic,
       recommendation: RECOMMENDATION.INSUFFICIENT_DATA,
       reason: `Nominal scheduler ${nextRaw.scheduled_time} tidak valid.`,
       warnings: businessDateWarnings, missing_fields: [`schedule[${nextRaw.id}].scheduled_amount`],
+    };
+  }
+
+  // ── Struktur schedule valid -- SEKARANG baru gate saldo utk lanjut ke
+  //    perhitungan finansial (burn/projected/required/recommendation). ──
+  if (balanceMissing) {
+    return {
+      current_time: minutesToTimeString(minutesOfDay), current_hour: hour, current_plan: currentPlan,
+      next_schedule: nextScheduleBasic, recommendation: RECOMMENDATION.BALANCE_UNAVAILABLE,
+      reason: balanceUnavailableReason, warnings: [...businessDateWarnings, ...balanceGateWarnings], missing_fields: [],
+    };
+  }
+  if (balanceStale) {
+    return {
+      current_time: minutesToTimeString(minutesOfDay), current_hour: hour, current_plan: currentPlan,
+      next_schedule: nextScheduleBasic, recommendation: RECOMMENDATION.BALANCE_STALE,
+      reason: balanceStaleReason(), warnings: businessDateWarnings, missing_fields: [],
     };
   }
 
@@ -331,10 +365,7 @@ function calculateBankRecommendation({
   if (burnUntilNext === null) {
     return {
       current_time: minutesToTimeString(minutesOfDay), current_hour: hour, current_plan: currentPlan,
-      next_schedule: {
-        id: nextRaw.id, scheduled_time: nextRaw.scheduled_time, target_bank_code: nextRaw.target_bank_code,
-        funding_source_code: nextRaw.funding_source_code, scheduled_amount: Number(nextRaw.scheduled_amount), status: nextRaw.status,
-      },
+      next_schedule: nextScheduleBasic,
       recommendation: RECOMMENDATION.INSUFFICIENT_DATA,
       reason: `nominal_average belum lengkap untuk jam: ${missingHours.join(', ')}.`,
       warnings: businessDateWarnings, missing_fields: missingHours.map(h => `hourly_plan[hour=${h}].nominal_average`),
@@ -345,9 +376,8 @@ function calculateBankRecommendation({
     schedules, targetBankCode, currentMinutesOfDay: minutesOfDay, nextScheduleMinutes: nextMinutes, excludeId: nextRaw.id,
   });
   const projectedBalance = calculateProjectedBalance({ actualBalance: balanceInfo.balance, burnUntilNext, confirmedInflows });
-  const targetBalanceNext = Number(targetRow.planned_balance);
-  const requiredFunding = calculateRequiredFunding({ targetBalance: targetBalanceNext, projectedBalance });
-  const existingScheduleAmount = Number(nextRaw.scheduled_amount);
+  const requiredFunding = calculateRequiredFunding({ targetBalance: nextScheduleBasic.target_planned_balance, projectedBalance });
+  const existingScheduleAmount = nextScheduleBasic.scheduled_amount;
   const { recommendation, adjustment_amount, reason } = calculateFundingRecommendation({
     requiredFunding, existingScheduleAmount, schedulerTolerance,
   });
@@ -359,9 +389,7 @@ function calculateBankRecommendation({
     current_hour: hour,
     current_plan: currentPlan,
     next_schedule: {
-      id: nextRaw.id, scheduled_time: nextRaw.scheduled_time, target_bank_code: nextRaw.target_bank_code,
-      funding_source_code: nextRaw.funding_source_code, scheduled_amount: existingScheduleAmount, status: nextRaw.status,
-      target_hour: nextHour, target_planned_balance: targetBalanceNext,
+      ...nextScheduleBasic,
       burn_until_next: burnUntilNext, confirmed_inflows_before_next: confirmedInflows,
       projected_balance: projectedBalance, required_funding: requiredFunding,
       adjustment_amount, recommendation, recommendation_reason: reason,

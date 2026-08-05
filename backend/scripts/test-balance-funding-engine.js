@@ -209,6 +209,43 @@ test('BALANCE_STALE menang di atas semuanya', () => {
   });
   assert.strictEqual(r.recommendation, RECOMMENDATION.BALANCE_STALE);
 });
+test('BALANCE_STALE tetap tampilkan Planned Balance & Next Scheduler (data plan murni, independen dari saldo aktual) -- hanya Variance/Required Funding/Recommendation yang di-null-kan', () => {
+  const staleTimestamp = new Date(jakartaTime(14, 0).getTime() - 120 * 60000);
+  const r = calculateBankRecommendation({
+    now: jakartaTime(14, 0), targetBankCode: 'OCBC', hourlyPlan: OCBC_HOURLY_PLAN, schedules: OCBC_SCHEDULES,
+    balanceInfo: balanceInfo(1600000000, { balance_timestamp: staleTimestamp }),
+    staleAfterMinutes: 60,
+  });
+  assert.strictEqual(r.recommendation, RECOMMENDATION.BALANCE_STALE);
+  // Planned Balance & nominal_average TETAP ada (bukan null) -- ini yg tadinya bug (kartu Planned Balance/Next Scheduler kosong).
+  assert.ok(r.current_plan);
+  assert.strictEqual(r.current_plan.planned_balance, 656612552);
+  assert.strictEqual(r.current_plan.nominal_average, 776126657);
+  // Variance TETAP null -- benar2 tidak aman dihitung dari saldo basi.
+  assert.strictEqual(r.current_plan.variance, null);
+  assert.strictEqual(r.current_plan.status, PLAN_STATUS.INSUFFICIENT_DATA);
+  // Next Scheduler waktu/sumber/nominal existing/target TETAP ada.
+  assert.ok(r.next_schedule);
+  assert.strictEqual(r.next_schedule.scheduled_time, '15:00');
+  assert.strictEqual(r.next_schedule.funding_source_code, 'MANDIRI');
+  assert.strictEqual(r.next_schedule.scheduled_amount, 1750000000);
+  assert.strictEqual(r.next_schedule.target_planned_balance, 1519583262);
+  // Required Funding/adjustment/recommendation (butuh saldo trustworthy) TETAP null.
+  assert.strictEqual(r.next_schedule.required_funding, null);
+  assert.strictEqual(r.next_schedule.adjustment_amount, null);
+  assert.strictEqual(r.next_schedule.recommendation, null);
+});
+test('BALANCE_UNAVAILABLE tetap tampilkan Planned Balance & Next Scheduler, bukan cuma recommendation blank', () => {
+  const r = calculateBankRecommendation({
+    now: jakartaTime(14, 0), targetBankCode: 'OCBC', hourlyPlan: OCBC_HOURLY_PLAN, schedules: OCBC_SCHEDULES,
+    balanceInfo: { balance: null, confidence: 'UNAVAILABLE', warnings: ['saldo tidak ada'] },
+  });
+  assert.strictEqual(r.recommendation, RECOMMENDATION.BALANCE_UNAVAILABLE);
+  assert.strictEqual(r.current_plan.planned_balance, 656612552);
+  assert.strictEqual(r.current_plan.variance, null);
+  assert.strictEqual(r.next_schedule.scheduled_time, '15:00');
+  assert.strictEqual(r.next_schedule.required_funding, null);
+});
 test('business_date mismatch -> warning tapi tidak block rekomendasi', () => {
   const r = calculateBankRecommendation({
     now: jakartaTime(14, 0), targetBankCode: 'OCBC', hourlyPlan: OCBC_HOURLY_PLAN, schedules: OCBC_SCHEDULES,
