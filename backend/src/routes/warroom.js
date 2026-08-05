@@ -1078,47 +1078,14 @@ async function mgmAnalyticsHandler(req, res) {
 }
 
 // ─── MGM PA SEARCH ──────────────────────────────────────────────
-router.get('/mgm/search', async (req, res) => {
-  const { q = '', bulan } = req.query;
-  if (!q || q.trim().length < 2) return res.status(400).json({ error: 'Minimal 2 karakter' });
-
-  try {
-    const pattern = `%${q.trim().toUpperCase()}%`;
-    const bulanCond = bulan ? `AND bulan = '${bulan.replace(/[^0-9-]/g, '')}'` : '';
-
-    const [aktRes, regRes, aktCountRes, regCountRes] = await Promise.all([
-      pool.query(`
-        SELECT bulan, upline, id_outlet, nama_pemilik, tipe_outlet,
-               nama_kota, nama_propinsi, tanggal_aktifasi, trx, rev, is_active
-        FROM mgm_aktivasi
-        WHERE (UPPER(id_outlet) LIKE $1 OR UPPER(upline) LIKE $1) ${bulanCond}
-        ORDER BY CASE WHEN UPPER(id_outlet) LIKE $1 THEN 0 ELSE 1 END, bulan DESC, trx DESC
-        LIMIT 2000
-      `, [pattern]),
-      pool.query(`
-        SELECT bulan, upline, id_outlet, nama_pemilik, tipe_outlet,
-               nama_kota, nama_propinsi, tanggal_registrasi, tanggal_aktifasi, is_active
-        FROM mgm_registrasi
-        WHERE (UPPER(id_outlet) LIKE $1 OR UPPER(upline) LIKE $1) ${bulanCond}
-        ORDER BY CASE WHEN UPPER(id_outlet) LIKE $1 THEN 0 ELSE 1 END, bulan DESC, tanggal_registrasi DESC
-        LIMIT 2000
-      `, [pattern]),
-      pool.query(`SELECT COUNT(*)::int AS total FROM mgm_aktivasi  WHERE (UPPER(id_outlet) LIKE $1 OR UPPER(upline) LIKE $1) ${bulanCond}`, [pattern]),
-      pool.query(`SELECT COUNT(*)::int AS total FROM mgm_registrasi WHERE (UPPER(id_outlet) LIKE $1 OR UPPER(upline) LIKE $1) ${bulanCond}`, [pattern]),
-    ]);
-
-    res.json({
-      q, bulan: bulan || null,
-      aktivasi: aktRes.rows,
-      registrasi: regRes.rows,
-      total_aktivasi:   aktCountRes.rows[0].total,
-      total_registrasi: regCountRes.rows[0].total,
-    });
-  } catch (e) {
-    console.error('mgm search error:', e);
-    res.status(500).json({ error: e.message });
-  }
-});
+// DIPINDAH ke backend/src/routes/warroom-mgm.js (searchHandler) sebagai
+// bagian dari rebuild "MGM PA — PB Lifecycle & Productivity Control Tower".
+// Handler lama di sini SENGAJA dihapus (bukan cuma dikomentari) supaya
+// tidak ada dua handler aktif untuk /api/warroom/mgm/search — lihat
+// app.js untuk registrasi rute barunya. Tabel legacy mgm_aktivasi/
+// mgm_registrasi TIDAK dihapus, hanya sudah tidak dibaca lewat endpoint
+// ini lagi (mgmSyncHandler/mgmAnalyticsHandler di bawah tetap ada, tapi
+// sudah tidak diregister ke rute mana pun — lihat app.js).
 
 module.exports = router;
 module.exports.syncHandler          = syncHandler;
