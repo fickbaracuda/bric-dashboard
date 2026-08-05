@@ -103,6 +103,10 @@ USER_CONFIRMED_PREEXISTING_PATHS = (
     # di server sebelumnya, wajar, bukan perubahan kode fitur.
     "backend/package-lock.json",
     "frontend/package-lock.json",
+    # Backup file dari hotfix darurat 2026-07-31 (outage 502, lihat commit
+    # 56b8257) — file cadangan app.js sebelum 4 baris route Ekspedisi
+    # outlet-status/notes di-nonaktifkan sementara. Aman diabaikan git status.
+    "backend/src/app.js.backup-emergency-20260731-181447",
 )
 
 
