@@ -17,6 +17,14 @@
 //      dengan value token sync MGM PA (lihat backend .env server — token yang
 //      SAMA dengan MGM_PA_SYNC_TOKEN/MGM_SYNC_TOKEN, JANGAN ditulis di sini).
 //   3. Jalankan setupMgmDailyTrigger() sekali secara manual (approve izin).
+//
+// Sebelum sync sungguhan, dua fungsi READ-ONLY berikut aman dijalankan
+// kapan saja (TIDAK ADA UrlFetchApp — tidak mengirim apa pun ke API):
+//   - testMgmParser()       — unit test parser tanggal/angka pakai data contoh.
+//   - auditMgmSheetCounts() — hitung jumlah baris REG/AKTIVASI/MGM AKTIV per
+//                             sheet MGM-<Bulan> (atau satu sheet spesifik via
+//                             auditMgmSheetCounts('MGM-Agustus')), untuk
+//                             cross-check manual terhadap angka di dashboard.
 // ============================================================
 
 const SPREADSHEET_ID = '1_OwT_j1qIcq2GP4ir-f5grJFI58E6Q5J5BuFsyuT_-s'; // bukan secret
@@ -391,6 +399,71 @@ function pushMgmSheetByName(sheetName) {
   return { sheetName, periode, status, registrasi: registrasi.length, aktivasi: aktivasi.length, aktivasi_detail: aktivasi_detail.length, quality };
 }
 
+// ─────────────────────────────────────────────────────────────────
+// Audit READ-ONLY — hitung jumlah REG, AKTIVASI, MGM AKTIV per sheet
+// TANPA mengirim apa pun ke API (tidak ada UrlFetchApp di sini). Aman
+// dijalankan kapan saja untuk cross-check angka di dashboard vs sheet
+// sebelum atau tanpa perlu sync sungguhan.
+//
+// Jalankan auditMgmSheetCounts() (semua sheet MGM-*) atau
+// auditMgmSheetCounts('MGM-Agustus') (satu sheet saja) dari dropdown
+// fungsi di Apps Script Editor.
+// ─────────────────────────────────────────────────────────────────
+function countBlockIds_(dataRows, headerMap, idField) {
+  let nonBlank = 0;
+  const seen = {};
+  dataRows.forEach(row => {
+    const id = normText(getCell(row, headerMap, idField));
+    if (!id) return;
+    nonBlank++;
+    seen[id] = (seen[id] || 0) + 1;
+  });
+  const uniqueIds = Object.keys(seen);
+  const duplicateCount = uniqueIds.filter(id => seen[id] > 1).length;
+  return { nonBlank, unique: uniqueIds.length, duplicateCount };
+}
+
+function auditMgmSheetCounts(sheetNameOrBlank) {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const targets = sheetNameOrBlank
+    ? [sheetNameOrBlank]
+    : ss.getSheets().map(s => s.getName()).filter(n => /^MGM-[A-Za-z]+$/i.test(n));
+
+  const lines = [];
+  targets.forEach(name => {
+    const sheet = ss.getSheetByName(name);
+    if (!sheet) { lines.push(`${name}: sheet tidak ditemukan`); return; }
+
+    const blocks = detectBlocks(sheet);
+    if (!blocks || !blocks['AKTIVASI'] || !blocks['REG'] || !blocks['MGM AKTIV']) {
+      lines.push(`${name}: blok AKTIVASI/REG/MGM AKTIV tidak lengkap terdeteksi di row 1`);
+      return;
+    }
+
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 3) { lines.push(`${name}: tidak ada data (lastRow=${lastRow})`); return; }
+    const numCols = Math.min(sheet.getLastColumn(), MAX_COLS);
+    const dataRows = sheet.getRange(3, 1, lastRow - 2, numCols).getValues();
+
+    const akt = countBlockIds_(dataRows, blocks['AKTIVASI'].headerMap, 'id_outlet');
+    const reg = countBlockIds_(dataRows, blocks['REG'].headerMap, 'id_outlet');
+    const det = countBlockIds_(dataRows, blocks['MGM AKTIV'].headerMap, 'id_aktifasi');
+
+    const summary = `${name}: baris discan=${dataRows.length}` +
+      ` | AKTIVASI(id_outlet non-blank=${akt.nonBlank}, unique=${akt.unique}, duplikat=${akt.duplicateCount})` +
+      ` | REG(id_outlet non-blank=${reg.nonBlank}, unique=${reg.unique}, duplikat=${reg.duplicateCount})` +
+      ` | MGM AKTIV(id_aktifasi non-blank=${det.nonBlank}, unique=${det.unique}, duplikat=${det.duplicateCount})`;
+    Logger.log(summary);
+    lines.push(summary);
+  });
+
+  const output = lines.join('\n');
+  try {
+    SpreadsheetApp.getUi().alert('Audit MGM PA (READ-ONLY, tidak ada data terkirim ke API):\n\n' + output);
+  } catch (_) { /* trigger otomatis tidak punya UI */ }
+  return output;
+}
+
 // ── Sync bulan yang sedang aktif (periode terbaru di antara sheet MGM-*) ──
 function pushMgmBulanAktif() {
   const target = findLatestMgmSheet_();
@@ -520,6 +593,6 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     cleanNum, normalizeMgmDate, formatPhone, detectBlocks, normalizeHeaderName,
     deriveYear, extractYearGuess, computeCutoffDate, serialToUtcDate,
-    MONTH_NAME_TO_NUM,
+    countBlockIds_, MONTH_NAME_TO_NUM,
   };
 }

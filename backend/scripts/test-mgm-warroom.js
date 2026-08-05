@@ -32,7 +32,7 @@ global.Logger = { log: () => {} };
 const assert = require('assert');
 const path = require('path');
 const {
-  cleanNum, normalizeMgmDate,
+  cleanNum, normalizeMgmDate, countBlockIds_,
 } = require(path.join(__dirname, '../../apps-script-mgm-pa.js'));
 
 const {
@@ -68,6 +68,16 @@ test('2. Date object yang terbaca 2026-09-05 pada expected Mei -> swap ke 2026-0
 });
 test('3. REG.tanggal_aktifasi enforceSheetMonth=false tetap 2026-06-15 (bukan bulan sheet)', () => {
   assert.strictEqual(normalizeMgmDate('2026-06-15', 5, 2026, false), '2026-06-15');
+});
+
+console.log('\n-- Extra: countBlockIds_ (audit read-only auditMgmSheetCounts) --');
+test('countBlockIds_ menghitung non-blank/unique/duplikat dengan benar', () => {
+  const headerMap = { id_outlet: 0 };
+  const dataRows = [['A'], ['B'], ['A'], [''], ['C'], [null]];
+  const stat = countBlockIds_(dataRows, headerMap, 'id_outlet');
+  assert.strictEqual(stat.nonBlank, 4, 'A,B,A,C = 4 baris non-blank (blank/null di-skip)');
+  assert.strictEqual(stat.unique, 3, 'A,B,C = 3 id unik');
+  assert.strictEqual(stat.duplicateCount, 1, 'A muncul 2x = 1 id dianggap duplikat');
 });
 
 console.log('\n-- 4-5. Numeric cleaner (Apps Script parser) --');
