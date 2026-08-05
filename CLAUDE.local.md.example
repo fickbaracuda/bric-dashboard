@@ -1,0 +1,14 @@
+# CLAUDE.local.md (contoh — bukan file sungguhan)
+#
+# Copy file ini jadi `CLAUDE.local.md` (tanpa ".example") di root project.
+# File itu MACHINE-LOCAL, JANGAN pernah di-commit (sudah di-.gitignore).
+#
+# Isinya cuma identitas developer untuk komputer ini, dipakai skill
+# .claude/skills/bric-release untuk menentukan branch prefix
+# (owner/<task> atau febri/<task>).
+#
+# Kalau file CLAUDE.local.md belum ada saat development task dimulai,
+# Claude akan tanya sekali lalu menyimpan jawabannya di sini otomatis —
+# tidak perlu diisi manual kalau malas, cukup jawab pertanyaannya nanti.
+
+developer_id: owner
