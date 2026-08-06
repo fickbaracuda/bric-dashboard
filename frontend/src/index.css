@@ -6451,24 +6451,24 @@ body {
 .mgm-info-tip { color: var(--text-4); cursor: help; margin-left: 4px; font-size: 12px; }
 .mgm-info-tip:hover { color: var(--text-2); }
 
-.mgm-revenue-breakdown {
-  display: flex; align-items: stretch; gap: 10px; margin-bottom: 16px; flex-wrap: wrap;
-}
+/* Grid KPI utama Command Center — 6 kolom tetap di desktop (Outlet
+   Transacting wrap ke baris ke-2), BUKAN auto-fit tak terbatas (auto-fit
+   dgn 7 kartu di layar lebar membuat tiap kartu melar & terlihat kosong). */
+.mgm-kpi-grid-main { display: grid; gap: 12px; grid-template-columns: repeat(6, 1fr); }
+@media (max-width: 1200px) { .mgm-kpi-grid-main { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 700px)  { .mgm-kpi-grid-main { grid-template-columns: repeat(2, 1fr); } }
+
+/* Revenue breakdown — 3 kartu rapat dalam satu grid row, TANPA elemen
+   operator (+/=) dan TANPA spacer kosong di antaranya. */
+.mgm-revenue-breakdown { display: grid; gap: 12px; grid-template-columns: repeat(3, 1fr); }
 .mgm-revenue-component {
-  flex: 1 1 200px; min-width: 180px;
   background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px;
   padding: 14px 16px;
 }
 .mgm-revenue-component .wrd-kpi-value { font-size: 22px; font-weight: 700; margin: 4px 0; }
-.mgm-revenue-total {
-  flex: 1.2 1 220px;
-  box-shadow: var(--shadow-md);
-}
+.mgm-revenue-total { box-shadow: var(--shadow-md); }
 .mgm-revenue-total .wrd-kpi-value { font-size: 28px; }
-.mgm-revenue-operator {
-  display: flex; align-items: center; justify-content: center;
-  font-size: 22px; font-weight: 700; color: var(--text-3); flex: 0 0 auto; padding: 0 4px;
-}
+@media (max-width: 700px) { .mgm-revenue-breakdown { grid-template-columns: 1fr; } }
 
 .mgm-funnel { display: flex; flex-direction: column; gap: 10px; padding: 4px 0; }
 .mgm-funnel-step { display: flex; flex-direction: column; gap: 3px; }

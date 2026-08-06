@@ -121,10 +121,12 @@ function KPICard({ label, value, deltaVal, deltaKind, sub, color, tip }) {
     </div>
   );
 }
-// Revenue MGM = Revenue Transaksi + Revenue Aktivasi — struktur visual yang
-// membuat hubungan penjumlahan ini langsung terlihat, Revenue MGM paling
-// menonjol. Biru = Revenue Transaksi, ungu/magenta = Revenue Aktivasi,
-// hijau (warna utama) = Revenue MGM — TIDAK PERNAH merah utk revenue positif.
+// Revenue MGM = Revenue Transaksi + Revenue Aktivasi. Tiga kartu dalam satu
+// baris bersih — TANPA elemen operator (+/=) di antaranya, relasi
+// penjumlahan sudah dijelaskan lewat tooltip Revenue MGM. Biru = Revenue
+// Transaksi, ungu/magenta = Revenue Aktivasi, hijau (warna utama) = Revenue
+// MGM (paling menonjol lewat border+ukuran) — TIDAK PERNAH merah utk revenue
+// positif.
 function RevenueBreakdownRow({ transactionRevenue, activationRevenue, mgmRevenue, deltaTransaction, deltaActivation, deltaMgm }) {
   return (
     <div className="mgm-revenue-breakdown">
@@ -135,7 +137,6 @@ function RevenueBreakdownRow({ transactionRevenue, activationRevenue, mgmRevenue
         <div className="wrd-kpi-value" style={{ color: '#3B82F6' }}>{fmtRp(transactionRevenue)}</div>
         <div className="mgm-kpi-delta" style={{ color: deltaColor(deltaTransaction) }}>{fmtDeltaPct(deltaTransaction)} vs periode lalu</div>
       </div>
-      <div className="mgm-revenue-operator">+</div>
       <div className="mgm-revenue-component" style={{ borderTop: '3px solid #A855F7' }}>
         <div className="wrd-kpi-label">REVENUE AKTIVASI
           <InfoTip text="Total revenue unit MGM dari proses aktivasi agen. Dihitung dari SUM komisi_aktifasi pada data MGM AKTIV." />
@@ -143,7 +144,6 @@ function RevenueBreakdownRow({ transactionRevenue, activationRevenue, mgmRevenue
         <div className="wrd-kpi-value" style={{ color: '#A855F7' }}>{fmtRp(activationRevenue)}</div>
         <div className="mgm-kpi-delta" style={{ color: deltaColor(deltaActivation) }}>{fmtDeltaPct(deltaActivation)} vs periode lalu</div>
       </div>
-      <div className="mgm-revenue-operator">=</div>
       <div className="mgm-revenue-component mgm-revenue-total" style={{ borderTop: '4px solid ' + COLOR_PRIMARY }}>
         <div className="wrd-kpi-label">REVENUE MGM
           <InfoTip text="Total pencapaian revenue unit MGM, yaitu Revenue Transaksi ditambah Revenue Aktivasi." />
@@ -1236,7 +1236,7 @@ export default function WarRoomMgmPa() {
           </div>
         )}
 
-        <div className="wrd-kpi-grid wrd-kpi-grid-4">
+        <div className="mgm-kpi-grid-main">
           <KPICard label="TOTAL REGISTRASI" value={fmt(s.current.registrations)} deltaVal={s.deltas.registrations} deltaKind="pct" color="#3B82F6"
             tip="Jumlah agen/outlet unik pada data REG." />
           <KPICard label="SUDAH AKTIF" value={fmt(s.current.active_registrations)} deltaVal={s.deltas.active_registrations} deltaKind="pct" color={COLOR_ACCENT}
