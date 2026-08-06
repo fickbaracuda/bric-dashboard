@@ -6448,6 +6448,9 @@ body {
   padding: 10px 14px; border-radius: 8px; margin-bottom: 14px;
 }
 
+.mgm-info-tip { color: var(--text-4); cursor: help; margin-left: 4px; font-size: 12px; }
+.mgm-info-tip:hover { color: var(--text-2); }
+
 .mgm-funnel { display: flex; flex-direction: column; gap: 10px; padding: 4px 0; }
 .mgm-funnel-step { display: flex; flex-direction: column; gap: 3px; }
 .mgm-funnel-bar {

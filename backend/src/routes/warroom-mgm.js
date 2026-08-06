@@ -3,7 +3,7 @@
 const crypto = require('crypto');
 const pool   = require('../db');
 const {
-  safeNumber, safeBoolean, dedupeLastWins, parsePeriod,
+  safeNumber, safeBoolean, safePct, dedupeLastWins, parsePeriod,
   previousPeriod, compareCutoffDate, maskPhone, buildCanonicalOutletIndex,
   buildPeriodAnalytics,
 } = require('../lib/mgm-utils');
@@ -380,8 +380,12 @@ async function analyticsHandler(req, res) {
     const comparePeriod = previousPeriod(requestedPeriod);
     const compareCutoff = cutoffDate ? compareCutoffDate(requestedPeriod, cutoffDate) : null;
 
+    // Current period TIDAK dipotong oleh cutoff_date — cutoff_date hanya
+    // menjelaskan tanggal terakhir data source (meta), bukan filter data
+    // periode berjalan. Lihat §6 spesifikasi bisnis MGM PA. Previous period
+    // TETAP dibandingkan same-day (compareCutoff) supaya delta adil.
     const [currentRaw, previousRaw] = await Promise.all([
-      loadPeriodDataset(requestedPeriod, cutoffDate),
+      loadPeriodDataset(requestedPeriod, null),
       comparePeriod ? loadPreviousDataset(comparePeriod, compareCutoff) : Promise.resolve({ registrasi: [], aktivasi: [], detail: [] }),
     ]);
 
@@ -415,49 +419,55 @@ async function analyticsHandler(req, res) {
     current.detail.forEach(d => { if (d.id_outlet && aktDateByOutlet.has(d.id_outlet)) bump(aktDateByOutlet.get(d.id_outlet), 'paid_conversions'); });
     const daily_acquisition = [...dailyMap.values()].sort((a, b) => a.date.localeCompare(b.date));
 
-    // monthly_trend — agregat per periode langsung dari SQL (semua bulan tersedia)
+    // monthly_trend — agregat per periode langsung dari SQL (semua bulan
+    // tersedia, TIDAK dipotong cutoff — sama seperti current period).
     const trendRes = await pool.query(`
       WITH reg AS (
-        SELECT periode, COUNT(DISTINCT id_outlet) AS registrations, MAX(tanggal_registrasi) AS reg_cutoff
+        SELECT periode,
+          COUNT(DISTINCT id_outlet) AS registrations,
+          COUNT(DISTINCT id_outlet) FILTER (WHERE is_active = true) AS active_registrations,
+          COUNT(DISTINCT id_outlet) FILTER (WHERE is_active = false) AS inactive_registrations,
+          COUNT(DISTINCT id_outlet) FILTER (WHERE is_active IS NULL) AS unknown_active_status,
+          COUNT(DISTINCT upline) FILTER (WHERE upline IS NOT NULL AND TRIM(upline) <> '') AS active_recruiting_pb,
+          MAX(tanggal_registrasi) AS reg_cutoff
         FROM mgm_pa_registrasi GROUP BY periode
       ), akt AS (
         SELECT periode, COUNT(DISTINCT id_outlet) AS activated_outlets,
           COUNT(DISTINCT id_outlet) FILTER (WHERE trx>0) AS transacting_outlets,
-          COALESCE(SUM(trx),0) AS total_trx, COALESCE(SUM(rev),0) AS total_revenue,
+          COALESCE(SUM(trx),0) AS total_trx, COALESCE(SUM(rev),0) AS transaction_revenue,
           MAX(tanggal_aktifasi) AS akt_cutoff
         FROM mgm_pa_aktivasi GROUP BY periode
       ), det AS (
         SELECT periode, COUNT(DISTINCT id_aktifasi) AS paid_activation_events,
-          COALESCE(SUM(fee_upline),0) AS fee_upline, COALESCE(SUM(komisi_aktifasi),0) AS activation_commission,
+          COALESCE(SUM(fee_upline),0) AS fee_upline, COALESCE(SUM(komisi_aktifasi),0) AS mgm_revenue,
           COUNT(*) FILTER (WHERE komisi_aktifasi<0) AS negative_activation_count
         FROM mgm_pa_aktivasi_detail GROUP BY periode
-      ), conv AS (
-        SELECT r.periode, COUNT(DISTINCT r.id_outlet) AS converted_registrations
-        FROM mgm_pa_registrasi r
-        JOIN mgm_pa_aktivasi_detail d ON d.periode = r.periode AND d.id_outlet = r.id_outlet
-        GROUP BY r.periode
       )
       SELECT periods.periode::text,
         COALESCE(reg.registrations,0)::int AS registrations,
-        COALESCE(conv.converted_registrations,0)::int AS converted_registrations,
+        COALESCE(reg.active_registrations,0)::int AS active_registrations,
+        COALESCE(reg.inactive_registrations,0)::int AS inactive_registrations,
+        COALESCE(reg.unknown_active_status,0)::int AS unknown_active_status,
+        COALESCE(reg.active_recruiting_pb,0)::int AS active_recruiting_pb,
         COALESCE(det.paid_activation_events,0)::int AS paid_activation_events,
         COALESCE(akt.activated_outlets,0)::int AS activated_outlets,
         COALESCE(akt.transacting_outlets,0)::int AS transacting_outlets,
         COALESCE(akt.total_trx,0)::bigint AS total_trx,
-        COALESCE(akt.total_revenue,0) AS total_revenue,
+        COALESCE(akt.transaction_revenue,0) AS transaction_revenue,
         COALESCE(det.fee_upline,0) AS fee_upline,
-        COALESCE(det.activation_commission,0) AS activation_commission,
+        COALESCE(det.mgm_revenue,0) AS mgm_revenue,
         COALESCE(det.negative_activation_count,0)::int AS negative_activation_count,
         GREATEST(reg.reg_cutoff, akt.akt_cutoff)::text AS cutoff_day_date
       FROM (SELECT DISTINCT periode FROM mgm_pa_registrasi UNION SELECT DISTINCT periode FROM mgm_pa_aktivasi) periods
       LEFT JOIN reg  ON reg.periode = periods.periode
       LEFT JOIN akt  ON akt.periode = periods.periode
       LEFT JOIN det  ON det.periode = periods.periode
-      LEFT JOIN conv ON conv.periode = periods.periode
       ORDER BY periods.periode ASC
     `);
     const monthly_trend = trendRes.rows.map(r => ({
       ...r,
+      activation_conversion_pct: safePct(r.active_registrations, r.registrations),
+      avg_registration_per_pb: r.active_recruiting_pb > 0 ? r.registrations / r.active_recruiting_pb : null,
       cutoff_day: r.cutoff_day_date ? Number(r.cutoff_day_date.slice(8, 10)) : null,
     }));
 
