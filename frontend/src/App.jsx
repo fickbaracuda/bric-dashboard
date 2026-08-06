@@ -31,6 +31,7 @@ import WarRoomInstaqrisTrx from './pages/WarRoomInstaqrisTrx';
 import WarRoomAsdp from './pages/WarRoomAsdp';
 import WarRoomPaAsdp from './pages/WarRoomPaAsdp';
 import WarRoomPaLpd from './pages/WarRoomPaLpd';
+import WarRoomMpng3 from './pages/WarRoomMpng3';
 import WarRoomBumdes from './pages/WarRoomBumdes';
 import WarRoomLpd from './pages/WarRoomLpd';
 import WarRoomHunter from './pages/WarRoomHunter';
@@ -97,6 +98,7 @@ export default function App() {
         <Route path="/war-room/asdp"           element={<ProtectedRoute><WarRoomAsdp /></ProtectedRoute>} />
         <Route path="/war-room/pa-asdp"        element={<ProtectedRoute><WarRoomPaAsdp /></ProtectedRoute>} />
         <Route path="/war-room/pa-lpd"         element={<ProtectedRoute><WarRoomPaLpd /></ProtectedRoute>} />
+        <Route path="/war-room/mpng3"          element={<ProtectedRoute><WarRoomMpng3 /></ProtectedRoute>} />
         <Route path="/war-room/bumdes"         element={<ProtectedRoute><WarRoomBumdes /></ProtectedRoute>} />
         <Route path="/war-room/lpd"            element={<ProtectedRoute><WarRoomLpd /></ProtectedRoute>} />
         <Route path="/war-room/hunter"        element={<ProtectedRoute><WarRoomHunter /></ProtectedRoute>} />
