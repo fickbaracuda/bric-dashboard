@@ -1,10 +1,55 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback, Component } from 'react';
 import Layout from '../components/Layout';
 import Chart from 'chart.js/auto';
 import {
   getMgmAnalytics, getMgmOutlets, searchMgmOutlet,
   getMgmActions, upsertMgmAction, updateMgmAction,
 } from '../services/api';
+
+// Defensive defaults — dipakai di titik-titik yang menerima data langsung
+// dari response API, supaya bentuk response yang tak terduga (field hilang,
+// null, tipe salah) tidak membuat seluruh halaman blank. Response backend
+// SEHARUSNYA selalu punya bentuk ini, tapi halaman tidak boleh 100%
+// bergantung pada asumsi itu.
+function safeArr(v) { return Array.isArray(v) ? v : []; }
+function safeObj(v) { return (v && typeof v === 'object' && !Array.isArray(v)) ? v : {}; }
+
+// Error boundary — kalau ADA bug yang lolos dari semua guard di atas (mis.
+// error di dalam Chart.js saat commit useEffect), tampilkan pesan error yang
+// jelas & bisa di-retry, JANGAN biarkan seluruh React root jadi blank tanpa
+// penjelasan apa pun ke user.
+class MgmErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+  componentDidCatch(error, info) {
+    // eslint-disable-next-line no-console
+    console.error('[WarRoomMgmPa] Uncaught render error:', error, info?.componentStack);
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="wrfp-error" style={{ flexDirection: 'column', gap: 10, alignItems: 'flex-start' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <i className="ti ti-alert-triangle" style={{ color: '#DC2626', fontSize: 20 }} />
+            <strong>Halaman MGM PA mengalami error saat menampilkan data.</strong>
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--text-3)', fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>
+            {String(this.state.error?.message || this.state.error)}
+          </div>
+          <button className="wr-btn-update" onClick={() => this.setState({ error: null })}>
+            Coba Tampilkan Ulang
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 const COLOR_PRIMARY = '#10B981';
 const COLOR_ACCENT  = '#059669';
@@ -207,7 +252,9 @@ function DataTable({ columns, rows, emptyLabel = 'Belum ada data' }) {
 // ═══════════════════════════════════════════════════════════════
 function buildExecutiveInsight(data) {
   if (!data?.summary) return [];
-  const { current, previous, deltas } = data.summary;
+  const current = safeObj(data.summary.current);
+  const previous = safeObj(data.summary.previous);
+  const deltas = safeObj(data.summary.deltas);
   const insights = [];
 
   if (deltas.registrations != null && deltas.reg_to_paid_conversion_pct != null) {
@@ -242,9 +289,11 @@ function buildExecutiveInsight(data) {
 }
 
 function CommandCenterTab({ data }) {
-  const s = data.summary;
+  const s = safeObj(data.summary);
+  const cohortFunnel = safeObj(data.cohort_funnel);
+  const operationalVolume = safeObj(data.operational_volume);
   const insights = useMemo(() => buildExecutiveInsight(data), [data]);
-  const topPb = useMemo(() => [...(data.pb_scorecard || [])].sort((a, b) => b.registrations - a.registrations).slice(0, 8), [data.pb_scorecard]);
+  const topPb = useMemo(() => [...safeArr(data.pb_scorecard)].sort((a, b) => b.registrations - a.registrations).slice(0, 8), [data.pb_scorecard]);
 
   return (
     <div className="wrd-tab-content">
@@ -252,9 +301,9 @@ function CommandCenterTab({ data }) {
         <ChartCard title="Cohort Funnel — Registrasi → Converted → Transacting">
           <div className="mgm-funnel">
             {[
-              { label: 'Registrasi', val: data.cohort_funnel.registrations, color: '#3B82F6' },
-              { label: 'Converted Registration', val: data.cohort_funnel.converted_registrations, color: COLOR_ACCENT, sub: nfPct(data.cohort_funnel.reg_to_paid_conversion_pct) },
-              { label: 'Converted & Transacting', val: data.cohort_funnel.converted_and_transacting, color: '#7C3AED', sub: nfPct(data.cohort_funnel.converted_to_transaction_pct) },
+              { label: 'Registrasi', val: cohortFunnel.registrations, color: '#3B82F6' },
+              { label: 'Converted Registration', val: cohortFunnel.converted_registrations, color: COLOR_ACCENT, sub: nfPct(cohortFunnel.reg_to_paid_conversion_pct) },
+              { label: 'Converted & Transacting', val: cohortFunnel.converted_and_transacting, color: '#7C3AED', sub: nfPct(cohortFunnel.converted_to_transaction_pct) },
             ].map((f, i) => (
               <div key={i} className="mgm-funnel-step">
                 <div className="mgm-funnel-bar" style={{ background: f.color + '15', borderLeft: `4px solid ${f.color}` }}>
@@ -269,9 +318,9 @@ function CommandCenterTab({ data }) {
         <ChartCard title="Operational Volume">
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {[
-              { label: 'Paid Activation Events', val: data.operational_volume.paid_activation_events },
-              { label: 'Activated Outlets', val: data.operational_volume.activated_outlets },
-              { label: 'Transacting Outlets', val: data.operational_volume.transacting_outlets, sub: nfPct(data.operational_volume.activation_to_transaction_pct) },
+              { label: 'Paid Activation Events', val: operationalVolume.paid_activation_events },
+              { label: 'Activated Outlets', val: operationalVolume.activated_outlets },
+              { label: 'Transacting Outlets', val: operationalVolume.transacting_outlets, sub: nfPct(operationalVolume.activation_to_transaction_pct) },
             ].map((f, i) => (
               <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', background: 'var(--bg-page)', borderRadius: 8 }}>
                 <span style={{ fontSize: 13 }}>{f.label}</span>
@@ -303,9 +352,9 @@ function CommandCenterTab({ data }) {
               { key: 'top10', label: 'Top 10', right: true, render: r => nfPct(r.top10?.pct) },
             ]}
             rows={[
-              { metric: 'Registrasi', ...data.concentration.registrations },
-              { metric: 'Paid Activation', ...data.concentration.paid_activation_events },
-              { metric: 'Revenue', ...data.concentration.revenue },
+              { metric: 'Registrasi', ...safeObj(safeObj(data.concentration).registrations) },
+              { metric: 'Paid Activation', ...safeObj(safeObj(data.concentration).paid_activation_events) },
+              { metric: 'Revenue', ...safeObj(safeObj(data.concentration).revenue) },
             ]}
           />
         </ChartCard>
@@ -313,10 +362,10 @@ function CommandCenterTab({ data }) {
 
       <ChartCard title="Daily Acquisition — Registrasi & Aktivasi (bukan revenue/trx harian)">
         <BarChart
-          labels={data.daily_acquisition.map(d => d.date.slice(5))}
+          labels={safeArr(data.daily_acquisition).map(d => String(d.date || '').slice(5))}
           datasets={[
-            { label: 'Registrasi', data: data.daily_acquisition.map(d => d.registrations), backgroundColor: '#3B82F6CC' },
-            { label: 'Activated Outlets', data: data.daily_acquisition.map(d => d.activated_outlets), backgroundColor: COLOR_PRIMARY + 'CC' },
+            { label: 'Registrasi', data: safeArr(data.daily_acquisition).map(d => d.registrations || 0), backgroundColor: '#3B82F6CC' },
+            { label: 'Activated Outlets', data: safeArr(data.daily_acquisition).map(d => d.activated_outlets || 0), backgroundColor: COLOR_PRIMARY + 'CC' },
           ]}
         />
       </ChartCard>
@@ -344,6 +393,9 @@ function PbScorecardTab({ data, onSelectPb }) {
   const [q, setQ] = useState('');
   const [sortF, setSortF] = useState('registrations');
   const [sortD, setSortD] = useState('desc');
+  const pbMatrix = safeObj(data.pb_matrix);
+  pbMatrix.rows = safeArr(pbMatrix.rows);
+  pbMatrix.thresholds = safeObj(pbMatrix.thresholds);
 
   const rows = useMemo(() => {
     let d = data.pb_scorecard || [];
@@ -379,7 +431,7 @@ function PbScorecardTab({ data, onSelectPb }) {
     <div className="wrd-tab-content">
       <div className="wrd-charts-row">
         <ChartCard title="PB Matrix — Registrasi vs Konversi (bubble = revenue)">
-          <BubbleMatrix rows={data.pb_matrix.rows} thresholds={data.pb_matrix.thresholds} />
+          <BubbleMatrix rows={pbMatrix.rows} thresholds={pbMatrix.thresholds} />
           <div className="mgm-matrix-legend">
             {Object.entries(STATUS_COLORS).map(([label, color]) => (
               <span key={label} className="mgm-matrix-legend-item"><i style={{ background: color }} />{label}</span>
@@ -389,7 +441,7 @@ function PbScorecardTab({ data, onSelectPb }) {
         <ChartCard title="Threshold Segmentasi (P25/P50/P75 aktual, bukan target)">
           <DataTable
             columns={[{ key: 'k', label: 'Metrik' }, { key: 'v', label: 'Nilai', right: true }]}
-            rows={Object.entries(data.pb_matrix.thresholds).map(([k, v]) => ({ k, v: typeof v === 'number' ? v.toFixed(1) : v }))}
+            rows={Object.entries(pbMatrix.thresholds).map(([k, v]) => ({ k, v: typeof v === 'number' ? v.toFixed(1) : v }))}
           />
         </ChartCard>
       </div>
@@ -511,8 +563,11 @@ function OutletExplorer({ periode }) {
 }
 
 function FunnelAgingTab({ data, periode }) {
-  const regNotPaid = data.derived_queues.p1.filter(q => q.type === 'registered_not_paid');
-  const activeNoTrx = data.derived_queues.p1.filter(q => q.type === 'active_no_transaction');
+  const p1Queue = safeArr(safeObj(data.derived_queues).p1);
+  const regNotPaid = p1Queue.filter(q => q.type === 'registered_not_paid');
+  const activeNoTrx = p1Queue.filter(q => q.type === 'active_no_transaction');
+  const cohortFunnel = safeObj(data.cohort_funnel);
+  const operationalVolume = safeObj(data.operational_volume);
 
   const bucketCounts = (arr) => AGING_BUCKETS.map(b => arr.filter(q => agingBucketOf(q.aging_days) === b).length);
 
@@ -523,12 +578,12 @@ function FunnelAgingTab({ data, periode }) {
           <DataTable
             columns={[{ key: 'label', label: 'Tahap' }, { key: 'val', label: 'Jumlah', right: true }]}
             rows={[
-              { label: 'Registrations', val: fmt(data.cohort_funnel.registrations) },
-              { label: 'Converted Registration', val: fmt(data.cohort_funnel.converted_registrations) },
-              { label: 'Converted & Transacting', val: fmt(data.cohort_funnel.converted_and_transacting) },
-              { label: 'Paid Activation Events', val: fmt(data.operational_volume.paid_activation_events) },
-              { label: 'Activated Outlets', val: fmt(data.operational_volume.activated_outlets) },
-              { label: 'Transacting Outlets', val: fmt(data.operational_volume.transacting_outlets) },
+              { label: 'Registrations', val: fmt(cohortFunnel.registrations) },
+              { label: 'Converted Registration', val: fmt(cohortFunnel.converted_registrations) },
+              { label: 'Converted & Transacting', val: fmt(cohortFunnel.converted_and_transacting) },
+              { label: 'Paid Activation Events', val: fmt(operationalVolume.paid_activation_events) },
+              { label: 'Activated Outlets', val: fmt(operationalVolume.activated_outlets) },
+              { label: 'Transacting Outlets', val: fmt(operationalVolume.transacting_outlets) },
             ]}
           />
         </ChartCard>
@@ -574,10 +629,12 @@ function FunnelAgingTab({ data, periode }) {
 // TAB 4 — Transaction & Revenue
 // ═══════════════════════════════════════════════════════════════
 function TransactionRevenueTab({ data }) {
-  const trend = data.monthly_trend || [];
-  const topRevPb = [...(data.pb_scorecard || [])].sort((a, b) => b.total_revenue - a.total_revenue).slice(0, 10);
-  const bottomRevPb = [...(data.pb_scorecard || [])].filter(r => r.activated_outlets > 0).sort((a, b) => a.total_revenue - b.total_revenue).slice(0, 10);
-  const activeNoTrxOutlets = data.derived_queues.p1.filter(q => q.type === 'active_no_transaction');
+  const trend = safeArr(data.monthly_trend);
+  const pbScorecard = safeArr(data.pb_scorecard);
+  const topRevPb = [...pbScorecard].sort((a, b) => b.total_revenue - a.total_revenue).slice(0, 10);
+  const bottomRevPb = [...pbScorecard].filter(r => r.activated_outlets > 0).sort((a, b) => a.total_revenue - b.total_revenue).slice(0, 10);
+  const activeNoTrxOutlets = safeArr(safeObj(data.derived_queues).p1).filter(q => q.type === 'active_no_transaction');
+  const current = safeObj(safeObj(data.summary).current);
 
   return (
     <div className="wrd-tab-content">
@@ -592,9 +649,9 @@ function TransactionRevenueTab({ data }) {
       </ChartCard>
 
       <div className="wrd-kpi-grid wrd-kpi-grid-3">
-        <KPICard label="TOTAL TRX" value={fmt(data.summary.current.total_trx)} color="#3B82F6" />
-        <KPICard label="REVENUE PER TRANSAKSI" value={fmtRp(data.summary.current.revenue_per_transaction)} color={COLOR_PRIMARY} />
-        <KPICard label="REVENUE PER ACTIVATED OUTLET" value={fmtRp(data.summary.current.revenue_per_activated_outlet)} color="#8B5CF6" />
+        <KPICard label="TOTAL TRX" value={fmt(current.total_trx)} color="#3B82F6" />
+        <KPICard label="REVENUE PER TRANSAKSI" value={fmtRp(current.revenue_per_transaction)} color={COLOR_PRIMARY} />
+        <KPICard label="REVENUE PER ACTIVATED OUTLET" value={fmtRp(current.revenue_per_activated_outlet)} color="#8B5CF6" />
       </div>
 
       <div className="wrd-charts-row">
@@ -620,7 +677,12 @@ function TransactionRevenueTab({ data }) {
 // TAB 5 — Activation Economics
 // ═══════════════════════════════════════════════════════════════
 function EconomicsTab({ data }) {
-  const e = data.economics;
+  const e = safeObj(data.economics);
+  e.by_tipe_outlet = safeArr(e.by_tipe_outlet);
+  e.by_pembayaran_via = safeArr(e.by_pembayaran_via);
+  e.by_nama_group = safeArr(e.by_nama_group);
+  e.negative_activations = safeArr(e.negative_activations);
+  e.formula_mismatch = safeArr(e.formula_mismatch);
 
   function exportNegCsv() {
     const csv = toCsv(e.negative_activations, [
@@ -695,12 +757,13 @@ function EconomicsTab({ data }) {
 // TAB 6 — Territory & Mix
 // ═══════════════════════════════════════════════════════════════
 function TerritoryMixTab({ data }) {
-  const territories = data.territories || [];
-  const types = data.outlet_types || [];
-  const payments = data.payment_mix || [];
-  const flagged = (data.pb_scorecard || []).filter(r =>
-    r.registrations >= (data.pb_matrix.thresholds.registrations_p50 || 0) &&
-    (r.reg_to_paid_conversion_pct == null || r.reg_to_paid_conversion_pct < (data.pb_matrix.thresholds.conversion_p50 || 0))
+  const territories = safeArr(data.territories);
+  const types = safeArr(data.outlet_types);
+  const payments = safeArr(data.payment_mix);
+  const thresholds = safeObj(safeObj(data.pb_matrix).thresholds);
+  const flagged = safeArr(data.pb_scorecard).filter(r =>
+    r.registrations >= (thresholds.registrations_p50 || 0) &&
+    (r.reg_to_paid_conversion_pct == null || r.reg_to_paid_conversion_pct < (thresholds.conversion_p50 || 0))
   );
 
   return (
@@ -801,12 +864,12 @@ function ActionCenterTab({ data, periode }) {
   }, [periode]);
   useEffect(() => { loadActions(); }, [loadActions]);
 
-  const q = data.derived_queues;
-  const queues = { p0: q.p0, p1: q.p1, p2: q.p2, p3: q.p3 };
+  const q = safeObj(data.derived_queues);
+  const queues = { p0: safeArr(q.p0), p1: safeArr(q.p1), p2: safeArr(q.p2), p3: safeArr(q.p3) };
   const activeQueue = queues[queueTab] || [];
 
   function exportQualityCsv() {
-    const csv = toCsv(Object.entries(data.meta.quality).map(([k, v]) => ({ k, v: JSON.stringify(v) })), [
+    const csv = toCsv(Object.entries(safeObj(safeObj(data.meta).quality)).map(([k, v]) => ({ k, v: JSON.stringify(v) })), [
       { label: 'Metrik', value: 'k' }, { label: 'Nilai', value: 'v' },
     ]);
     downloadCsv(`mgm-data-quality-${periode}.csv`, csv);
@@ -861,7 +924,7 @@ function ActionCenterTab({ data, periode }) {
       <ChartCard title="Data Quality" right={<button className="wr-btn-update" onClick={exportQualityCsv}><i className="ti ti-download" /></button>}>
         <DataTable
           columns={[{ key: 'k', label: 'Metrik' }, { key: 'v', label: 'Nilai', right: true }]}
-          rows={Object.entries(data.meta.quality).map(([k, v]) => ({ k, v: typeof v === 'object' ? JSON.stringify(v) : v }))}
+          rows={Object.entries(safeObj(safeObj(data.meta).quality)).map(([k, v]) => ({ k, v: typeof v === 'object' ? JSON.stringify(v) : v }))}
         />
       </ChartCard>
 
@@ -950,16 +1013,19 @@ export default function WarRoomMgmPa() {
     </Layout>
   );
 
-  const s = data.summary;
-  const uplineOptions = [...new Set((data.pb_scorecard || []).map(r => r.pb))].sort();
-  const provinsiOptions = [...new Set((data.territories || []).map(r => r.provinsi))].sort();
-  const tipeOptions = [...new Set((data.outlet_types || []).map(r => r.tipe_outlet))].sort();
-  const paymentOptions = [...new Set((data.payment_mix || []).map(r => r.pembayaran_via))].sort();
+  const s = safeObj(data.summary);
+  s.current = safeObj(s.current);
+  s.deltas = safeObj(s.deltas);
+  const uplineOptions = [...new Set(safeArr(data.pb_scorecard).map(r => r.pb))].sort();
+  const provinsiOptions = [...new Set(safeArr(data.territories).map(r => r.provinsi))].sort();
+  const tipeOptions = [...new Set(safeArr(data.outlet_types).map(r => r.tipe_outlet))].sort();
+  const paymentOptions = [...new Set(safeArr(data.payment_mix).map(r => r.pembayaran_via))].sort();
 
   function selectPb(pb) { setFilterPb(pb); setTab('scorecard'); }
 
   return (
     <Layout {...GSHEET}>
+      <MgmErrorBoundary>
       <div className="wr-page">
         <div className="wr-header">
           <div>
@@ -1011,7 +1077,7 @@ export default function WarRoomMgmPa() {
                 { key: 'periode', label: 'Periode' }, { key: 'id_outlet', label: 'ID Outlet' }, { key: 'upline', label: 'PB' },
                 { key: 'nama_pemilik', label: 'Nama' }, { key: 'nama_kota', label: 'Kota' },
               ]}
-              rows={[...searchRes.registrasi, ...searchRes.aktivasi].slice(0, 50)}
+              rows={[...safeArr(searchRes.registrasi), ...safeArr(searchRes.aktivasi)].slice(0, 50)}
             />
           </div>
         )}
@@ -1054,6 +1120,7 @@ export default function WarRoomMgmPa() {
         {tab === 'territory' && <TerritoryMixTab data={data} />}
         {tab === 'action'    && <ActionCenterTab data={data} periode={periode} />}
       </div>
+      </MgmErrorBoundary>
     </Layout>
   );
 }

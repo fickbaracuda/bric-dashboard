@@ -28,6 +28,7 @@ from deploy_release_manager import (
     releases_root, new_release_dir, is_symlink, verify_release_contents,
     bootstrap_or_switch, prune_old_releases, compute_local_sha256,
 )
+from deploy_build_monitor import start_build, _try_recover_running_build
 
 tests = []
 
@@ -335,6 +336,53 @@ def _t_checksum_consistent():
     finally:
         Path(path).unlink(missing_ok=True)
 test("compute_local_sha256: konsisten utk isi yang sama", _t_checksum_consistent)
+
+
+# ── start_build / _try_recover_running_build (bug nyata 2026-08-05/06: exec_command
+# start_build sendiri timeout -- build bisa saja SUDAH jalan di server tanpa
+# termonitor. Fix: coba pulihkan dulu sebelum menyerah/retry membabi buta.) ──
+def _t_start_build_normal():
+    def runner(client, cmd, timeout=60):
+        if "command -v ionice" in cmd:
+            return ("YES\n", "", 0)
+        if "setsid bash -c" in cmd:
+            return ("PGID:12345\n", "", 0)
+        raise AssertionError(cmd)
+    pgid, logfile = start_build(runner, None, "/home/admin/bric-dashboard/frontend", "20260806_100000")
+    assert_eq(pgid, 12345)
+test("start_build: jalur normal -> PGID diambil dari output", _t_start_build_normal)
+
+def _t_start_build_exception_then_recovered():
+    calls = {"n": 0}
+    def runner(client, cmd, timeout=60):
+        if "command -v ionice" in cmd:
+            return ("YES\n", "", 0)
+        if "setsid bash -c" in cmd:
+            raise TimeoutError("simulated PipeTimeout")
+        if cmd.startswith("pgrep"):
+            return ("9999\n", "", 0)
+        if cmd.startswith("ps -o pgid="):
+            return ("9999\n", "", 0)
+        raise AssertionError(cmd)
+    pgid, logfile = start_build(runner, None, "/home/admin/bric-dashboard/frontend", "20260806_100000")
+    assert_eq(pgid, 9999)
+test("start_build: exec_command exception TAPI build genuinely sudah jalan -> dipulihkan, BUKAN dianggap gagal", _t_start_build_exception_then_recovered)
+
+def _t_start_build_exception_nothing_running():
+    def runner(client, cmd, timeout=60):
+        if "command -v ionice" in cmd:
+            return ("YES\n", "", 0)
+        if "setsid bash -c" in cmd:
+            raise TimeoutError("simulated PipeTimeout")
+        if cmd.startswith("pgrep"):
+            return ("\n", "", 0)  # tidak ada proses ditemukan
+        raise AssertionError(cmd)
+    try:
+        start_build(runner, None, "/home/admin/bric-dashboard/frontend", "20260806_100000")
+        raise AssertionError("harusnya melempar RuntimeError")
+    except RuntimeError as e:
+        assert_true("tidak ditemukan build" in str(e))
+test("start_build: exec_command exception DAN tidak ada build berjalan -> gagal jelas, bukan diam-diam kosong", _t_start_build_exception_nothing_running)
 
 
 # ── Runner ──
