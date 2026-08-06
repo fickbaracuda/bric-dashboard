@@ -54,18 +54,23 @@ class MgmErrorBoundary extends Component {
 const COLOR_PRIMARY = '#10B981';
 const COLOR_ACCENT  = '#059669';
 
+// Segmentasi PB — 5 status, cascade rule berbasis percentile aktual
+// (registrations P50, conversion P50/P75, inactive_registrations P75).
+// Lihat backend/src/lib/mgm-utils.js classifyPb().
 const STATUS_COLORS = {
-  'Growth Engine':       '#059669',
-  'Closer':              '#3B82F6',
-  'Hunter Only':         '#F59E0B',
-  'Productivity Builder':'#8B5CF6',
-  'Costly PB':           '#DC2626',
-  'Low Activity':        '#9CA3AF',
+  'Growth Engine': '#059669',
+  'Closer':        '#3B82F6',
+  'Hunter Only':   '#F59E0B',
+  'High Backlog':  '#DC2626',
+  'Low Activity':  '#9CA3AF',
 };
+
+const MIN_VOLUME_FOR_BEST_CONVERSION = 5;
 
 const nf = new Intl.NumberFormat('id-ID');
 const nfPct = (n, digits = 1) => n == null ? 'N/A' : `${Number(n).toLocaleString('id-ID', { minimumFractionDigits: digits, maximumFractionDigits: digits })}%`;
 function fmt(n) { return n == null ? '-' : nf.format(Math.round(Number(n))); }
+function fmt2(n) { return n == null ? '-' : Number(n).toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function fmtRp(n) { return n == null ? '-' : 'Rp ' + nf.format(Math.round(Number(n))); }
 function fmtDeltaPct(n) { if (n == null) return 'N/A'; const s = n >= 0 ? '+' : ''; return `${s}${n.toFixed(1)}%`; }
 function fmtDeltaPt(n) { if (n == null) return 'N/A'; const s = n >= 0 ? '+' : ''; return `${s}${n.toFixed(1)} pt`; }
@@ -99,10 +104,13 @@ function downloadCsv(filename, csv) {
 const SPIN = { animation: 'aic-rotate 0.8s linear infinite' };
 
 // ─── Shared small components ───────────────────────────────────
-function KPICard({ label, value, deltaVal, deltaKind, sub, color }) {
+function InfoTip({ text }) {
+  return <span className="mgm-info-tip" title={text}><i className="ti ti-info-circle" /></span>;
+}
+function KPICard({ label, value, deltaVal, deltaKind, sub, color, tip }) {
   return (
     <div className="wrd-kpi-card" style={{ borderTop: `3px solid ${color}` }}>
-      <div className="wrd-kpi-label">{label}</div>
+      <div className="wrd-kpi-label">{label} {tip && <InfoTip text={tip} />}</div>
       <div className="wrd-kpi-value" style={{ color }}>{value}</div>
       {sub && <div className="wrd-kpi-sub">{sub}</div>}
       {deltaVal !== undefined && (
@@ -195,8 +203,8 @@ function BubbleMatrix({ rows, thresholds }) {
           },
         },
         scales: {
-          x: { title: { display: true, text: 'Registrations' } },
-          y: { title: { display: true, text: 'REG → Paid Conversion (%)' } },
+          x: { title: { display: true, text: 'Registrasi' } },
+          y: { title: { display: true, text: 'Conversion Aktivasi (%)' } },
         },
       },
       plugins: [{
@@ -253,57 +261,95 @@ function DataTable({ columns, rows, emptyLabel = 'Belum ada data' }) {
 function buildExecutiveInsight(data) {
   if (!data?.summary) return [];
   const current = safeObj(data.summary.current);
-  const previous = safeObj(data.summary.previous);
   const deltas = safeObj(data.summary.deltas);
+  const pbScorecard = safeArr(data.pb_scorecard);
   const insights = [];
 
-  if (deltas.registrations != null && deltas.reg_to_paid_conversion_pct != null) {
-    if (deltas.registrations > 0 && deltas.reg_to_paid_conversion_pct < 0) {
-      insights.push({ icon: '⚠️', text: `Registrasi naik ${fmtDeltaPct(deltas.registrations)} tapi konversi REG→Paid turun ${fmtDeltaPt(deltas.reg_to_paid_conversion_pct)} — kualitas registrasi perlu dicek, bukan cuma kuantitas.` });
-    } else if (deltas.registrations > 0 && deltas.reg_to_paid_conversion_pct > 0) {
-      insights.push({ icon: '✅', text: `Registrasi naik ${fmtDeltaPct(deltas.registrations)} DAN konversi ikut naik ${fmtDeltaPt(deltas.reg_to_paid_conversion_pct)} — pertumbuhan sehat.` });
-    }
+  if (current.registrations != null) {
+    const d = deltas.registrations;
+    insights.push({
+      icon: d == null ? 'ℹ️' : (d >= 0 ? '📈' : '📉'),
+      text: `Total Registrasi periode ini ${fmt(current.registrations)} agen (${d == null ? 'tidak ada pembanding periode lalu' : `${fmtDeltaPct(d)} vs periode lalu, same-day`}).`,
+    });
   }
-  if (deltas.transacting_outlets != null && deltas.activated_outlets != null) {
-    if (deltas.transacting_outlets > deltas.activated_outlets) {
-      insights.push({ icon: '📈', text: `Outlet bertransaksi tumbuh lebih cepat (${fmtDeltaPct(deltas.transacting_outlets)}) dibanding outlet aktif (${fmtDeltaPct(deltas.activated_outlets)}) — aktivasi lama makin produktif.` });
-    } else if (deltas.transacting_outlets < 0 && deltas.activated_outlets > 0) {
-      insights.push({ icon: '⚠️', text: `Outlet aktif bertambah tapi outlet bertransaksi justru turun ${fmtDeltaPct(deltas.transacting_outlets)} — indikasi outlet baru belum produktif.` });
-    }
+
+  if (current.active_registrations != null) {
+    insights.push({
+      icon: '✅',
+      text: `${fmt(current.active_registrations)} agen sudah aktif (${nfPct(current.activation_conversion_pct)} dari total registrasi).`,
+    });
   }
-  if (current.revenue_per_transaction != null && previous.revenue_per_transaction != null) {
-    const d = current.revenue_per_transaction - previous.revenue_per_transaction;
-    if (Math.abs(d) > 1) insights.push({ icon: d > 0 ? '💰' : '📉', text: `Revenue per transaksi ${d > 0 ? 'naik' : 'turun'} dari ${fmtRp(previous.revenue_per_transaction)} ke ${fmtRp(current.revenue_per_transaction)}.` });
+
+  if (current.inactive_registrations != null && current.inactive_registrations > 0) {
+    insights.push({
+      icon: '⚠️',
+      text: `Backlog belum aktif: ${fmt(current.inactive_registrations)} agen registrasi masih menunggu aktivasi.`,
+    });
   }
-  if (data.concentration?.revenue?.top1?.pct != null && data.concentration.revenue.top1.pct >= 30) {
-    insights.push({ icon: '🎯', text: `Top-1 PB (${data.concentration.revenue.top1.pb}) menyumbang ${data.concentration.revenue.top1.pct.toFixed(1)}% dari total revenue — risiko konsentrasi tinggi pada satu PB.` });
+
+  if (current.active_recruiting_pb != null) {
+    const d = deltas.active_recruiting_pb;
+    insights.push({
+      icon: 'ℹ️',
+      text: `${fmt(current.active_recruiting_pb)} PB aktif merekrut periode ini${d == null ? '' : ` (${fmtDeltaPct(d)} vs periode lalu)`}, rata-rata ${fmt2(current.avg_registration_per_pb)} agen per PB.`,
+    });
   }
-  if (deltas.negative_activation_count != null) {
-    if (deltas.negative_activation_count < 0) insights.push({ icon: '✅', text: `Aktivasi berkomisi negatif membaik: turun ${fmtDeltaPct(Math.abs(deltas.negative_activation_count))} dari periode lalu.` });
-    else if (deltas.negative_activation_count > 0) insights.push({ icon: '⚠️', text: `Aktivasi berkomisi negatif memburuk: naik ${fmtDeltaPct(deltas.negative_activation_count)} dari periode lalu.` });
+
+  const topByReg = [...pbScorecard].sort((a, b) => (b.registrations || 0) - (a.registrations || 0))[0];
+  if (topByReg) {
+    insights.push({
+      icon: '🏆',
+      text: `PB dengan registrasi terbesar: ${topByReg.pb} (${fmt(topByReg.registrations)} agen).`,
+    });
   }
+
+  const eligible = pbScorecard.filter(r => (r.registrations || 0) >= MIN_VOLUME_FOR_BEST_CONVERSION && r.activation_conversion_pct != null);
+  const topByConv = [...eligible].sort((a, b) => b.activation_conversion_pct - a.activation_conversion_pct)[0];
+  if (topByConv) {
+    insights.push({
+      icon: '🎯',
+      text: `PB dengan conversion terbaik (minimum ${MIN_VOLUME_FOR_BEST_CONVERSION} registrasi): ${topByConv.pb} — ${nfPct(topByConv.activation_conversion_pct)}.`,
+    });
+  } else {
+    insights.push({ icon: 'ℹ️', text: `Belum ada PB dengan minimum ${MIN_VOLUME_FOR_BEST_CONVERSION} registrasi untuk dibandingkan conversion-nya.` });
+  }
+
+  const concRev = data.concentration?.mgm_revenue?.top1;
+  if (concRev?.pct != null && concRev.pct >= 30) {
+    insights.push({ icon: '🔺', text: `Top-1 PB (${concRev.pb}) menyumbang ${concRev.pct.toFixed(1)}% dari total Revenue MGM — risiko konsentrasi tinggi pada satu PB.` });
+  }
+  const concRev5 = data.concentration?.mgm_revenue?.top5;
+  if (concRev5?.pct != null) {
+    insights.push({ icon: 'ℹ️', text: `Top-5 PB menyumbang ${concRev5.pct.toFixed(1)}% dari total Revenue MGM.` });
+  }
+
+  if (deltas.mgm_revenue != null) {
+    insights.push({ icon: deltas.mgm_revenue >= 0 ? '💰' : '📉', text: `Revenue MGM ${deltas.mgm_revenue >= 0 ? 'naik' : 'turun'} ${fmtDeltaPct(Math.abs(deltas.mgm_revenue))} vs periode lalu, kini ${fmtRp(current.mgm_revenue)}.` });
+  }
+
   if (data.meta?.quality?.upline_mismatch_reg_vs_activation > 0 || data.meta?.quality?.upline_mismatch_reg_vs_detail > 0) {
     insights.push({ icon: '🔍', text: `Ditemukan ketidakcocokan upline antar sumber data (REG vs AKTIVASI/DETAIL) — cek tab Action Center & Data Audit.` });
   }
+
   return insights;
 }
 
 function CommandCenterTab({ data }) {
   const s = safeObj(data.summary);
+  const current = safeObj(s.current);
   const cohortFunnel = safeObj(data.cohort_funnel);
-  const operationalVolume = safeObj(data.operational_volume);
   const insights = useMemo(() => buildExecutiveInsight(data), [data]);
   const topPb = useMemo(() => [...safeArr(data.pb_scorecard)].sort((a, b) => b.registrations - a.registrations).slice(0, 8), [data.pb_scorecard]);
 
   return (
     <div className="wrd-tab-content">
       <div className="wrd-charts-row">
-        <ChartCard title="Cohort Funnel — Registrasi → Converted → Transacting">
+        <ChartCard title="Funnel Registrasi — Total → Sudah Aktif → Sudah Transaksi">
           <div className="mgm-funnel">
             {[
-              { label: 'Registrasi', val: cohortFunnel.registrations, color: '#3B82F6' },
-              { label: 'Converted Registration', val: cohortFunnel.converted_registrations, color: COLOR_ACCENT, sub: nfPct(cohortFunnel.reg_to_paid_conversion_pct) },
-              { label: 'Converted & Transacting', val: cohortFunnel.converted_and_transacting, color: '#7C3AED', sub: nfPct(cohortFunnel.converted_to_transaction_pct) },
+              { label: 'Total Registrasi', val: cohortFunnel.registrations, color: '#3B82F6' },
+              { label: 'Sudah Aktif', val: cohortFunnel.active_registrations, color: COLOR_ACCENT, sub: nfPct(cohortFunnel.activation_conversion_pct) },
+              { label: 'Sudah Transaksi', val: cohortFunnel.registered_and_transacting, color: '#7C3AED', sub: nfPct(cohortFunnel.registered_to_transacting_pct) },
             ].map((f, i) => (
               <div key={i} className="mgm-funnel-step">
                 <div className="mgm-funnel-bar" style={{ background: f.color + '15', borderLeft: `4px solid ${f.color}` }}>
@@ -313,14 +359,21 @@ function CommandCenterTab({ data }) {
                 {f.sub && <div className="mgm-funnel-sub">{f.sub}</div>}
               </div>
             ))}
+            <div className="mgm-funnel-step">
+              <div className="mgm-funnel-bar" style={{ background: '#F59E0B15', borderLeft: '4px solid #F59E0B' }}>
+                <span>Belum Aktif</span>
+                <strong style={{ color: '#F59E0B' }}>{fmt(cohortFunnel.inactive_registrations)}</strong>
+              </div>
+              <div className="mgm-funnel-sub">Total Registrasi − Sudah Aktif − Unknown</div>
+            </div>
           </div>
         </ChartCard>
-        <ChartCard title="Operational Volume">
+        <ChartCard title="Informasi Pendukung — Transaksi (dari AKTIVASI)">
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {[
-              { label: 'Paid Activation Events', val: operationalVolume.paid_activation_events },
-              { label: 'Activated Outlets', val: operationalVolume.activated_outlets },
-              { label: 'Transacting Outlets', val: operationalVolume.transacting_outlets, sub: nfPct(operationalVolume.activation_to_transaction_pct) },
+              { label: 'Activated Outlets (AKTIVASI)', val: data.operational_volume?.activated_outlets },
+              { label: 'Transacting Outlets', val: data.operational_volume?.transacting_outlets, sub: nfPct(data.operational_volume?.activation_to_transaction_pct) },
+              { label: 'Total TRX', val: data.operational_volume?.total_trx },
             ].map((f, i) => (
               <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', background: 'var(--bg-page)', borderRadius: 8 }}>
                 <span style={{ fontSize: 13 }}>{f.label}</span>
@@ -353,8 +406,7 @@ function CommandCenterTab({ data }) {
             ]}
             rows={[
               { metric: 'Registrasi', ...safeObj(safeObj(data.concentration).registrations) },
-              { metric: 'Paid Activation', ...safeObj(safeObj(data.concentration).paid_activation_events) },
-              { metric: 'Revenue', ...safeObj(safeObj(data.concentration).revenue) },
+              { metric: 'Revenue MGM', ...safeObj(safeObj(data.concentration).mgm_revenue) },
             ]}
           />
         </ChartCard>
@@ -376,8 +428,8 @@ function CommandCenterTab({ data }) {
             { key: 'pb', label: 'PB' },
             { key: 'status', label: 'Status', render: r => <StatusPill status={r.status} /> },
             { key: 'registrations', label: 'Reg', right: true },
-            { key: 'reg_to_paid_conversion_pct', label: 'Konversi', right: true, render: r => nfPct(r.reg_to_paid_conversion_pct) },
-            { key: 'total_revenue', label: 'Revenue', right: true, render: r => fmtRp(r.total_revenue) },
+            { key: 'activation_conversion_pct', label: 'Konversi', right: true, render: r => nfPct(r.activation_conversion_pct) },
+            { key: 'mgm_revenue', label: 'Revenue MGM', right: true, render: r => fmtRp(r.mgm_revenue) },
           ]}
           rows={topPb}
         />
@@ -398,8 +450,8 @@ function PbScorecardTab({ data, onSelectPb }) {
   pbMatrix.thresholds = safeObj(pbMatrix.thresholds);
 
   const rows = useMemo(() => {
-    let d = data.pb_scorecard || [];
-    if (q) d = d.filter(r => r.pb.toLowerCase().includes(q.toLowerCase()));
+    let d = safeArr(data.pb_scorecard);
+    if (q) d = d.filter(r => (r.pb || '').toLowerCase().includes(q.toLowerCase()));
     return [...d].sort((a, b) => {
       const va = a[sortF] ?? -Infinity, vb = b[sortF] ?? -Infinity;
       return sortD === 'asc' ? va - vb : vb - va;
@@ -416,13 +468,12 @@ function PbScorecardTab({ data, onSelectPb }) {
   function exportCsv() {
     const csv = toCsv(rows, [
       { label: 'PB', value: 'pb' }, { label: 'Status', value: 'status' },
-      { label: 'Registrasi', value: 'registrations' }, { label: 'Converted', value: 'converted_registrations' },
-      { label: 'Paid Activation Events', value: 'paid_activation_events' }, { label: 'Activated Outlets', value: 'activated_outlets' },
-      { label: 'Transacting Outlets', value: 'transacting_outlets' }, { label: 'Konversi (%)', value: r => r.reg_to_paid_conversion_pct },
-      { label: 'Activation->Transaction (%)', value: r => r.activation_to_transaction_pct },
-      { label: 'Total TRX', value: 'total_trx' }, { label: 'Total Revenue', value: 'total_revenue' },
-      { label: 'Fee Upline', value: 'fee_upline' }, { label: 'Komisi Aktivasi', value: 'activation_commission' },
-      { label: 'Negative Activation', value: 'negative_activation_count' },
+      { label: 'Registrasi', value: 'registrations' }, { label: 'Sudah Aktif', value: 'active_registrations' },
+      { label: 'Belum Aktif', value: 'inactive_registrations' }, { label: 'Unknown', value: 'unknown_active_status' },
+      { label: 'Conversion (%)', value: r => r.activation_conversion_pct },
+      { label: 'Revenue MGM', value: 'mgm_revenue' },
+      { label: 'Kontribusi Registrasi (%)', value: r => r.contribution_registration_pct },
+      { label: 'Kontribusi Revenue (%)', value: r => r.contribution_revenue_pct },
     ]);
     downloadCsv(`mgm-pb-scorecard-${data.meta.selected_period}.csv`, csv);
   }
@@ -430,7 +481,7 @@ function PbScorecardTab({ data, onSelectPb }) {
   return (
     <div className="wrd-tab-content">
       <div className="wrd-charts-row">
-        <ChartCard title="PB Matrix — Registrasi vs Konversi (bubble = revenue)">
+        <ChartCard title="PB Performance Matrix — Registrasi vs Conversion Aktivasi (bubble = Revenue MGM)">
           <BubbleMatrix rows={pbMatrix.rows} thresholds={pbMatrix.thresholds} />
           <div className="mgm-matrix-legend">
             {Object.entries(STATUS_COLORS).map(([label, color]) => (
@@ -438,7 +489,7 @@ function PbScorecardTab({ data, onSelectPb }) {
             ))}
           </div>
         </ChartCard>
-        <ChartCard title="Threshold Segmentasi (P25/P50/P75 aktual, bukan target)">
+        <ChartCard title="Threshold Segmentasi (P50/P75 aktual, bukan target)">
           <DataTable
             columns={[{ key: 'k', label: 'Metrik' }, { key: 'v', label: 'Nilai', right: true }]}
             rows={Object.entries(pbMatrix.thresholds).map(([k, v]) => ({ k, v: typeof v === 'number' ? v.toFixed(1) : v }))}
@@ -456,12 +507,14 @@ function PbScorecardTab({ data, onSelectPb }) {
           <table className="wr-table">
             <thead><tr>
               <th>PB</th><th>Status</th>
-              <Th label="Reg" field="registrations" right /><Th label="Converted" field="converted_registrations" right />
-              <Th label="Paid Events" field="paid_activation_events" right /><Th label="Aktif" field="activated_outlets" right />
-              <Th label="Transacting" field="transacting_outlets" right />
-              <Th label="Konversi" field="reg_to_paid_conversion_pct" right /><Th label="Akt→Trx" field="activation_to_transaction_pct" right />
-              <Th label="Revenue" field="total_revenue" right /><Th label="Komisi" field="activation_commission" right />
-              <Th label="Neg. Akt" field="negative_activation_count" right />
+              <Th label="Registrasi" field="registrations" right />
+              <Th label="Sudah Aktif" field="active_registrations" right />
+              <Th label="Belum Aktif" field="inactive_registrations" right />
+              <Th label="Conversion" field="activation_conversion_pct" right />
+              <Th label="Revenue MGM" field="mgm_revenue" right />
+              <th style={{ textAlign: 'right' }}>Kontribusi Registrasi</th>
+              <th style={{ textAlign: 'right' }}>Kontribusi Revenue</th>
+              <th style={{ textAlign: 'right' }}>Perubahan vs Bulan Lalu</th>
             </tr></thead>
             <tbody>
               {rows.map(r => (
@@ -469,18 +522,16 @@ function PbScorecardTab({ data, onSelectPb }) {
                   <td><code>{r.pb}</code></td>
                   <td><StatusPill status={r.status} /></td>
                   <td style={{ textAlign: 'right' }}>{fmt(r.registrations)}</td>
-                  <td style={{ textAlign: 'right' }}>{fmt(r.converted_registrations)}</td>
-                  <td style={{ textAlign: 'right' }}>{fmt(r.paid_activation_events)}</td>
-                  <td style={{ textAlign: 'right' }}>{fmt(r.activated_outlets)}</td>
-                  <td style={{ textAlign: 'right' }}>{fmt(r.transacting_outlets)}</td>
-                  <td style={{ textAlign: 'right' }}>{nfPct(r.reg_to_paid_conversion_pct)}</td>
-                  <td style={{ textAlign: 'right' }}>{nfPct(r.activation_to_transaction_pct)}</td>
-                  <td style={{ textAlign: 'right' }}>{fmtRp(r.total_revenue)}</td>
-                  <td style={{ textAlign: 'right' }}>{fmtRp(r.activation_commission)}</td>
-                  <td style={{ textAlign: 'right', color: r.negative_activation_count > 0 ? '#DC2626' : undefined }}>{fmt(r.negative_activation_count)}</td>
+                  <td style={{ textAlign: 'right' }}>{fmt(r.active_registrations)}</td>
+                  <td style={{ textAlign: 'right' }}>{fmt(r.inactive_registrations)}</td>
+                  <td style={{ textAlign: 'right' }}>{nfPct(r.activation_conversion_pct)}</td>
+                  <td style={{ textAlign: 'right' }}>{fmtRp(r.mgm_revenue)}</td>
+                  <td style={{ textAlign: 'right' }}>{nfPct(r.contribution_registration_pct)}</td>
+                  <td style={{ textAlign: 'right' }}>{nfPct(r.contribution_revenue_pct)}</td>
+                  <td style={{ textAlign: 'right', color: deltaColor(r.deltas?.registrations) }}>{fmtDeltaPct(r.deltas?.registrations)}</td>
                 </tr>
               ))}
-              {!rows.length && <tr><td colSpan={12} style={{ textAlign: 'center', padding: 20, color: 'var(--text-4)' }}>Belum ada data</td></tr>}
+              {!rows.length && <tr><td colSpan={10} style={{ textAlign: 'center', padding: 20, color: 'var(--text-4)' }}>Belum ada data</td></tr>}
             </tbody>
           </table>
         </div>
@@ -503,7 +554,7 @@ function agingBucketOf(days) {
 const AGING_BUCKETS = ['0-1 hari', '2-3 hari', '4-7 hari', '8-14 hari', '>14 hari', 'unknown'];
 
 const STAGE_LABELS = {
-  registered_not_paid: 'Registered, Not Paid',
+  registered_not_paid: 'Registered, Belum Aktif',
   paid_not_active: 'Paid, Not Active',
   active_no_trx: 'Active, No Trx',
   transacting: 'Transacting',
@@ -563,9 +614,11 @@ function OutletExplorer({ periode }) {
 }
 
 function FunnelAgingTab({ data, periode }) {
+  const p0Queue = safeArr(safeObj(data.derived_queues).p0);
   const p1Queue = safeArr(safeObj(data.derived_queues).p1);
-  const regNotPaid = p1Queue.filter(q => q.type === 'registered_not_paid');
-  const activeNoTrx = p1Queue.filter(q => q.type === 'active_no_transaction');
+  const regNotActive = p1Queue.filter(q => q.type === 'registered_not_active');
+  const pbHighBacklog = p1Queue.filter(q => q.type === 'pb_high_inactive_backlog');
+  const unknownActive = p0Queue.filter(q => q.type === 'unknown_active_status');
   const cohortFunnel = safeObj(data.cohort_funnel);
   const operationalVolume = safeObj(data.operational_volume);
 
@@ -578,45 +631,51 @@ function FunnelAgingTab({ data, periode }) {
           <DataTable
             columns={[{ key: 'label', label: 'Tahap' }, { key: 'val', label: 'Jumlah', right: true }]}
             rows={[
-              { label: 'Registrations', val: fmt(cohortFunnel.registrations) },
-              { label: 'Converted Registration', val: fmt(cohortFunnel.converted_registrations) },
-              { label: 'Converted & Transacting', val: fmt(cohortFunnel.converted_and_transacting) },
-              { label: 'Paid Activation Events', val: fmt(operationalVolume.paid_activation_events) },
-              { label: 'Activated Outlets', val: fmt(operationalVolume.activated_outlets) },
-              { label: 'Transacting Outlets', val: fmt(operationalVolume.transacting_outlets) },
+              { label: 'Total Registrasi', val: fmt(cohortFunnel.registrations) },
+              { label: 'Sudah Aktif', val: fmt(cohortFunnel.active_registrations) },
+              { label: 'Belum Aktif', val: fmt(cohortFunnel.inactive_registrations) },
+              { label: 'Status Tidak Diketahui', val: fmt(cohortFunnel.unknown_active_status) },
+              { label: 'Sudah Transaksi', val: fmt(cohortFunnel.registered_and_transacting) },
+              { label: 'Activated Outlets (info AKTIVASI)', val: fmt(operationalVolume.activated_outlets) },
+              { label: 'Transacting Outlets (info AKTIVASI)', val: fmt(operationalVolume.transacting_outlets) },
             ]}
           />
         </ChartCard>
-        <ChartCard title="Aging Bucket — Registered Not Paid vs Active No Trx (deskriptif, bukan SLA resmi)">
+        <ChartCard title="Aging Bucket — Registrasi Belum Aktif (deskriptif, bukan SLA resmi)">
           <BarChart
             labels={AGING_BUCKETS}
             datasets={[
-              { label: 'Registered Not Paid', data: bucketCounts(regNotPaid), backgroundColor: '#F59E0BCC' },
-              { label: 'Active No Trx', data: bucketCounts(activeNoTrx), backgroundColor: '#DC2626CC' },
+              { label: 'Registered, Belum Aktif', data: bucketCounts(regNotActive), backgroundColor: '#F59E0BCC' },
             ]}
           />
         </ChartCard>
       </div>
 
-      <ChartCard title={`Queue — Registered Not Paid (${regNotPaid.length})`}>
+      <ChartCard title={`Queue — Registrasi Belum Aktif (${regNotActive.length})`}>
         <DataTable
           columns={[
             { key: 'id_outlet', label: 'ID Outlet' }, { key: 'upline', label: 'PB' },
             { key: 'aging_days', label: 'Aging (hari)', right: true },
-            { key: 'aging_critical', label: 'Kritis', render: r => r.aging_critical ? <span style={{ color: '#DC2626', fontWeight: 700 }}>Ya</span> : 'Tidak' },
           ]}
-          rows={regNotPaid.slice(0, 100)}
+          rows={regNotActive.slice(0, 100)}
         />
       </ChartCard>
 
-      <ChartCard title={`Queue — Active, Belum Bertransaksi (${activeNoTrx.length})`}>
+      <ChartCard title={`PB dengan Backlog Belum Aktif Terbesar (${pbHighBacklog.length})`}>
         <DataTable
           columns={[
-            { key: 'id_outlet', label: 'ID Outlet' }, { key: 'upline', label: 'PB' },
-            { key: 'aging_days', label: 'Aging (hari)', right: true },
-            { key: 'aging_critical', label: 'Kritis', render: r => r.aging_critical ? <span style={{ color: '#DC2626', fontWeight: 700 }}>Ya</span> : 'Tidak' },
+            { key: 'pb', label: 'PB' },
+            { key: 'inactive_registrations', label: 'Belum Aktif', right: true },
+            { key: 'registrations', label: 'Total Registrasi', right: true },
           ]}
-          rows={activeNoTrx.slice(0, 100)}
+          rows={pbHighBacklog}
+        />
+      </ChartCard>
+
+      <ChartCard title={`Data Quality — Status Tidak Diketahui (is_active NULL) (${unknownActive.length})`}>
+        <DataTable
+          columns={[{ key: 'id_outlet', label: 'ID Outlet' }, { key: 'upline', label: 'PB' }]}
+          rows={unknownActive.slice(0, 100)}
         />
       </ChartCard>
 
@@ -626,49 +685,45 @@ function FunnelAgingTab({ data, periode }) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// TAB 4 — Transaction & Revenue
+// TAB 4 — Transaction & Revenue (informasi pendukung)
 // ═══════════════════════════════════════════════════════════════
 function TransactionRevenueTab({ data }) {
   const trend = safeArr(data.monthly_trend);
   const pbScorecard = safeArr(data.pb_scorecard);
-  const topRevPb = [...pbScorecard].sort((a, b) => b.total_revenue - a.total_revenue).slice(0, 10);
-  const bottomRevPb = [...pbScorecard].filter(r => r.activated_outlets > 0).sort((a, b) => a.total_revenue - b.total_revenue).slice(0, 10);
-  const activeNoTrxOutlets = safeArr(safeObj(data.derived_queues).p1).filter(q => q.type === 'active_no_transaction');
-  const current = safeObj(safeObj(data.summary).current);
+  const topRevPb = [...pbScorecard].sort((a, b) => b.mgm_revenue - a.mgm_revenue).slice(0, 10);
+  const bottomRevPb = [...pbScorecard].filter(r => r.registrations > 0).sort((a, b) => a.mgm_revenue - b.mgm_revenue).slice(0, 10);
+  const operationalVolume = safeObj(data.operational_volume);
 
   return (
     <div className="wrd-tab-content">
-      <ChartCard title={`Trend Bulanan (cutoff hari berbeda per bulan — lihat label)`}>
+      <div className="mgm-quality-banner">
+        <i className="ti ti-info-circle" /> Tab ini menampilkan data transaksi (AKTIVASI) sebagai informasi pendukung. <strong>Revenue MGM</strong> (SUM komisi_aktifasi) berbeda dari <strong>Revenue Transaksi</strong> (SUM rev AKTIVASI) — jangan disamakan.
+      </div>
+
+      <ChartCard title="Trend Bulanan — TRX &amp; Revenue Transaksi (cutoff hari berbeda per bulan — lihat label)">
         <BarChart
           labels={trend.map(t => `${fmtBulan(t.periode).slice(0, 3)} (d${t.cutoff_day ?? '?'})`)}
           datasets={[
             { label: 'Total TRX', data: trend.map(t => Number(t.total_trx)), backgroundColor: '#3B82F6CC' },
-            { label: 'Total Revenue (rb)', data: trend.map(t => Number(t.total_revenue) / 1000), backgroundColor: COLOR_PRIMARY + 'CC' },
+            { label: 'Revenue Transaksi (rb)', data: trend.map(t => Number(t.transaction_revenue) / 1000), backgroundColor: COLOR_PRIMARY + 'CC' },
           ]}
         />
       </ChartCard>
 
       <div className="wrd-kpi-grid wrd-kpi-grid-3">
-        <KPICard label="TOTAL TRX" value={fmt(current.total_trx)} color="#3B82F6" />
-        <KPICard label="REVENUE PER TRANSAKSI" value={fmtRp(current.revenue_per_transaction)} color={COLOR_PRIMARY} />
-        <KPICard label="REVENUE PER ACTIVATED OUTLET" value={fmtRp(current.revenue_per_activated_outlet)} color="#8B5CF6" />
+        <KPICard label="TRANSACTING OUTLETS" value={fmt(operationalVolume.transacting_outlets)} sub={nfPct(operationalVolume.activation_to_transaction_pct)} color="#3B82F6" />
+        <KPICard label="TOTAL TRX" value={fmt(operationalVolume.total_trx)} color={COLOR_PRIMARY} />
+        <KPICard label="REVENUE TRANSAKSI" value={fmtRp(operationalVolume.transaction_revenue)} color="#8B5CF6" />
       </div>
 
       <div className="wrd-charts-row">
-        <ChartCard title="Top 10 PB by Revenue">
-          <BarChart horizontal labels={topRevPb.map(r => r.pb)} datasets={[{ data: topRevPb.map(r => r.total_revenue), backgroundColor: COLOR_PRIMARY + 'CC' }]} height={280} />
+        <ChartCard title="Top 10 PB by Revenue MGM">
+          <BarChart horizontal labels={topRevPb.map(r => r.pb)} datasets={[{ data: topRevPb.map(r => r.mgm_revenue), backgroundColor: COLOR_PRIMARY + 'CC' }]} height={280} />
         </ChartCard>
-        <ChartCard title="Bottom 10 PB by Revenue (yang sudah punya outlet aktif)">
-          <BarChart horizontal labels={bottomRevPb.map(r => r.pb)} datasets={[{ data: bottomRevPb.map(r => r.total_revenue), backgroundColor: '#DC2626CC' }]} height={280} />
+        <ChartCard title="Bottom 10 PB by Revenue MGM (yang sudah punya registrasi)">
+          <BarChart horizontal labels={bottomRevPb.map(r => r.pb)} datasets={[{ data: bottomRevPb.map(r => r.mgm_revenue), backgroundColor: '#DC2626CC' }]} height={280} />
         </ChartCard>
       </div>
-
-      <ChartCard title={`Outlet Aktif Belum Bertransaksi (${activeNoTrxOutlets.length})`}>
-        <DataTable
-          columns={[{ key: 'id_outlet', label: 'ID Outlet' }, { key: 'upline', label: 'PB' }, { key: 'aging_days', label: 'Aging (hari)', right: true }]}
-          rows={activeNoTrxOutlets.slice(0, 100)}
-        />
-      </ChartCard>
     </div>
   );
 }
@@ -695,25 +750,25 @@ function EconomicsTab({ data }) {
   return (
     <div className="wrd-tab-content">
       <div className="wrd-kpi-grid wrd-kpi-grid-4">
-        <KPICard label="FEE UPLINE" value={fmtRp(e.fee_upline)} color="#3B82F6" />
-        <KPICard label="KOMISI AKTIVASI" value={fmtRp(e.activation_commission)} color={COLOR_PRIMARY} />
+        <KPICard label="REVENUE MGM" value={fmtRp(e.mgm_revenue)} color={COLOR_PRIMARY} tip="Total pencapaian revenue unit MGM dari SUM komisi_aktifasi." />
         <KPICard label="AVG KOMISI/EVENT" value={fmtRp(e.avg_commission_per_activation)} color="#8B5CF6" />
         <KPICard label="NEGATIVE ACTIVATION" value={`${fmt(e.negative_activation_count)} (${nfPct(e.negative_activation_rate)})`} color="#DC2626" />
+        <KPICard label="PAID ACTIVATION EVENTS (audit)" value={fmt(e.paid_activation_events)} color="#9CA3AF" sub="Jumlah record id_aktifasi — bukan KPI utama" />
       </div>
 
       <div className="wrd-charts-row">
-        <ChartCard title="Breakdown per Tipe Outlet">
+        <ChartCard title="Breakdown Sekunder — Fee Upline per Tipe Outlet (audit)">
           <DataTable columns={[
             { key: 'key', label: 'Tipe' }, { key: 'count', label: 'Jumlah', right: true },
             { key: 'fee_upline', label: 'Fee Upline', right: true, render: r => fmtRp(r.fee_upline) },
-            { key: 'komisi_aktifasi', label: 'Komisi', right: true, render: r => fmtRp(r.komisi_aktifasi) },
+            { key: 'komisi_aktifasi', label: 'Revenue MGM', right: true, render: r => fmtRp(r.komisi_aktifasi) },
           ]} rows={e.by_tipe_outlet} />
         </ChartCard>
         <ChartCard title="Breakdown per Pembayaran">
           <DataTable columns={[
             { key: 'key', label: 'Metode' }, { key: 'count', label: 'Jumlah', right: true },
             { key: 'fee_upline', label: 'Fee Upline', right: true, render: r => fmtRp(r.fee_upline) },
-            { key: 'komisi_aktifasi', label: 'Komisi', right: true, render: r => fmtRp(r.komisi_aktifasi) },
+            { key: 'komisi_aktifasi', label: 'Revenue MGM', right: true, render: r => fmtRp(r.komisi_aktifasi) },
           ]} rows={e.by_pembayaran_via} />
         </ChartCard>
       </div>
@@ -722,7 +777,7 @@ function EconomicsTab({ data }) {
         <DataTable columns={[
           { key: 'key', label: 'Group' }, { key: 'count', label: 'Jumlah', right: true },
           { key: 'fee_upline', label: 'Fee Upline', right: true, render: r => fmtRp(r.fee_upline) },
-          { key: 'komisi_aktifasi', label: 'Komisi', right: true, render: r => fmtRp(r.komisi_aktifasi) },
+          { key: 'komisi_aktifasi', label: 'Revenue MGM', right: true, render: r => fmtRp(r.komisi_aktifasi) },
         ]} rows={e.by_nama_group} />
       </ChartCard>
 
@@ -740,7 +795,7 @@ function EconomicsTab({ data }) {
       </ChartCard>
 
       {e.formula_mismatch.length > 0 && (
-        <ChartCard title={`⚠️ Formula Audit Mismatch (${e.formula_mismatch.length}) — komisi resmi TETAP nilai sumber sheet`}>
+        <ChartCard title={`⚠️ Formula Audit Mismatch (${e.formula_mismatch.length}) — Revenue MGM resmi TETAP nilai sumber sheet`}>
           <DataTable columns={[
             { key: 'id_aktifasi', label: 'ID Aktifasi' }, { key: 'id_outlet', label: 'ID Outlet' },
             { key: 'expected', label: 'Formula (audit)', right: true, render: r => fmtRp(r.expected) },
@@ -763,26 +818,26 @@ function TerritoryMixTab({ data }) {
   const thresholds = safeObj(safeObj(data.pb_matrix).thresholds);
   const flagged = safeArr(data.pb_scorecard).filter(r =>
     r.registrations >= (thresholds.registrations_p50 || 0) &&
-    (r.reg_to_paid_conversion_pct == null || r.reg_to_paid_conversion_pct < (thresholds.conversion_p50 || 0))
+    (r.activation_conversion_pct == null || r.activation_conversion_pct < (thresholds.conversion_p50 || 0))
   );
 
   return (
     <div className="wrd-tab-content">
-      <ChartCard title="Top Provinsi by Revenue">
-        <BarChart horizontal labels={territories.slice(0, 10).map(t => t.provinsi)} datasets={[{ data: territories.slice(0, 10).map(t => t.total_revenue), backgroundColor: COLOR_PRIMARY + 'CC' }]} height={280} />
+      <ChartCard title="Top Provinsi by Revenue Transaksi (info AKTIVASI)">
+        <BarChart horizontal labels={territories.slice(0, 10).map(t => t.provinsi)} datasets={[{ data: territories.slice(0, 10).map(t => t.transaction_revenue), backgroundColor: COLOR_PRIMARY + 'CC' }]} height={280} />
       </ChartCard>
 
       <ChartCard title="Detail per Provinsi">
         <DataTable columns={[
           { key: 'provinsi', label: 'Provinsi' },
-          { key: 'registrations', label: 'Reg', right: true }, { key: 'activated_outlets', label: 'Aktif', right: true },
+          { key: 'registrations', label: 'Reg', right: true }, { key: 'activated_outlets', label: 'Aktif (info)', right: true },
           { key: 'transacting_outlets', label: 'Transacting', right: true },
-          { key: 'total_trx', label: 'TRX', right: true }, { key: 'total_revenue', label: 'Revenue', right: true, render: r => fmtRp(r.total_revenue) },
+          { key: 'total_trx', label: 'TRX', right: true }, { key: 'transaction_revenue', label: 'Revenue Transaksi', right: true, render: r => fmtRp(r.transaction_revenue) },
         ]} rows={territories} />
       </ChartCard>
 
       <div className="wrd-charts-row">
-        <ChartCard title="Outlet Type Mix">
+        <ChartCard title="Outlet Type Mix (info AKTIVASI)">
           <DonutChart labels={types.map(t => t.tipe_outlet)} values={types.map(t => t.activated_outlets)} colors={['#7C3AED', '#059669', '#F97316', '#6B7280', '#3B82F6', '#EC4899', '#9CA3AF']} />
         </ChartCard>
         <ChartCard title="Payment Method Mix">
@@ -793,7 +848,7 @@ function TerritoryMixTab({ data }) {
       <ChartCard title={`Registrasi Tinggi tapi Konversi Rendah (${flagged.length} PB)`}>
         <DataTable columns={[
           { key: 'pb', label: 'PB' }, { key: 'registrations', label: 'Registrasi', right: true },
-          { key: 'reg_to_paid_conversion_pct', label: 'Konversi', right: true, render: r => nfPct(r.reg_to_paid_conversion_pct) },
+          { key: 'activation_conversion_pct', label: 'Konversi', right: true, render: r => nfPct(r.activation_conversion_pct) },
         ]} rows={flagged} />
       </ChartCard>
     </div>
@@ -829,7 +884,7 @@ function ActionModal({ outlet, periode, onClose, onSaved }) {
           <select value={actionType} onChange={e => setActionType(e.target.value)}>
             <option value="follow_up">Follow Up</option>
             <option value="negative_commission">Negative Commission</option>
-            <option value="paid_not_active">Paid Not Active</option>
+            <option value="registered_not_active">Registered, Belum Aktif</option>
             <option value="scale_reward">Scale / Reward</option>
           </select>
         </div>
@@ -882,6 +937,9 @@ function ActionCenterTab({ data, periode }) {
 
   return (
     <div className="wrd-tab-content">
+      <div className="mgm-quality-banner">
+        <i className="ti ti-info-circle" /> Prioritas P0/P1 fokus pada backlog belum aktif &amp; kualitas data. P2 adalah kandidat scale-up PB. Aging bersifat deskriptif — belum ada SLA resmi yang ditetapkan untuk MGM PA.
+      </div>
       <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
         {['p0', 'p1', 'p2', 'p3'].map(p => (
           <button key={p} onClick={() => setQueueTab(p)} className={`mgm-queue-tab${queueTab === p ? ' active' : ''}`}>
@@ -1042,7 +1100,7 @@ export default function WarRoomMgmPa() {
               </select>
             )}
             <span className="mgm-chip">vs {fmtBulan(data.meta.compare_period)} (same-day)</span>
-            {data.meta.cutoff_date && <span className="mgm-chip">Cutoff: {fmtDate(data.meta.cutoff_date)}</span>}
+            {data.meta.cutoff_date && <span className="mgm-chip">Data source terakhir: {fmtDate(data.meta.cutoff_date)}</span>}
             <button className="wr-btn-update" onClick={() => fetchData(periode, true)} disabled={loading}>
               <i className="ti ti-refresh" style={loading ? SPIN : undefined} />
             </button>
@@ -1089,18 +1147,22 @@ export default function WarRoomMgmPa() {
         )}
 
         <div className="wrd-kpi-grid wrd-kpi-grid-4">
-          <KPICard label="REGISTRASI" value={fmt(s.current.registrations)} deltaVal={s.deltas.registrations} deltaKind="pct" color="#3B82F6" />
-          <KPICard label="CONVERTED REGISTRATIONS" value={fmt(s.current.converted_registrations)} deltaVal={s.deltas.converted_registrations} deltaKind="pct" color={COLOR_ACCENT} />
-          <KPICard label="PAID ACTIVATION EVENTS" value={fmt(s.current.paid_activation_events)} deltaVal={s.deltas.paid_activation_events} deltaKind="pct" color="#8B5CF6" />
-          <KPICard label="ACTIVATED OUTLETS" value={fmt(s.current.activated_outlets)} deltaVal={s.deltas.activated_outlets} deltaKind="pct" color={COLOR_PRIMARY} />
-          <KPICard label="TRANSACTING OUTLETS" value={fmt(s.current.transacting_outlets)} deltaVal={s.deltas.transacting_outlets} deltaKind="pct" color="#059669" />
-          <KPICard label="REG → PAID CONVERSION" value={nfPct(s.current.reg_to_paid_conversion_pct)} deltaVal={s.deltas.reg_to_paid_conversion_pct} deltaKind="pt" color="#F59E0B" />
-          <KPICard label="ACTIVATION → TRANSACTION" value={nfPct(s.current.activation_to_transaction_pct)} deltaVal={s.deltas.activation_to_transaction_pct} deltaKind="pt" color="#F97316" />
-          <KPICard label="TOTAL TRX" value={fmt(s.current.total_trx)} deltaVal={s.deltas.total_trx} deltaKind="pct" color="#3B82F6" />
-          <KPICard label="REVENUE" value={fmtRp(s.current.total_revenue)} deltaVal={s.deltas.total_revenue} deltaKind="pct" color="#EC4899" />
-          <KPICard label="FEE UPLINE" value={fmtRp(s.current.fee_upline)} deltaVal={s.deltas.fee_upline} deltaKind="pct" color="#7C3AED" />
-          <KPICard label="ACTIVATION COMMISSION" value={fmtRp(s.current.activation_commission)} deltaVal={s.deltas.activation_commission} deltaKind="pct" color="#8B5CF6" />
-          <KPICard label="NEGATIVE ACTIVATIONS" value={fmt(s.current.negative_activation_count)} deltaVal={s.deltas.negative_activation_count} deltaKind="pct" color="#DC2626" />
+          <KPICard label="TOTAL REGISTRASI" value={fmt(s.current.registrations)} deltaVal={s.deltas.registrations} deltaKind="pct" color="#3B82F6"
+            tip="Jumlah outlet/agen unik yang terdaftar pada data REG periode terpilih." />
+          <KPICard label="SUDAH AKTIF" value={fmt(s.current.active_registrations)} deltaVal={s.deltas.active_registrations} deltaKind="pct" color={COLOR_ACCENT}
+            tip="Jumlah agen registrasi dengan is_active = 1." />
+          <KPICard label="BELUM AKTIF" value={fmt(s.current.inactive_registrations)} deltaVal={s.deltas.inactive_registrations} deltaKind="pct" color="#F59E0B"
+            tip="Jumlah agen registrasi dengan is_active = 0." />
+          <KPICard label="CONVERSION AKTIVASI" value={nfPct(s.current.activation_conversion_pct)} deltaVal={s.deltas.activation_conversion_pct} deltaKind="pt" color="#059669"
+            tip="Persentase agen registrasi yang sudah aktif: Sudah Aktif ÷ Total Registrasi." />
+          <KPICard label="PB AKTIF MEREKRUT" value={fmt(s.current.active_recruiting_pb)} deltaVal={s.deltas.active_recruiting_pb} deltaKind="pct" color="#8B5CF6"
+            tip="Jumlah upline/PB unik yang mempunyai minimal satu agen registrasi." />
+          <KPICard label="RATA-RATA REKRUT / PB" value={fmt2(s.current.avg_registration_per_pb)} deltaVal={s.deltas.avg_registration_per_pb} deltaKind="pct" color="#F97316"
+            tip="Rata-rata jumlah agen baru yang direkrut setiap PB aktif." />
+          <KPICard label="REVENUE MGM" value={fmtRp(s.current.mgm_revenue)} deltaVal={s.deltas.mgm_revenue} deltaKind="pct" color="#EC4899"
+            tip="Total pencapaian revenue unit MGM yang berasal dari SUM komisi_aktifasi." />
+          <KPICard label="OUTLET TRANSACTING" value={fmt(s.current.transacting_outlets)} deltaVal={s.deltas.transacting_outlets} deltaKind="pct" color="#3B82F6"
+            sub="Informasi pendukung (AKTIVASI)" />
         </div>
 
         <div className="wrd-tabs">

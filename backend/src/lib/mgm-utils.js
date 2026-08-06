@@ -5,6 +5,20 @@
  * Pure functions (tidak menyentuh DB/HTTP) — dipakai oleh
  * backend/src/routes/warroom-mgm.js dan diuji langsung oleh
  * backend/scripts/test-mgm-warroom.js.
+ *
+ * MODEL BISNIS (jangan diubah tanpa sadar):
+ *   - Sumber funnel registrasi/aktif/tidak-aktif/PB Aktif Merekrut:
+ *     mgm_pa_registrasi (REG). is_active DI SINI adalah status resmi
+ *     aktif/tidak-aktif agen — BUKAN status dari tabel AKTIVASI.
+ *   - Sumber Revenue MGM: mgm_pa_aktivasi_detail.komisi_aktifasi (DETAIL).
+ *     Nilai komisi_aktifasi dipakai APA ADANYA dari source sheet — TIDAK
+ *     PERNAH dihitung ulang dan menimpa nilai sumber.
+ *   - mgm_pa_aktivasi (AKTIVASI) tetap dipakai untuk analisis transaksi
+ *     (transacting outlets, total trx, revenue transaksi) sebagai
+ *     INFORMASI PENDUKUNG SAJA — bukan sumber status aktif funnel.
+ *   - upline = ID PB (perekrut). id_outlet = agen/outlet yang direkrut.
+ *     Jumlah PB Aktif Merekrut = COUNT DISTINCT REG.upline (non-blank),
+ *     BUKAN jumlah id_outlet.
  */
 
 // ─────────────────────────────────────────────────────────────────
@@ -36,6 +50,7 @@ function safePct(numerator, denominator) {
 
 // Delta persen (current vs previous). previous = 0 => null, bukan Infinity.
 function pctDelta(current, previous) {
+  if (current === null || current === undefined) return null;
   const prev = safeNumber(previous);
   if (prev === 0) return null;
   return ((safeNumber(current) - prev) / prev) * 100;
@@ -133,9 +148,8 @@ function dedupeLastWins(rows, keyFn) {
 
 // ─────────────────────────────────────────────────────────────────
 // Canonical outlet index — join REG + AKTIVASI + DETAIL per id_outlet.
-// Dipakai untuk endpoint outlet list (satu row per outlet), BUKAN untuk
-// agregasi KPI (KPI tetap dihitung langsung per-source, lihat catatan
-// attribution di buildPeriodAnalytics).
+// Dipakai untuk endpoint outlet list (satu row per outlet) & audit upline
+// mismatch, BUKAN untuk agregasi KPI utama.
 // ─────────────────────────────────────────────────────────────────
 
 function buildCanonicalOutletIndex(regRows, actRows, detailRows) {
@@ -150,6 +164,7 @@ function buildCanonicalOutletIndex(regRows, actRows, detailRows) {
         nama_kota: null, nama_propinsi: null,
         tipe_outlet_reg: null, tipe_outlet_akt: null, tipe_outlet_detail: null,
         tanggal_registrasi: null, tanggal_aktifasi: null,
+        is_active: null,
         trx: 0, rev: 0,
         detail_ids: [], payment_methods: new Set(),
         upline_mismatch_reg_akt: false,
@@ -171,6 +186,7 @@ function buildCanonicalOutletIndex(regRows, actRows, detailRows) {
     e.nama_kota = e.nama_kota || r.nama_kota || null;
     e.nama_propinsi = e.nama_propinsi || r.nama_propinsi || null;
     e.tanggal_registrasi = r.tanggal_registrasi || null;
+    e.is_active = r.is_active === undefined ? null : r.is_active;
   }
 
   for (const a of actRows || []) {
@@ -202,136 +218,124 @@ function buildCanonicalOutletIndex(regRows, actRows, detailRows) {
     if (e.upline_reg && e.upline_detail && e.upline_reg !== e.upline_detail) e.upline_mismatch_reg_detail = true;
     if (e.upline_akt && e.upline_detail && e.upline_akt !== e.upline_detail) e.upline_mismatch_akt_detail = true;
     e.payment_methods = [...e.payment_methods];
-    e.tipe_outlet = e.tipe_outlet_akt || e.tipe_outlet_reg || e.tipe_outlet_detail || null;
-    e.upline = e.upline_akt || e.upline_reg || e.upline_detail || null;
+    e.tipe_outlet = e.tipe_outlet_reg || e.tipe_outlet_akt || e.tipe_outlet_detail || null;
+    e.upline = e.upline_reg || e.upline_akt || e.upline_detail || null;
   }
 
   return idx;
 }
 
 // ─────────────────────────────────────────────────────────────────
-// PB segmentation — cascade rule berbasis distribusi (P25/P50/P75),
-// BUKAN target bisnis yang belum ada.
+// Registration funnel — sumber TUNGGAL: mgm_pa_registrasi (REG).
+// registrations/active/inactive/unknown SELALU mempartisi id_outlet unik
+// (registrations = active + inactive + unknown, dijamin secara struktural
+// karena setiap outlet masuk tepat satu bucket).
 // ─────────────────────────────────────────────────────────────────
 
-function computeSegmentationThresholds(pbRows) {
-  const gte = arr => arr.filter(v => v !== null && v !== undefined);
-  return {
-    registrations_p50: percentile(pbRows.map(r => r.registrations), 50),
-    conversion_p25: percentile(gte(pbRows.map(r => r.reg_to_paid_conversion_pct)), 25),
-    conversion_p50: percentile(gte(pbRows.map(r => r.reg_to_paid_conversion_pct)), 50),
-    conversion_p75: percentile(gte(pbRows.map(r => r.reg_to_paid_conversion_pct)), 75),
-    transaction_rate_p50: percentile(gte(pbRows.map(r => r.activation_to_transaction_pct)), 50),
-    transaction_rate_p75: percentile(gte(pbRows.map(r => r.activation_to_transaction_pct)), 75),
-    revenue_p50: percentile(pbRows.map(r => r.total_revenue), 50),
-    revenue_per_outlet_p75: percentile(gte(pbRows.map(r => r.revenue_per_activated_outlet)), 75),
-    negative_activation_rate_p75: percentile(gte(pbRows.map(r => r.negative_activation_rate)), 75),
-  };
-}
-
-function classifyPb(row, thresholds) {
-  const gte = (v, t) => v !== null && v !== undefined && v >= t;
-  const commission = safeNumber(row.activation_commission);
-  const negCount = safeNumber(row.negative_activation_count);
-  const negRate = row.negative_activation_rate;
-
-  if (commission < 0 || (negCount > 0 && gte(negRate, thresholds.negative_activation_rate_p75))) {
-    return 'Costly PB';
+function computeRegistrationFunnel(regRows) {
+  const byOutlet = new Map();
+  for (const r of regRows || []) {
+    if (!r.id_outlet) continue;
+    byOutlet.set(r.id_outlet, r); // last-wins kalau ada duplikat id_outlet di array
   }
-  if (
-    gte(row.registrations, thresholds.registrations_p50) &&
-    gte(row.reg_to_paid_conversion_pct, thresholds.conversion_p50) &&
-    gte(row.activation_to_transaction_pct, thresholds.transaction_rate_p50) &&
-    gte(row.total_revenue, thresholds.revenue_p50)
-  ) {
-    return 'Growth Engine';
+
+  let active = 0, inactive = 0, unknown = 0;
+  const uplineSet = new Set();
+  for (const r of byOutlet.values()) {
+    if (r.is_active === true) active++;
+    else if (r.is_active === false) inactive++;
+    else unknown++;
+    const up = r.upline && String(r.upline).trim();
+    if (up) uplineSet.add(up);
   }
-  if (safeNumber(row.registrations) < thresholds.registrations_p50 && gte(row.reg_to_paid_conversion_pct, thresholds.conversion_p75)) {
-    return 'Closer';
-  }
-  if (gte(row.registrations, thresholds.registrations_p50) &&
-      !gte(row.reg_to_paid_conversion_pct, thresholds.conversion_p50)) {
-    return 'Hunter Only';
-  }
-  if (gte(row.activation_to_transaction_pct, thresholds.transaction_rate_p75) ||
-      gte(row.revenue_per_activated_outlet, thresholds.revenue_per_outlet_p75)) {
-    return 'Productivity Builder';
-  }
-  return 'Low Activity';
-}
 
-// ─────────────────────────────────────────────────────────────────
-// Core KPI block untuk satu periode (dipakai utk current & previous).
-// PENTING (attribution rule, jangan diubah tanpa sadar):
-//   - registrations & conversion denominator: REG.upline / REG.id_outlet
-//   - activated/transacting/trx/revenue: AKTIVASI.upline
-//   - fee_upline/komisi: DETAIL.upline (MGM AKTIV)
-// converted_registrations = REG.id_outlet yang match ke DETAIL.id_outlet
-// (bukan match ke AKTIVASI — detail = kejadian aktivasi BERBAYAR).
-// ─────────────────────────────────────────────────────────────────
-
-function computeCoreKpis(regRows, actRows, detailRows) {
-  const registrations = new Set((regRows || []).map(r => r.id_outlet).filter(Boolean)).size;
-
-  const detailOutletSet = new Set((detailRows || []).map(d => d.id_outlet).filter(Boolean));
-  const regOutletSet = new Set((regRows || []).map(r => r.id_outlet).filter(Boolean));
-  const convertedRegistrations = [...regOutletSet].filter(id => detailOutletSet.has(id)).length;
-
-  const paidActivationEvents = new Set((detailRows || []).map(d => d.id_aktifasi).filter(Boolean)).size;
-  const paidActivationOutlets = detailOutletSet.size;
-
-  const activatedOutlets = new Set((actRows || []).map(a => a.id_outlet).filter(Boolean)).size;
-  const transactingOutletIds = new Set(
-    (actRows || []).filter(a => safeNumber(a.trx) > 0).map(a => a.id_outlet).filter(Boolean)
-  );
-  const transactingOutlets = transactingOutletIds.size;
-
-  const convertedAndTransacting = [...regOutletSet].filter(
-    id => detailOutletSet.has(id) && transactingOutletIds.has(id)
-  ).length;
-
-  const totalTrx = (actRows || []).reduce((s, a) => s + safeNumber(a.trx), 0);
-  const totalRevenue = (actRows || []).reduce((s, a) => s + safeNumber(a.rev), 0);
-
-  const feeUpline = (detailRows || []).reduce((s, d) => s + safeNumber(d.fee_upline), 0);
-  const activationCommission = (detailRows || []).reduce((s, d) => s + safeNumber(d.komisi_aktifasi), 0);
-  const negativeActivationCount = (detailRows || []).filter(d => safeNumber(d.komisi_aktifasi) < 0).length;
-
-  const regToPaidConversionPct = safePct(convertedRegistrations, registrations);
-  const convertedToTransactionPct = safePct(convertedAndTransacting, convertedRegistrations);
-  const activationToTransactionPct = safePct(transactingOutlets, activatedOutlets);
-  const avgCommissionPerActivation = paidActivationEvents > 0 ? activationCommission / paidActivationEvents : null;
-  const revenuePerTransaction = totalTrx > 0 ? totalRevenue / totalTrx : null;
-  const revenuePerActivatedOutlet = activatedOutlets > 0 ? totalRevenue / activatedOutlets : null;
-  const negativeActivationRate = safePct(negativeActivationCount, paidActivationEvents);
+  const registrations = byOutlet.size;
+  const active_recruiting_pb = uplineSet.size;
 
   return {
     registrations,
-    converted_registrations: convertedRegistrations,
-    converted_and_transacting: convertedAndTransacting,
-    paid_activation_events: paidActivationEvents,
-    paid_activation_outlets: paidActivationOutlets,
-    activated_outlets: activatedOutlets,
-    transacting_outlets: transactingOutlets,
-    total_trx: totalTrx,
-    total_revenue: totalRevenue,
-    fee_upline: feeUpline,
-    activation_commission: activationCommission,
-    negative_activation_count: negativeActivationCount,
-    reg_to_paid_conversion_pct: regToPaidConversionPct,
-    converted_to_transaction_pct: convertedToTransactionPct,
-    activation_to_transaction_pct: activationToTransactionPct,
-    avg_commission_per_activation: avgCommissionPerActivation,
-    revenue_per_transaction: revenuePerTransaction,
-    revenue_per_activated_outlet: revenuePerActivatedOutlet,
-    negative_activation_rate: negativeActivationRate,
+    active_registrations: active,
+    inactive_registrations: inactive,
+    unknown_active_status: unknown,
+    activation_conversion_pct: safePct(active, registrations),
+    active_recruiting_pb,
+    avg_registration_per_pb: active_recruiting_pb > 0 ? registrations / active_recruiting_pb : null,
+  };
+}
+
+// Revenue MGM — sumber TUNGGAL: mgm_pa_aktivasi_detail.komisi_aktifasi.
+// Nilai komisi_aktifasi dipakai apa adanya dari source sheet, TIDAK PERNAH
+// dihitung ulang untuk menimpa nilai sumber (lihat formula_mismatch di
+// buildPeriodAnalytics untuk audit selisih formula vs nilai sumber).
+function computeMgmRevenue(detailRows) {
+  const rows = detailRows || [];
+  const mgm_revenue = rows.reduce((s, d) => s + safeNumber(d.komisi_aktifasi), 0);
+  const fee_upline = rows.reduce((s, d) => s + safeNumber(d.fee_upline), 0);
+  const paid_activation_events = new Set(rows.map(d => d.id_aktifasi).filter(Boolean)).size;
+  const negative_activation_count = rows.filter(d => safeNumber(d.komisi_aktifasi) < 0).length;
+
+  return {
+    mgm_revenue,
+    fee_upline,
+    paid_activation_events,
+    negative_activation_count,
+    negative_activation_rate: safePct(negative_activation_count, paid_activation_events),
+    avg_commission_per_activation: paid_activation_events > 0 ? mgm_revenue / paid_activation_events : null,
+  };
+}
+
+// Info transaksi — sumber mgm_pa_aktivasi (AKTIVASI), INFORMASI PENDUKUNG
+// SAJA. Bukan sumber status aktif/tidak-aktif funnel registrasi.
+function computeTransactionInfo(actRows) {
+  const byOutlet = new Map();
+  for (const a of actRows || []) {
+    if (!a.id_outlet) continue;
+    byOutlet.set(a.id_outlet, a);
+  }
+  let transacting = 0, total_trx = 0, transaction_revenue = 0;
+  for (const a of byOutlet.values()) {
+    const trx = safeNumber(a.trx);
+    total_trx += trx;
+    transaction_revenue += safeNumber(a.rev);
+    if (trx > 0) transacting++;
+  }
+  const activated_outlets = byOutlet.size;
+  return {
+    activated_outlets,
+    transacting_outlets: transacting,
+    total_trx,
+    transaction_revenue,
+    activation_to_transaction_pct: safePct(transacting, activated_outlets),
+  };
+}
+
+// Gabungan satu periode: funnel registrasi + revenue MGM + info transaksi
+// pendukung + irisan "sudah registrasi DAN sudah transaksi" (dipakai funnel
+// tahap 3 — lihat §10 spesifikasi bisnis).
+function computeSummary(regRows, actRows, detailRows) {
+  const funnel = computeRegistrationFunnel(regRows);
+  const revenue = computeMgmRevenue(detailRows);
+  const txn = computeTransactionInfo(actRows);
+
+  const regOutletSet = new Set((regRows || []).map(r => r.id_outlet).filter(Boolean));
+  const transactingOutletIds = new Set(
+    (actRows || []).filter(a => safeNumber(a.trx) > 0).map(a => a.id_outlet).filter(Boolean)
+  );
+  const registered_and_transacting = [...regOutletSet].filter(id => transactingOutletIds.has(id)).length;
+
+  return {
+    ...funnel,
+    ...revenue,
+    ...txn,
+    registered_and_transacting,
+    registered_to_transacting_pct: safePct(registered_and_transacting, funnel.registrations),
   };
 }
 
 function summaryDeltas(current, previous) {
   const rateKeys = new Set([
-    'reg_to_paid_conversion_pct', 'converted_to_transaction_pct', 'activation_to_transaction_pct',
-    'negative_activation_rate',
+    'activation_conversion_pct', 'activation_to_transaction_pct',
+    'negative_activation_rate', 'registered_to_transacting_pct',
   ]);
   const deltas = {};
   for (const key of Object.keys(current)) {
@@ -342,54 +346,95 @@ function summaryDeltas(current, previous) {
 }
 
 // ─────────────────────────────────────────────────────────────────
-// PB scorecard — satu row per upline yang muncul di salah satu dataset.
+// PB segmentation — cascade rule berbasis distribusi (P50/P75) aktual dari
+// registrations, activation_conversion_pct, inactive_registrations.
+// BUKAN target bisnis yang belum ada.
+// ─────────────────────────────────────────────────────────────────
+
+function computeSegmentationThresholds(pbRows) {
+  const nn = arr => arr.filter(v => v !== null && v !== undefined);
+  return {
+    registrations_p50: percentile(pbRows.map(r => r.registrations), 50),
+    conversion_p50: percentile(nn(pbRows.map(r => r.activation_conversion_pct)), 50),
+    conversion_p75: percentile(nn(pbRows.map(r => r.activation_conversion_pct)), 75),
+    inactive_p75: percentile(pbRows.map(r => r.inactive_registrations), 75),
+  };
+}
+
+function classifyPb(row, thresholds) {
+  const gte = (v, t) => v !== null && v !== undefined && v >= t;
+  const reg = safeNumber(row.registrations);
+  const conv = row.activation_conversion_pct;
+
+  if (reg >= thresholds.registrations_p50 && gte(conv, thresholds.conversion_p50)) {
+    return 'Growth Engine';
+  }
+  if (reg < thresholds.registrations_p50 && gte(conv, thresholds.conversion_p75)) {
+    return 'Closer';
+  }
+  if (reg >= thresholds.registrations_p50 && !gte(conv, thresholds.conversion_p50)) {
+    return 'Hunter Only';
+  }
+  if (safeNumber(row.inactive_registrations) >= thresholds.inactive_p75) {
+    return 'High Backlog';
+  }
+  return 'Low Activity';
+}
+
+// ─────────────────────────────────────────────────────────────────
+// PB scorecard — satu row per upline yang muncul di mgm_pa_registrasi
+// (roster PB ditentukan oleh REG.upline — itulah definisi "PB Aktif
+// Merekrut"). Revenue MGM per PB diatribusikan lewat DETAIL.upline.
 // ─────────────────────────────────────────────────────────────────
 
 function buildPbScorecard(regRows, actRows, detailRows, prevRegRows, prevActRows, prevDetailRows) {
-  const uplines = new Set();
-  (regRows || []).forEach(r => r.upline && uplines.add(r.upline));
-  (actRows || []).forEach(a => a.upline && uplines.add(a.upline));
-  (detailRows || []).forEach(d => d.upline && uplines.add(d.upline));
+  const reg = regRows || [];
+  const det = detailRows || [];
+  const prevReg = prevRegRows || [];
+  const prevDet = prevDetailRows || [];
 
-  const totalRevenueAll = (actRows || []).reduce((s, a) => s + safeNumber(a.rev), 0);
-  const totalRegAll = new Set((regRows || []).map(r => r.id_outlet)).size;
-  const totalDetailAll = new Set((detailRows || []).map(d => d.id_aktifasi)).size;
+  const uplineSet = new Set();
+  reg.forEach(r => { const u = r.upline && String(r.upline).trim(); if (u) uplineSet.add(u); });
 
-  const rows = [...uplines].map(pb => {
-    const reg = (regRows || []).filter(r => r.upline === pb);
-    const act = (actRows || []).filter(a => a.upline === pb);
-    const det = (detailRows || []).filter(d => d.upline === pb);
-    const cur = computeCoreKpis(reg, act, det);
+  const totalFunnel = computeRegistrationFunnel(reg);
+  const totalMgmRevenue = det.reduce((s, d) => s + safeNumber(d.komisi_aktifasi), 0);
 
-    const prevReg = (prevRegRows || []).filter(r => r.upline === pb);
-    const prevAct = (prevActRows || []).filter(a => a.upline === pb);
-    const prevDet = (prevDetailRows || []).filter(d => d.upline === pb);
-    const prev = computeCoreKpis(prevReg, prevAct, prevDet);
+  function pbBlock(pb, regSrc, detSrc) {
+    const regForPb = regSrc.filter(r => r.upline === pb);
+    const detForPb = detSrc.filter(d => d.upline === pb);
+    const funnel = computeRegistrationFunnel(regForPb);
+    const mgm_revenue = detForPb.reduce((s, d) => s + safeNumber(d.komisi_aktifasi), 0);
+    const dates = new Set(regForPb.map(r => r.tanggal_registrasi).filter(Boolean));
+    const avg_registration_per_day = dates.size > 0 ? funnel.registrations / dates.size : null;
+    return { ...funnel, mgm_revenue, avg_registration_per_day };
+  }
 
+  const rows = [...uplineSet].map(pb => {
+    const cur = pbBlock(pb, reg, det);
+    const prev = pbBlock(pb, prevReg, prevDet);
+    const deltas = {
+      registrations: pctDelta(cur.registrations, prev.registrations),
+      active_registrations: pctDelta(cur.active_registrations, prev.active_registrations),
+      inactive_registrations: pctDelta(cur.inactive_registrations, prev.inactive_registrations),
+      activation_conversion_pct: pointDelta(cur.activation_conversion_pct, prev.activation_conversion_pct),
+      avg_registration_per_day: pctDelta(cur.avg_registration_per_day, prev.avg_registration_per_day),
+      mgm_revenue: pctDelta(cur.mgm_revenue, prev.mgm_revenue),
+    };
     return {
       pb,
       registrations: cur.registrations,
-      converted_registrations: cur.converted_registrations,
-      paid_activation_events: cur.paid_activation_events,
-      activated_outlets: cur.activated_outlets,
-      transacting_outlets: cur.transacting_outlets,
-      total_trx: cur.total_trx,
-      total_revenue: cur.total_revenue,
-      fee_upline: cur.fee_upline,
-      activation_commission: cur.activation_commission,
-      negative_activation_count: cur.negative_activation_count,
-      negative_activation_rate: cur.negative_activation_rate,
-      reg_to_paid_conversion_pct: cur.reg_to_paid_conversion_pct,
-      activation_to_transaction_pct: cur.activation_to_transaction_pct,
-      revenue_per_activated_outlet: cur.revenue_per_activated_outlet,
-      contribution_reg_pct: safePct(cur.registrations, totalRegAll),
-      contribution_revenue_pct: safePct(cur.total_revenue, totalRevenueAll),
-      contribution_paid_activation_pct: safePct(cur.paid_activation_events, totalDetailAll),
-      target: null,
-      achievement: null,
+      active_registrations: cur.active_registrations,
+      inactive_registrations: cur.inactive_registrations,
+      unknown_active_status: cur.unknown_active_status,
+      activation_conversion_pct: cur.activation_conversion_pct,
+      avg_registration_per_day: cur.avg_registration_per_day,
+      mgm_revenue: cur.mgm_revenue,
+      contribution_registration_pct: safePct(cur.registrations, totalFunnel.registrations),
+      contribution_active_pct: safePct(cur.active_registrations, totalFunnel.active_registrations),
+      contribution_revenue_pct: safePct(cur.mgm_revenue, totalMgmRevenue),
+      previous_same_day: prev,
+      deltas,
       status: null, // diisi setelah threshold dihitung
-      previous: prev,
-      deltas: summaryDeltas(cur, prev),
     };
   });
 
@@ -400,7 +445,7 @@ function buildPbScorecard(regRows, actRows, detailRows, prevRegRows, prevActRows
 }
 
 // ─────────────────────────────────────────────────────────────────
-// Concentration risk — kontribusi Top-1/5/10 PB.
+// Concentration risk — kontribusi Top-1/5/10 PB terhadap suatu metrik.
 // ─────────────────────────────────────────────────────────────────
 
 function concentrationRisk(pbRows, metricKey, totalValue) {
@@ -414,7 +459,8 @@ function concentrationRisk(pbRows, metricKey, totalValue) {
 }
 
 // ─────────────────────────────────────────────────────────────────
-// Aging — hari sejak tanggal acuan sampai cutoff.
+// Aging — hari sejak tanggal acuan sampai cutoff. Deskriptif SAJA — belum
+// ada SLA resmi yang ditetapkan untuk MGM PA, jangan dilabeli "SLA breach".
 // ─────────────────────────────────────────────────────────────────
 
 function daysBetween(fromDateStr, toDateStr) {
@@ -438,6 +484,12 @@ function agingBucket(days) {
 // Orchestrator utama — dipanggil dari analyticsHandler.
 // dataset: { registrasi, aktivasi, detail, previousRegistrasi, previousAktivasi, previousDetail }
 // options: { cutoffDate, compareCutoffDateStr }
+//
+// PENTING: `registrasi`/`aktivasi`/`detail` di sini HARUS SUDAH berisi
+// seluruh data periode yang tersinkron (current period TIDAK dipotong
+// oleh cutoff_date — lihat §6 spesifikasi bisnis). cutoffDate di sini
+// hanya dipakai untuk menghitung `aging_days` deskriptif, BUKAN untuk
+// memfilter current period.
 // ─────────────────────────────────────────────────────────────────
 
 function buildPeriodAnalytics(dataset, options = {}) {
@@ -446,26 +498,28 @@ function buildPeriodAnalytics(dataset, options = {}) {
     previousRegistrasi = [], previousAktivasi = [], previousDetail = [],
   } = dataset;
   const cutoffDate = options.cutoffDate || null;
-  const compareCutoff = options.compareCutoffDateStr || null;
 
-  const current = computeCoreKpis(registrasi, aktivasi, detail);
-  const previous = computeCoreKpis(previousRegistrasi, previousAktivasi, previousDetail);
+  const current = computeSummary(registrasi, aktivasi, detail);
+  const previous = computeSummary(previousRegistrasi, previousAktivasi, previousDetail);
   const deltas = summaryDeltas(current, previous);
 
   const cohort_funnel = {
     registrations: current.registrations,
-    converted_registrations: current.converted_registrations,
-    converted_and_transacting: current.converted_and_transacting,
-    reg_to_paid_conversion_pct: current.reg_to_paid_conversion_pct,
-    converted_to_transaction_pct: current.converted_to_transaction_pct,
+    active_registrations: current.active_registrations,
+    inactive_registrations: current.inactive_registrations,
+    unknown_active_status: current.unknown_active_status,
+    registered_and_transacting: current.registered_and_transacting,
+    activation_conversion_pct: current.activation_conversion_pct,
+    registered_to_transacting_pct: current.registered_to_transacting_pct,
   };
 
   const operational_volume = {
-    paid_activation_events: current.paid_activation_events,
-    paid_activation_outlets: current.paid_activation_outlets,
     activated_outlets: current.activated_outlets,
     transacting_outlets: current.transacting_outlets,
+    total_trx: current.total_trx,
+    transaction_revenue: current.transaction_revenue,
     activation_to_transaction_pct: current.activation_to_transaction_pct,
+    paid_activation_events: current.paid_activation_events,
   };
 
   const { rows: pb_scorecard, thresholds } = buildPbScorecard(
@@ -477,24 +531,25 @@ function buildPeriodAnalytics(dataset, options = {}) {
     rows: pb_scorecard.map(r => ({
       pb: r.pb,
       x_registrations: r.registrations,
-      y_conversion_pct: r.reg_to_paid_conversion_pct,
-      bubble_revenue: r.total_revenue,
+      y_conversion_pct: r.activation_conversion_pct,
+      bubble_revenue: r.mgm_revenue,
       status: r.status,
     })),
   };
 
   const concentration = {
     registrations: concentrationRisk(pb_scorecard, 'registrations', current.registrations),
-    paid_activation_events: concentrationRisk(pb_scorecard, 'paid_activation_events', current.paid_activation_events),
-    revenue: concentrationRisk(pb_scorecard, 'total_revenue', current.total_revenue),
+    mgm_revenue: concentrationRisk(pb_scorecard, 'mgm_revenue', current.mgm_revenue),
   };
 
   const economics = {
+    mgm_revenue: current.mgm_revenue,
     fee_upline: current.fee_upline,
-    activation_commission: current.activation_commission,
     avg_commission_per_activation: current.avg_commission_per_activation,
+    paid_activation_events: current.paid_activation_events,
     negative_activation_count: current.negative_activation_count,
     negative_activation_rate: current.negative_activation_rate,
+    transaction_revenue: current.transaction_revenue,
     by_tipe_outlet: groupSum(detail, 'tipe_outlet', ['fee_upline', 'komisi_aktifasi', 'biaya_aktifasi']),
     by_nama_group: groupSum(detail, 'nama_group', ['fee_upline', 'komisi_aktifasi', 'biaya_aktifasi']),
     by_pembayaran_via: groupSum(detail, 'pembayaran_via', ['fee_upline', 'komisi_aktifasi', 'biaya_aktifasi']),
@@ -515,22 +570,18 @@ function buildPeriodAnalytics(dataset, options = {}) {
       .filter(x => Math.abs(x.diff) > 0.01),
   };
 
-  const territories = groupSum(
-    aktivasi.map(a => ({ ...a, __trx: a.trx, __rev: a.rev })),
-    'nama_propinsi',
-    []
-  ).map(t => {
+  const territories = groupSum(aktivasi, 'nama_propinsi', []).map(t => {
     const rowsInProv = aktivasi.filter(a => (a.nama_propinsi || 'Tidak diketahui') === t.key);
-    const regInProv = registrasi.filter(r => r.nama_propinsi === t.key).length;
+    const regInProv = registrasi.filter(r => (r.nama_propinsi || 'Tidak diketahui') === t.key).length;
     return {
       provinsi: t.key,
       registrations: regInProv,
       activated_outlets: rowsInProv.length,
       transacting_outlets: rowsInProv.filter(a => safeNumber(a.trx) > 0).length,
       total_trx: rowsInProv.reduce((s, a) => s + safeNumber(a.trx), 0),
-      total_revenue: rowsInProv.reduce((s, a) => s + safeNumber(a.rev), 0),
+      transaction_revenue: rowsInProv.reduce((s, a) => s + safeNumber(a.rev), 0),
     };
-  }).sort((a, b) => b.total_revenue - a.total_revenue);
+  }).sort((a, b) => b.transaction_revenue - a.transaction_revenue);
 
   const outlet_types = distinctValues(aktivasi, 'tipe_outlet').map(tipe => {
     const rows = aktivasi.filter(a => (a.tipe_outlet || 'Tidak diketahui') === tipe);
@@ -539,7 +590,7 @@ function buildPeriodAnalytics(dataset, options = {}) {
       activated_outlets: rows.length,
       transacting_outlets: rows.filter(a => safeNumber(a.trx) > 0).length,
       total_trx: rows.reduce((s, a) => s + safeNumber(a.trx), 0),
-      total_revenue: rows.reduce((s, a) => s + safeNumber(a.rev), 0),
+      transaction_revenue: rows.reduce((s, a) => s + safeNumber(a.rev), 0),
     };
   }).sort((a, b) => b.activated_outlets - a.activated_outlets);
 
@@ -549,68 +600,70 @@ function buildPeriodAnalytics(dataset, options = {}) {
       pembayaran_via: via,
       count: rows.length,
       fee_upline: rows.reduce((s, d) => s + safeNumber(d.fee_upline), 0),
-      activation_commission: rows.reduce((s, d) => s + safeNumber(d.komisi_aktifasi), 0),
+      mgm_revenue: rows.reduce((s, d) => s + safeNumber(d.komisi_aktifasi), 0),
     };
   }).sort((a, b) => b.count - a.count);
 
-  // ── Derived action queues (data-driven, bukan SLA resmi) ──
-  const regOutletMap = new Map(registrasi.map(r => [r.id_outlet, r]));
-  const detailByOutlet = new Map();
-  detail.forEach(d => { if (d.id_outlet) detailByOutlet.set(d.id_outlet, d); });
-  const actByOutlet = new Map(aktivasi.map(a => [a.id_outlet, a]));
+  // ── Derived action queues (data-driven, deskriptif — belum ada SLA resmi) ──
+  const p0_unknown_active = registrasi
+    .filter(r => r.id_outlet && r.is_active === null)
+    .map(r => ({ type: 'unknown_active_status', id_outlet: r.id_outlet, upline: r.upline }));
 
-  const p0_negative_commission = detail
-    .filter(d => safeNumber(d.komisi_aktifasi) < 0)
-    .map(d => ({ type: 'negative_commission', id_outlet: d.id_outlet, id_aktifasi: d.id_aktifasi, upline: d.upline, komisi_aktifasi: safeNumber(d.komisi_aktifasi) }));
+  const uplineIndex = buildCanonicalOutletIndex(registrasi, aktivasi, detail);
+  const p0_upline_mismatch = [];
+  uplineIndex.forEach(e => {
+    if (e.upline_mismatch_reg_akt || e.upline_mismatch_reg_detail || e.upline_mismatch_akt_detail) {
+      p0_upline_mismatch.push({
+        type: 'upline_mismatch', id_outlet: e.id_outlet,
+        upline_reg: e.upline_reg, upline_akt: e.upline_akt, upline_detail: e.upline_detail,
+      });
+    }
+  });
 
-  const p0_paid_not_active = detail
-    .filter(d => d.id_outlet && !actByOutlet.has(d.id_outlet))
-    .map(d => ({ type: 'data_mismatch_paid_not_active', id_outlet: d.id_outlet, id_aktifasi: d.id_aktifasi, upline: d.upline }));
-
-  const regNotPaid = registrasi
-    .filter(r => r.id_outlet && !detailByOutlet.has(r.id_outlet))
+  const p1_registered_not_active = registrasi
+    .filter(r => r.id_outlet && r.is_active === false)
     .map(r => ({
-      type: 'registered_not_paid', id_outlet: r.id_outlet, upline: r.upline,
+      type: 'registered_not_active', id_outlet: r.id_outlet, upline: r.upline,
       aging_days: daysBetween(r.tanggal_registrasi, cutoffDate),
     }))
     .sort((a, b) => (b.aging_days ?? -1) - (a.aging_days ?? -1));
-  const agingCriticalCutoffIdx = Math.floor(regNotPaid.length * 0.1);
-  const p1_registered_not_paid = regNotPaid.map((r, i) => ({ ...r, aging_critical: i < agingCriticalCutoffIdx }));
 
-  const activeNoTrx = aktivasi
-    .filter(a => safeNumber(a.trx) === 0)
-    .map(a => ({
-      type: 'active_no_transaction', id_outlet: a.id_outlet, upline: a.upline,
-      aging_days: daysBetween(a.tanggal_aktifasi, cutoffDate),
-    }))
-    .sort((a, b) => (b.aging_days ?? -1) - (a.aging_days ?? -1));
-  const p1ActiveCutoffIdx = Math.floor(activeNoTrx.length * 0.1);
-  const p1_active_no_transaction = activeNoTrx.map((r, i) => ({ ...r, aging_critical: i < p1ActiveCutoffIdx }));
+  const p1_pb_high_inactive_backlog = [...pb_scorecard]
+    .filter(r => r.inactive_registrations > 0)
+    .sort((a, b) => b.inactive_registrations - a.inactive_registrations)
+    .slice(0, 20)
+    .map(r => ({ type: 'pb_high_inactive_backlog', pb: r.pb, inactive_registrations: r.inactive_registrations, registrations: r.registrations }));
 
-  const p2_high_reg_low_conversion = pb_scorecard
+  const p1_pb_high_reg_low_conversion = pb_scorecard
     .filter(r => r.registrations >= thresholds.registrations_p50 &&
-      (r.reg_to_paid_conversion_pct === null || r.reg_to_paid_conversion_pct < thresholds.conversion_p25 || r.reg_to_paid_conversion_pct < thresholds.conversion_p50))
-    .map(r => ({ type: 'high_reg_low_conversion', pb: r.pb, registrations: r.registrations, conversion_pct: r.reg_to_paid_conversion_pct }));
+      (r.activation_conversion_pct === null || r.activation_conversion_pct < thresholds.conversion_p50))
+    .map(r => ({ type: 'pb_high_reg_low_conversion', pb: r.pb, registrations: r.registrations, activation_conversion_pct: r.activation_conversion_pct }));
 
-  const p2_scale_candidate = pb_scorecard
-    .filter(r => r.reg_to_paid_conversion_pct !== null && r.reg_to_paid_conversion_pct >= thresholds.conversion_p75 &&
-      r.total_revenue >= thresholds.revenue_p50)
-    .map(r => ({ type: 'scale_reward_candidate', pb: r.pb, conversion_pct: r.reg_to_paid_conversion_pct, total_revenue: r.total_revenue }));
+  const p2_pb_scale_candidate = pb_scorecard
+    .filter(r => r.activation_conversion_pct !== null && r.activation_conversion_pct >= thresholds.conversion_p75 &&
+      r.registrations >= thresholds.registrations_p50)
+    .map(r => ({ type: 'pb_scale_candidate', pb: r.pb, activation_conversion_pct: r.activation_conversion_pct, registrations: r.registrations }));
+
+  const p2_pb_high_revenue = [...pb_scorecard]
+    .sort((a, b) => b.mgm_revenue - a.mgm_revenue)
+    .slice(0, 20)
+    .map(r => ({ type: 'pb_high_revenue', pb: r.pb, mgm_revenue: r.mgm_revenue }));
 
   const derived_queues = {
-    p0: [...p0_negative_commission, ...p0_paid_not_active],
-    p1: [...p1_registered_not_paid, ...p1_active_no_transaction],
-    p2: [...p2_high_reg_low_conversion, ...p2_scale_candidate],
-    p3: [{ type: 'monitoring_normal', count: current.activated_outlets - p1_active_no_transaction.length }],
+    p0: [...p0_unknown_active, ...p0_upline_mismatch],
+    p1: [...p1_registered_not_active, ...p1_pb_high_inactive_backlog, ...p1_pb_high_reg_low_conversion],
+    p2: [...p2_pb_scale_candidate, ...p2_pb_high_revenue],
+    p3: [{ type: 'monitoring_normal', count: current.active_registrations }],
   };
 
   // ── Data quality ──
   const { duplicateCount: dupReg } = dedupeLastWins(registrasi, r => r.id_outlet);
   const { duplicateCount: dupAkt } = dedupeLastWins(aktivasi, a => a.id_outlet);
   const { duplicateCount: dupDetailId } = dedupeLastWins(detail, d => d.id_aktifasi);
-  const detailOutletDupe = detail.length - new Set(detail.map(d => d.id_outlet)).size;
+  const detailByOutlet = new Map();
+  detail.forEach(d => { if (d.id_outlet) detailByOutlet.set(d.id_outlet, d); });
+  const actByOutlet = new Map(aktivasi.map(a => [a.id_outlet, a]));
 
-  const uplineIndex = buildCanonicalOutletIndex(registrasi, aktivasi, detail);
   let uplineMismatchRegAkt = 0, uplineMismatchRegDetail = 0, uplineMismatchAktDetail = 0;
   uplineIndex.forEach(e => {
     if (e.upline_mismatch_reg_akt) uplineMismatchRegAkt++;
@@ -618,21 +671,17 @@ function buildPeriodAnalytics(dataset, options = {}) {
     if (e.upline_mismatch_akt_detail) uplineMismatchAktDetail++;
   });
 
-  const regWithoutActivationDetail = registrasi.filter(r => r.id_outlet && !detailByOutlet.has(r.id_outlet)).length;
-  const activationWithoutDetail = aktivasi.filter(a => a.id_outlet && !detailByOutlet.has(a.id_outlet)).length;
-  const detailWithoutActivation = detail.filter(d => d.id_outlet && !actByOutlet.has(d.id_outlet)).length;
-
   const quality = {
     rows: { registrasi: registrasi.length, aktivasi: aktivasi.length, aktivasi_detail: detail.length },
-    duplicate_removed: { registrasi: dupReg, aktivasi: dupAkt, aktivasi_detail_id: dupDetailId, aktivasi_detail_outlet: Math.max(detailOutletDupe, 0) },
-    registration_without_activation_or_detail: regWithoutActivationDetail,
-    activation_without_detail: activationWithoutDetail,
-    detail_without_activation: detailWithoutActivation,
+    duplicate_removed: { registrasi: dupReg, aktivasi: dupAkt, aktivasi_detail_id: dupDetailId },
+    unknown_active_status: current.unknown_active_status,
+    registration_without_activation_or_detail: registrasi.filter(r => r.id_outlet && !detailByOutlet.has(r.id_outlet)).length,
+    activation_without_detail: aktivasi.filter(a => a.id_outlet && !detailByOutlet.has(a.id_outlet)).length,
+    detail_without_activation: detail.filter(d => d.id_outlet && !actByOutlet.has(d.id_outlet)).length,
     upline_mismatch_reg_vs_activation: uplineMismatchRegAkt,
     upline_mismatch_reg_vs_detail: uplineMismatchRegDetail,
     upline_mismatch_activation_vs_detail: uplineMismatchAktDetail,
     economics_formula_mismatch: economics.formula_mismatch.length,
-    detail_date_unclassified: detail.filter(d => d.id_outlet && !actByOutlet.has(d.id_outlet)).length,
   };
 
   return {
@@ -681,10 +730,13 @@ module.exports = {
   compareCutoffDate,
   dedupeLastWins,
   buildCanonicalOutletIndex,
+  computeRegistrationFunnel,
+  computeMgmRevenue,
+  computeTransactionInfo,
+  computeSummary,
+  summaryDeltas,
   computeSegmentationThresholds,
   classifyPb,
-  computeCoreKpis,
-  summaryDeltas,
   buildPbScorecard,
   concentrationRisk,
   daysBetween,
