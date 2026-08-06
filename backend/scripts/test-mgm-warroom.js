@@ -308,7 +308,7 @@ test('13d. Kartu REVENUE TRANSAKSI, REVENUE AKTIVASI, REVENUE MGM ada di area KP
   for (const label of ['REVENUE TRANSAKSI', 'REVENUE AKTIVASI', 'REVENUE MGM']) {
     assert.ok(revenueCardsBody.includes(label), `buildRevenueCards harus memuat label "${label}"`);
   }
-  assert.ok(mainKpiSlice.includes('buildRevenueCards('), 'buildRevenueCards harus dipanggil LANGSUNG di dalam mgm-command-kpi-grid (bukan lewat wrapper grid terpisah)');
+  assert.ok(mainKpiSlice.includes('buildRevenueCards('), 'buildRevenueCards harus dipanggil LANGSUNG di dalam mgm-command-grid (bukan lewat wrapper grid terpisah)');
 });
 test('13e. Revenue MGM = Revenue Transaksi + Revenue Aktivasi (relasi eksplisit di buildRevenueCards)', () => {
   assert.ok(/mgmRevenue:\s*s\.current\.mgm_revenue/.test(mainKpiSlice),
@@ -321,34 +321,51 @@ test('13f. Elemen operator (+/=) DIHAPUS dari kartu revenue — tanpa simbol/kol
     assert.ok(!/>\s*=\s*<\/div>/.test(body), 'tidak boleh ada <div>...=...</div> sbg simbol operator sama-dengan');
   }
 });
-test('13g. CSS .mgm-revenue-operator sudah dihapus (dead class, tidak dipakai lagi)', () => {
+test('13g. CSS .mgm-revenue-operator DAN struktur lama (mgm-kpi-grid-main/mgm-command-kpi-grid/mgm-kpi-span-*) sudah dihapus total', () => {
   const cssSrc = fs.readFileSync(path.join(__dirname, '../../frontend/src/index.css'), 'utf8');
-  assert.ok(!/\.mgm-revenue-operator\s*\{/.test(cssSrc), 'rule CSS .mgm-revenue-operator harus sudah dihapus, bukan cuma tidak dipakai');
+  assert.ok(!/\.mgm-revenue-operator\s*\{/.test(cssSrc), 'rule CSS .mgm-revenue-operator harus sudah dihapus');
+  assert.ok(!cssSrc.includes('mgm-kpi-grid-main'), 'class lama .mgm-kpi-grid-main harus sudah dihapus total dari CSS');
+  assert.ok(!cssSrc.includes('mgm-command-kpi-grid'), 'class lama .mgm-command-kpi-grid (versi 6+4 span) harus sudah dihapus total dari CSS');
+  assert.ok(!cssSrc.includes('mgm-kpi-span'), 'class span .mgm-kpi-span-3/-4 harus sudah dihapus total — tidak boleh ada span berbeda antar kartu');
+  assert.ok(!frontendSrc.includes('mgm-kpi-grid-main'), 'class lama .mgm-kpi-grid-main harus sudah dihapus total dari JSX');
+  assert.ok(!frontendSrc.includes('mgm-command-kpi-grid'), 'class lama .mgm-command-kpi-grid harus sudah dihapus total dari JSX');
+  assert.ok(!frontendSrc.includes('mgm-kpi-span'), 'class span mgm-kpi-span-* harus sudah dihapus total dari JSX');
+  assert.ok(!/<KPICard[^>]*\sspan=/.test(frontendSrc), 'prop span={...} tidak boleh dipakai lagi pada KPICard manapun — semua kartu Command Center harus seragam');
 });
-test('13h. Grid KPI utama Command Center SATU container 12-kolom, tepat 2 baris (6 kartu span-2 + 4 kartu span-3)', () => {
+test('13h. Grid KPI utama Command Center — SATU container 5-kolom SERAGAM, tepat 2 baris x 5 kartu, urutan sesuai spesifikasi', () => {
   const cssSrc = fs.readFileSync(path.join(__dirname, '../../frontend/src/index.css'), 'utf8');
-  assert.ok(/\.mgm-command-kpi-grid\s*\{[^}]*grid-template-columns:\s*repeat\(12,\s*minmax\(0,\s*1fr\)\)/.test(cssSrc),
-    '.mgm-command-kpi-grid harus grid-template-columns: repeat(12, minmax(0, 1fr)) di desktop');
-  assert.ok(/\.mgm-command-kpi-grid\s*>\s*\.wrd-kpi-card\s*\{[^}]*grid-column:\s*span 2/.test(cssSrc),
-    'kartu default (6 KPI registrasi/status) harus span 2 dari 12 kolom -> 6x2=12 (baris 1 penuh)');
-  assert.ok(/\.mgm-kpi-span-3\s*\{[^}]*grid-column:\s*span 3/.test(cssSrc),
-    'kartu span-3 (Outlet Transacting + 3 revenue) harus span 3 dari 12 kolom -> 4x3=12 (baris 2 penuh)');
-  // Hitung kartu di baris 1 (span implisit 2, tanpa prop span) vs baris 2 (span={3}) langsung dari JSX.
-  const spanlessCards = (mainKpiSlice.match(/<KPICard span=\{2\}/g) || []).length;
-  const span3Cards = (mainKpiSlice.match(/<KPICard span=\{3\}/g) || []).length; // Outlet Transacting saja (literal di JSX)
-  assert.strictEqual(spanlessCards, 6, `baris 1 harus tepat 6 kartu span-2 (6x2=12), ditemukan ${spanlessCards}`);
-  assert.strictEqual(span3Cards, 1, `hanya Outlet Transacting yang literal span={3} di JSX utama (3 kartu revenue via buildRevenueCards span:3), ditemukan ${span3Cards}`);
-  assert.ok(/span:\s*3/.test(mainKpiSlice), 'buildRevenueCards harus dipanggil dgn span: 3 supaya 3 kartu revenue ikut span-3 di baris 2');
+  assert.ok(/\.mgm-command-grid\s*\{[^}]*grid-template-columns:\s*repeat\(5,\s*1fr\)/.test(cssSrc),
+    '.mgm-command-grid harus grid-template-columns: repeat(5, 1fr) di desktop (>=1200px)');
+
+  // Urutan label PERSIS 10 kartu sesuai spesifikasi — baris 1 lalu baris 2.
+  const expectedOrder = [
+    'TOTAL REGISTRASI', 'SUDAH AKTIF', 'BELUM AKTIF', 'CONVERSION AKTIVASI', 'PB AKTIF MEREKRUT',
+    'RATA-RATA REKRUT', 'OUTLET TRANSACTING', 'REVENUE TRANSAKSI', 'REVENUE AKTIVASI', 'REVENUE MGM',
+  ];
+  const commandCenterFullBody = mainKpiSlice.replace('buildRevenueCards({', 'buildRevenueCards({' + revenueCardsBody);
+  const positions = expectedOrder.map(label => commandCenterFullBody.indexOf(label));
+  positions.forEach((pos, i) => assert.ok(pos !== -1, `label "${expectedOrder[i]}" tidak ditemukan di urutan Command Center`));
+  for (let i = 1; i < positions.length; i++) {
+    assert.ok(positions[i] > positions[i - 1],
+      `urutan kartu salah: "${expectedOrder[i]}" harus muncul SETELAH "${expectedOrder[i - 1]}" (baris 1: Total Registrasi..PB Aktif Merekrut, baris 2: Rata-rata Rekrut/PB..Revenue MGM)`);
+  }
+
+  // Hitung persis 10 kartu KPICard di dalam grid (7 literal + 3 dari buildRevenueCards).
+  const literalCards = (mainKpiSlice.match(/<KPICard\s/g) || []).length;
+  assert.strictEqual(literalCards, 7, `CommandKpiGrid harus punya 7 <KPICard> literal (10 total - 3 dari buildRevenueCards), ditemukan ${literalCards}`);
+  const revenueCardCount = (revenueCardsBody.match(/<KPICard\s/g) || []).length;
+  assert.strictEqual(revenueCardCount, 3, `buildRevenueCards harus menghasilkan tepat 3 kartu, ditemukan ${revenueCardCount}`);
 });
 test('13h2. Tidak ada grid/wrapper terpisah lagi di antara Outlet Transacting dan kartu revenue (satu container, bukan dua)', () => {
-  // Sebelumnya ada 2 container (.mgm-kpi-grid-main lalu <RevenueBreakdownRow/> terpisah) yang
-  // menyebabkan 3 baris. Sekarang CommandKpiGrid harus TEPAT SATU <div className="mgm-command-kpi-grid">
-  // yang membungkus baik KPI registrasi/status maupun 4 kartu baris ke-2 — TIDAK ADA
-  // wrapper grid kedua (.mgm-revenue-breakdown) di dalamnya.
-  const divOpenCount = (mainKpiSlice.match(/<div className="mgm-command-kpi-grid/g) || []).length;
-  assert.strictEqual(divOpenCount, 1, 'CommandKpiGrid harus tepat satu <div className="mgm-command-kpi-grid">');
+  // CommandKpiGrid harus TEPAT SATU <div className="mgm-command-grid"> yang
+  // membungkus baik 7 KPI registrasi/status/Outlet Transacting maupun 3
+  // kartu revenue — TIDAK ADA wrapper grid kedua (.mgm-revenue-breakdown)
+  // di dalamnya, dan TIDAK ADA prop span apa pun.
+  const divOpenCount = (mainKpiSlice.match(/<div className="mgm-command-grid/g) || []).length;
+  assert.strictEqual(divOpenCount, 1, 'CommandKpiGrid harus tepat satu <div className="mgm-command-grid">');
   assert.ok(!mainKpiSlice.includes('mgm-revenue-breakdown'),
     'tidak boleh ada wrapper grid kedua (.mgm-revenue-breakdown) yang membungkus kartu revenue di dalam CommandKpiGrid');
+  assert.ok(!/span=/.test(mainKpiSlice), 'tidak boleh ada prop span={...} tersisa di CommandKpiGrid — semua kartu seragam');
   assert.ok(mainComponentSlice.includes('<CommandKpiGrid'), 'komponen utama harus memanggil <CommandKpiGrid s={s} />');
 });
 test('13i. Revenue breakdown standalone (tab Transaction & Revenue) pakai CSS grid rapat (bukan flex-wrap dgn margin-bottom berlebihan)', () => {

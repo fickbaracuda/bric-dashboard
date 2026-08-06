@@ -107,13 +107,13 @@ const SPIN = { animation: 'aic-rotate 0.8s linear infinite' };
 function InfoTip({ text }) {
   return <span className="mgm-info-tip" title={text}><i className="ti ti-info-circle" /></span>;
 }
-// span: jumlah kolom yang dipakai pada grid 12-kolom `.mgm-command-kpi-grid`
-// (default 2). emphasis: kartu paling menonjol (Revenue MGM) — shadow +
-// value lebih besar, TIDAK mengubah lebar kolom.
-function KPICard({ label, value, deltaVal, deltaKind, sub, color, tip, span, emphasis }) {
-  const spanClass = span === 3 ? ' mgm-kpi-span-3' : span === 4 ? ' mgm-kpi-span-4' : '';
+// emphasis: kartu paling menonjol (Revenue MGM) — DIBEDAKAN LEWAT WARNA &
+// TYPOGRAPHY SAJA (shadow + value lebih besar), TIDAK PERNAH lewat lebar
+// kolom. Seluruh kartu Command Center wajib berukuran sama (grid 5-kolom
+// seragam, tanpa span berbeda-beda) — lihat CommandKpiGrid.
+function KPICard({ label, value, deltaVal, deltaKind, sub, color, tip, emphasis }) {
   return (
-    <div className={`wrd-kpi-card${spanClass}${emphasis ? ' mgm-kpi-emphasis' : ''}`} style={{ borderTop: `3px solid ${color}` }}>
+    <div className={`wrd-kpi-card${emphasis ? ' mgm-kpi-emphasis' : ''}`} style={{ borderTop: `3px solid ${color}` }}>
       <div className="wrd-kpi-label">{label} {tip && <InfoTip text={tip} />}</div>
       <div className="wrd-kpi-value" style={{ color }}>{value}</div>
       {sub && <div className="wrd-kpi-sub">{sub}</div>}
@@ -127,21 +127,21 @@ function KPICard({ label, value, deltaVal, deltaKind, sub, color, tip, span, emp
 }
 // Revenue MGM = Revenue Transaksi + Revenue Aktivasi. Tiga kartu KPICard
 // biasa (bukan markup custom) supaya bisa dipakai LANGSUNG sbg anak grid
-// manapun (Command Center 12-kolom ATAU baris 3-kolom tersendiri di tab
+// manapun (Command Center 5-kolom ATAU baris 3-kolom tersendiri di tab
 // Transaction & Revenue) tanpa duplikasi tooltip/warna. Biru = Revenue
 // Transaksi, ungu/magenta = Revenue Aktivasi, hijau (warna utama) = Revenue
-// MGM (paling menonjol lewat emphasis) — TIDAK PERNAH merah utk revenue
-// positif. TANPA elemen operator (+/=) — relasi penjumlahan dijelaskan
-// lewat tooltip Revenue MGM.
-function buildRevenueCards({ transactionRevenue, activationRevenue, mgmRevenue, deltaTransaction, deltaActivation, deltaMgm, span }) {
+// MGM (paling menonjol lewat emphasis warna/typography, BUKAN lebar kolom)
+// — TIDAK PERNAH merah utk revenue positif. TANPA elemen operator (+/=) —
+// relasi penjumlahan dijelaskan lewat tooltip Revenue MGM.
+function buildRevenueCards({ transactionRevenue, activationRevenue, mgmRevenue, deltaTransaction, deltaActivation, deltaMgm }) {
   return [
-    <KPICard key="rev-transaksi" span={span} label="REVENUE TRANSAKSI" value={fmtRp(transactionRevenue)}
+    <KPICard key="rev-transaksi" label="REVENUE TRANSAKSI" value={fmtRp(transactionRevenue)}
       deltaVal={deltaTransaction} deltaKind="pct" color="#3B82F6"
       tip="Total revenue yang dihasilkan dari transaksi outlet pada periode terpilih. Dihitung dari SUM kolom Rev pada data AKTIVASI. Bukan jumlah transaksi." />,
-    <KPICard key="rev-aktivasi" span={span} label="REVENUE AKTIVASI" value={fmtRp(activationRevenue)}
+    <KPICard key="rev-aktivasi" label="REVENUE AKTIVASI" value={fmtRp(activationRevenue)}
       deltaVal={deltaActivation} deltaKind="pct" color="#A855F7"
       tip="Total revenue unit MGM dari proses aktivasi agen. Dihitung dari SUM komisi_aktifasi pada data MGM AKTIV." />,
-    <KPICard key="rev-mgm" span={span} emphasis label="REVENUE MGM" value={fmtRp(mgmRevenue)}
+    <KPICard key="rev-mgm" emphasis label="REVENUE MGM" value={fmtRp(mgmRevenue)}
       deltaVal={deltaMgm} deltaKind="pct" color={COLOR_PRIMARY}
       tip="Total pencapaian revenue unit MGM, yaitu Revenue Transaksi ditambah Revenue Aktivasi." />,
   ];
@@ -153,27 +153,30 @@ function RevenueBreakdownRow(props) {
     </div>
   );
 }
-// Grid tunggal 12-kolom — 10 kartu tersusun tepat 2 baris di desktop: baris
-// 1 = 6 kartu registrasi/status (span 2 = 6x2=12), baris 2 = Outlet
-// Transacting + 3 kartu revenue (span 3 = 4x3=12). SATU container grid,
-// BUKAN dua grid terpisah, supaya tidak ada baris ketiga atau area kosong
-// di antaranya (lihat .mgm-command-kpi-grid di index.css).
+// Grid tunggal 5-kolom seragam — 10 kartu tersusun TEPAT 2 baris x 5 kolom
+// di desktop (>=1200px), SEMUA kartu berukuran sama (tidak ada grid-column
+// span berbeda). SATU container grid, tidak ada container Revenue
+// terpisah, tidak ada Outlet Transacting berdiri sendiri.
+//   Baris 1: Total Registrasi, Sudah Aktif, Belum Aktif, Conversion
+//            Aktivasi, PB Aktif Merekrut
+//   Baris 2: Rata-rata Rekrut/PB, Outlet Transacting, Revenue Transaksi,
+//            Revenue Aktivasi, Revenue MGM
 function CommandKpiGrid({ s }) {
   return (
-    <div className="mgm-command-kpi-grid">
-      <KPICard span={2} label="TOTAL REGISTRASI" value={fmt(s.current.registrations)} deltaVal={s.deltas.registrations} deltaKind="pct" color="#3B82F6"
+    <div className="mgm-command-grid">
+      <KPICard label="TOTAL REGISTRASI" value={fmt(s.current.registrations)} deltaVal={s.deltas.registrations} deltaKind="pct" color="#3B82F6"
         tip="Jumlah agen/outlet unik pada data REG." />
-      <KPICard span={2} label="SUDAH AKTIF" value={fmt(s.current.active_registrations)} deltaVal={s.deltas.active_registrations} deltaKind="pct" color={COLOR_ACCENT}
+      <KPICard label="SUDAH AKTIF" value={fmt(s.current.active_registrations)} deltaVal={s.deltas.active_registrations} deltaKind="pct" color={COLOR_ACCENT}
         tip="Agen registrasi dengan is_active = 1." />
-      <KPICard span={2} label="BELUM AKTIF" value={fmt(s.current.inactive_registrations)} deltaVal={s.deltas.inactive_registrations} deltaKind="pct" color="#F59E0B"
+      <KPICard label="BELUM AKTIF" value={fmt(s.current.inactive_registrations)} deltaVal={s.deltas.inactive_registrations} deltaKind="pct" color="#F59E0B"
         tip="Agen registrasi dengan is_active = 0." />
-      <KPICard span={2} label="CONVERSION AKTIVASI" value={nfPct(s.current.activation_conversion_pct)} deltaVal={s.deltas.activation_conversion_pct} deltaKind="pt" color="#059669"
+      <KPICard label="CONVERSION AKTIVASI" value={nfPct(s.current.activation_conversion_pct)} deltaVal={s.deltas.activation_conversion_pct} deltaKind="pt" color="#059669"
         tip="Sudah Aktif dibagi Total Registrasi." />
-      <KPICard span={2} label="PB AKTIF MEREKRUT" value={fmt(s.current.active_recruiting_pb)} deltaVal={s.deltas.active_recruiting_pb} deltaKind="pct" color="#8B5CF6"
+      <KPICard label="PB AKTIF MEREKRUT" value={fmt(s.current.active_recruiting_pb)} deltaVal={s.deltas.active_recruiting_pb} deltaKind="pct" color="#8B5CF6"
         tip="Jumlah upline/PB unik yang memiliki registrasi agen." />
-      <KPICard span={2} label="RATA-RATA REKRUT / PB" value={fmt2(s.current.avg_registration_per_pb)} deltaVal={s.deltas.avg_registration_per_pb} deltaKind="pct" color="#F97316"
+      <KPICard label="RATA-RATA REKRUT / PB" value={fmt2(s.current.avg_registration_per_pb)} deltaVal={s.deltas.avg_registration_per_pb} deltaKind="pct" color="#F97316"
         tip="Total Registrasi dibagi PB Aktif Merekrut." />
-      <KPICard span={3} label="OUTLET TRANSACTING" value={fmt(s.current.transacting_outlets)} deltaVal={s.deltas.transacting_outlets} deltaKind="pct" color="#3B82F6"
+      <KPICard label="OUTLET TRANSACTING" value={fmt(s.current.transacting_outlets)} deltaVal={s.deltas.transacting_outlets} deltaKind="pct" color="#3B82F6"
         tip="Outlet pada data transaksi dengan Trx > 0." sub="Informasi pendukung (AKTIVASI)" />
       {buildRevenueCards({
         transactionRevenue: s.current.transaction_revenue,
@@ -182,7 +185,6 @@ function CommandKpiGrid({ s }) {
         deltaTransaction: s.deltas.transaction_revenue,
         deltaActivation: s.deltas.activation_revenue,
         deltaMgm: s.deltas.mgm_revenue,
-        span: 3,
       })}
     </div>
   );
