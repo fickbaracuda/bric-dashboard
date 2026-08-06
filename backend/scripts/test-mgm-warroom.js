@@ -250,7 +250,8 @@ console.log('\n-- 11-13. KPI utama Command Center TIDAK boleh berisi field/label
 const frontendPath = path.join(__dirname, '../../frontend/src/pages/WarRoomMgmPa.jsx');
 const frontendSrc = fs.readFileSync(frontendPath, 'utf8');
 const tabsMarkerIdx = frontendSrc.indexOf('<div className="wrd-tabs">');
-const mainGridStart = frontendSrc.lastIndexOf('<div className="wrd-kpi-grid', tabsMarkerIdx);
+const mainGridStart = frontendSrc.lastIndexOf('<div className="mgm-kpi-grid-main', tabsMarkerIdx);
+if (mainGridStart === -1) throw new Error('mgm-kpi-grid-main tidak ditemukan — cek className grid KPI utama Command Center');
 const mainKpiSlice = frontendSrc.slice(mainGridStart, tabsMarkerIdx);
 // RevenueBreakdownRow dirender persis setelah grid KPI utama (lihat mainKpiSlice
 // di atas, yang memuat <RevenueBreakdownRow .../> sbg component call) — label
@@ -307,6 +308,26 @@ test('13d. Kartu REVENUE TRANSAKSI, REVENUE AKTIVASI, REVENUE MGM ada di area KP
 test('13e. Revenue MGM = Revenue Transaksi + Revenue Aktivasi (relasi eksplisit di RevenueBreakdownRow)', () => {
   assert.ok(/mgmRevenue=\{s\.current\.mgm_revenue\}/.test(mainKpiSlice) || /mgmRevenue=/.test(mainKpiSlice),
     'RevenueBreakdownRow harus menerima mgmRevenue dari summary.current.mgm_revenue (hasil penjumlahan backend)');
+});
+test('13f. Elemen operator (+/=) DIHAPUS dari RevenueBreakdownRow — tiga kartu revenue tanpa simbol/kolom operator', () => {
+  assert.ok(!revenueRowBody.includes('mgm-revenue-operator'), 'className mgm-revenue-operator tidak boleh dipakai lagi di JSX');
+  assert.ok(!/>\s*\+\s*<\/div>/.test(revenueRowBody), 'tidak boleh ada <div>...+...</div> sbg simbol operator penjumlahan');
+  assert.ok(!/>\s*=\s*<\/div>/.test(revenueRowBody), 'tidak boleh ada <div>...=...</div> sbg simbol operator sama-dengan');
+});
+test('13g. CSS .mgm-revenue-operator sudah dihapus (dead class, tidak dipakai lagi)', () => {
+  const cssSrc = fs.readFileSync(path.join(__dirname, '../../frontend/src/index.css'), 'utf8');
+  assert.ok(!/\.mgm-revenue-operator\s*\{/.test(cssSrc), 'rule CSS .mgm-revenue-operator harus sudah dihapus, bukan cuma tidak dipakai');
+});
+test('13h. Grid KPI utama Command Center pakai kolom tetap (bukan auto-fit tak terbatas) supaya tidak melar/kosong di layar lebar', () => {
+  const cssSrc = fs.readFileSync(path.join(__dirname, '../../frontend/src/index.css'), 'utf8');
+  assert.ok(/\.mgm-kpi-grid-main\s*\{[^}]*grid-template-columns:\s*repeat\(6,\s*1fr\)/.test(cssSrc),
+    '.mgm-kpi-grid-main harus grid-template-columns: repeat(6, 1fr) di desktop, supaya Outlet Transacting (kartu ke-7) wrap ke baris baru');
+});
+test('13i. Revenue breakdown pakai CSS grid rapat (bukan flex-wrap dgn margin-bottom berlebihan)', () => {
+  const cssSrc = fs.readFileSync(path.join(__dirname, '../../frontend/src/index.css'), 'utf8');
+  assert.ok(/\.mgm-revenue-breakdown\s*\{[^}]*display:\s*grid/.test(cssSrc), '.mgm-revenue-breakdown harus display:grid (3 kartu rapat dlm satu baris)');
+  assert.ok(!/\.mgm-revenue-breakdown\s*\{[^}]*margin-bottom:\s*16px/.test(cssSrc),
+    'margin-bottom 16px eksplisit harus dihapus — biarkan gap flex .wr-page (20px) yang mengatur jarak, jangan dobel spacing');
 });
 
 console.log('\n-- 14-20. Baseline Agustus 2026 (angka nyata, tervalidasi read-only terhadap production DB) --');
