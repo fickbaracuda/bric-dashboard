@@ -16,6 +16,20 @@ sendiri) di background, PID grup dicatat, lalu dipantau via polling
 terpisah (bukan menunggu di satu exec_command yang panjang). Kalau harus
 diberhentikan, HANYA process group build ini yang dikirim sinyal --
 TIDAK PERNAH pkill/killall node, TIDAK PERNAH menyentuh proses PM2.
+
+CELAH YANG DIPERBAIKI (ditemukan saat deploy sungguhan 2026-08-05/06):
+`start_build()` sendiri MASIH satu exec_command yang bisa timeout/exception
+(mis. gangguan jaringan sesaat) -- kalau itu terjadi TEPAT setelah command
+sempat terkirim ke server (respons lokal gagal diterima, TAPI proses build
+sudah genuinely mulai), exception lama membuat SELURUH build tidak
+termonitor sama sekali -- persis kelas bug yang audit ini coba perbaiki,
+cuma pindah lokasi. Fix: kalau exec_command start_build gagal/exception,
+JANGAN langsung retry membabi buta (bisa menghasilkan DUA build
+berbarengan) -- coba PULIHKAN dulu (cek apakah build genuinely sudah
+berjalan di server via pgrep, ambil PGID aslinya kalau ketemu). Timeout
+dinaikkan dari 15s ke 30s juga (menit ini murni utk kirim 1 baris command
++ terima 1 baris PGID, seharusnya sub-detik dalam kondisi normal -- 30s
+memberi margin utk jitter jaringan sesaat tanpa menunggu tanpa batas).
 """
 
 import time
@@ -25,6 +39,37 @@ from deploy_change_classifier import classify_changed_paths  # noqa: F401  (re-e
 
 
 BUILD_LOG_PATH_TEMPLATE = "/tmp/bric_deploy_build_{ts}.log"
+START_BUILD_TIMEOUT_SECONDS = 30
+
+
+def _try_recover_running_build(run_remote_fn, client, remote_frontend_dir: str):
+    """
+    Dipanggil HANYA saat exec_command start_build sendiri gagal/timeout --
+    cek apakah `npm run build` genuinely SUDAH berjalan di server (command
+    sempat terkirim, cuma respons lokal yang gagal diterima) sebelum
+    menyimpulkan gagal total. Kalau ketemu, ambil PGID SEBENARNYA (grup
+    proses -- bukan PID npm itu sendiri, supaya `kill -TERM -PGID` nanti
+    tetap menghentikan seluruh pohon proses build, bukan cuma satu PID).
+
+    Return PGID (int) kalau ditemukan build yang genuinely berjalan &
+    lokasinya cocok (frontend dir project ini), None kalau tidak ada.
+    """
+    try:
+        out, _, _ = run_remote_fn(
+            client,
+            "pgrep -f 'npm run build' 2>/dev/null | while read -r p; do "
+            f"[ \"$(readlink -f /proc/$p/cwd 2>/dev/null)\" = \"{remote_frontend_dir}\" ] && echo $p && break; "
+            "done",
+            timeout=10,
+        )
+        pid_str = out.strip()
+        if not pid_str.isdigit():
+            return None
+        out2, _, _ = run_remote_fn(client, f"ps -o pgid= -p {pid_str} 2>/dev/null", timeout=10)
+        pgid_str = out2.strip()
+        return int(pgid_str) if pgid_str.isdigit() else None
+    except Exception:
+        return None
 
 
 def start_build(run_remote_fn, client, remote_frontend_dir: str, ts: str) -> "tuple[int, str]":
@@ -37,7 +82,8 @@ def start_build(run_remote_fn, client, remote_frontend_dir: str, ts: str) -> "tu
     otomatis jalan tanpa keduanya (TIDAK gagal hanya krn low-priority tooling
     absen -- itu bukan alasan membatalkan seluruh deploy).
 
-    Return (pgid: int, logfile_path: str). Melempar RuntimeError kalau gagal start.
+    Return (pgid: int, logfile_path: str). Melempar RuntimeError kalau gagal start
+    DAN pemulihan (cek proses genuinely berjalan) juga tidak menemukan apa pun.
     """
     logfile = BUILD_LOG_PATH_TEMPLATE.format(ts=ts)
 
@@ -53,7 +99,17 @@ def start_build(run_remote_fn, client, remote_frontend_dir: str, ts: str) -> "tu
         f"echo BUILD_EXIT_CODE:$? >> {logfile}' "
         f"< /dev/null > /dev/null 2>&1 & echo PGID:$!"
     )
-    out, err, code = run_remote_fn(client, cmd, timeout=15)
+    try:
+        out, err, code = run_remote_fn(client, cmd, timeout=START_BUILD_TIMEOUT_SECONDS)
+    except Exception as e:
+        # exec_command sendiri gagal (mis. jaringan sesaat) -- command BISA
+        # SAJA sudah sempat terkirim & jalan di server. Cek dulu sebelum
+        # menyerah, supaya tidak meninggalkan build tak termonitor.
+        recovered_pgid = _try_recover_running_build(run_remote_fn, client, remote_frontend_dir)
+        if recovered_pgid:
+            return recovered_pgid, logfile
+        raise RuntimeError(f"Gagal memulai build -- exec_command error ({e}), dan tidak ditemukan build yang genuinely berjalan di server (aman, tidak ada proses tak termonitor).")
+
     for line in out.splitlines():
         if line.startswith("PGID:"):
             try:
@@ -61,7 +117,13 @@ def start_build(run_remote_fn, client, remote_frontend_dir: str, ts: str) -> "tu
                 return pgid, logfile
             except ValueError:
                 pass
-    raise RuntimeError(f"Gagal memulai build (tidak dapat PGID). Detail: {err or out}")
+
+    # exec_command SUKSES tapi tidak ada baris PGID (respons aneh/terpotong) --
+    # sama seperti di atas, cek dulu sebelum menyimpulkan gagal.
+    recovered_pgid = _try_recover_running_build(run_remote_fn, client, remote_frontend_dir)
+    if recovered_pgid:
+        return recovered_pgid, logfile
+    raise RuntimeError(f"Gagal memulai build (tidak dapat PGID, dan tidak ditemukan build yang genuinely berjalan). Detail: {err or out}")
 
 
 def is_process_group_alive(run_remote_fn, client, pgid: int) -> bool:
