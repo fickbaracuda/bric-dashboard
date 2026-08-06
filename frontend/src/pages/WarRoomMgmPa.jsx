@@ -121,6 +121,39 @@ function KPICard({ label, value, deltaVal, deltaKind, sub, color, tip }) {
     </div>
   );
 }
+// Revenue MGM = Revenue Transaksi + Revenue Aktivasi — struktur visual yang
+// membuat hubungan penjumlahan ini langsung terlihat, Revenue MGM paling
+// menonjol. Biru = Revenue Transaksi, ungu/magenta = Revenue Aktivasi,
+// hijau (warna utama) = Revenue MGM — TIDAK PERNAH merah utk revenue positif.
+function RevenueBreakdownRow({ transactionRevenue, activationRevenue, mgmRevenue, deltaTransaction, deltaActivation, deltaMgm }) {
+  return (
+    <div className="mgm-revenue-breakdown">
+      <div className="mgm-revenue-component" style={{ borderTop: '3px solid #3B82F6' }}>
+        <div className="wrd-kpi-label">REVENUE TRANSAKSI
+          <InfoTip text="Total revenue yang dihasilkan dari transaksi outlet pada periode terpilih. Dihitung dari SUM kolom Rev pada data AKTIVASI. Bukan jumlah transaksi." />
+        </div>
+        <div className="wrd-kpi-value" style={{ color: '#3B82F6' }}>{fmtRp(transactionRevenue)}</div>
+        <div className="mgm-kpi-delta" style={{ color: deltaColor(deltaTransaction) }}>{fmtDeltaPct(deltaTransaction)} vs periode lalu</div>
+      </div>
+      <div className="mgm-revenue-operator">+</div>
+      <div className="mgm-revenue-component" style={{ borderTop: '3px solid #A855F7' }}>
+        <div className="wrd-kpi-label">REVENUE AKTIVASI
+          <InfoTip text="Total revenue unit MGM dari proses aktivasi agen. Dihitung dari SUM komisi_aktifasi pada data MGM AKTIV." />
+        </div>
+        <div className="wrd-kpi-value" style={{ color: '#A855F7' }}>{fmtRp(activationRevenue)}</div>
+        <div className="mgm-kpi-delta" style={{ color: deltaColor(deltaActivation) }}>{fmtDeltaPct(deltaActivation)} vs periode lalu</div>
+      </div>
+      <div className="mgm-revenue-operator">=</div>
+      <div className="mgm-revenue-component mgm-revenue-total" style={{ borderTop: '4px solid ' + COLOR_PRIMARY }}>
+        <div className="wrd-kpi-label">REVENUE MGM
+          <InfoTip text="Total pencapaian revenue unit MGM, yaitu Revenue Transaksi ditambah Revenue Aktivasi." />
+        </div>
+        <div className="wrd-kpi-value" style={{ color: COLOR_PRIMARY }}>{fmtRp(mgmRevenue)}</div>
+        <div className="mgm-kpi-delta" style={{ color: deltaColor(deltaMgm) }}>{fmtDeltaPct(deltaMgm)} vs periode lalu</div>
+      </div>
+    </div>
+  );
+}
 function ChartCard({ title, right, children }) {
   return (
     <div className="wrd-chart-card">
@@ -314,17 +347,31 @@ function buildExecutiveInsight(data) {
     insights.push({ icon: 'ℹ️', text: `Belum ada PB dengan minimum ${MIN_VOLUME_FOR_BEST_CONVERSION} registrasi untuk dibandingkan conversion-nya.` });
   }
 
+  if (current.mgm_revenue != null) {
+    const txnSharePct = data.economics?.transaction_revenue_share_pct;
+    const aktSharePct = data.economics?.activation_revenue_share_pct;
+    insights.push({
+      icon: '💰',
+      text: `Revenue MGM ${fmtRp(current.mgm_revenue)} = Revenue Transaksi ${fmtRp(current.transaction_revenue)} (${nfPct(txnSharePct)}) + Revenue Aktivasi ${fmtRp(current.activation_revenue)} (${nfPct(aktSharePct)}).`,
+    });
+  }
+
+  if (deltas.mgm_revenue != null) {
+    insights.push({ icon: deltas.mgm_revenue >= 0 ? '📈' : '📉', text: `Revenue MGM ${deltas.mgm_revenue >= 0 ? 'naik' : 'turun'} ${fmtDeltaPct(Math.abs(deltas.mgm_revenue))} vs periode lalu.` });
+  }
+
+  const topByRevenue = [...pbScorecard].sort((a, b) => (b.mgm_revenue || 0) - (a.mgm_revenue || 0))[0];
+  if (topByRevenue) {
+    insights.push({ icon: '🏆', text: `PB penyumbang Revenue MGM terbesar: ${topByRevenue.pb} (${fmtRp(topByRevenue.mgm_revenue)}).` });
+  }
+
   const concRev = data.concentration?.mgm_revenue?.top1;
-  if (concRev?.pct != null && concRev.pct >= 30) {
+  if (concRev?.pct != null && concRev.pct >= 20) {
     insights.push({ icon: '🔺', text: `Top-1 PB (${concRev.pb}) menyumbang ${concRev.pct.toFixed(1)}% dari total Revenue MGM — risiko konsentrasi tinggi pada satu PB.` });
   }
   const concRev5 = data.concentration?.mgm_revenue?.top5;
   if (concRev5?.pct != null) {
     insights.push({ icon: 'ℹ️', text: `Top-5 PB menyumbang ${concRev5.pct.toFixed(1)}% dari total Revenue MGM.` });
-  }
-
-  if (deltas.mgm_revenue != null) {
-    insights.push({ icon: deltas.mgm_revenue >= 0 ? '💰' : '📉', text: `Revenue MGM ${deltas.mgm_revenue >= 0 ? 'naik' : 'turun'} ${fmtDeltaPct(Math.abs(deltas.mgm_revenue))} vs periode lalu, kini ${fmtRp(current.mgm_revenue)}.` });
   }
 
   if (data.meta?.quality?.upline_mismatch_reg_vs_activation > 0 || data.meta?.quality?.upline_mismatch_reg_vs_detail > 0) {
@@ -471,9 +518,11 @@ function PbScorecardTab({ data, onSelectPb }) {
       { label: 'Registrasi', value: 'registrations' }, { label: 'Sudah Aktif', value: 'active_registrations' },
       { label: 'Belum Aktif', value: 'inactive_registrations' }, { label: 'Unknown', value: 'unknown_active_status' },
       { label: 'Conversion (%)', value: r => r.activation_conversion_pct },
+      { label: 'Revenue Transaksi', value: 'transaction_revenue' },
+      { label: 'Revenue Aktivasi', value: 'activation_revenue' },
       { label: 'Revenue MGM', value: 'mgm_revenue' },
       { label: 'Kontribusi Registrasi (%)', value: r => r.contribution_registration_pct },
-      { label: 'Kontribusi Revenue (%)', value: r => r.contribution_revenue_pct },
+      { label: 'Kontribusi Revenue MGM (%)', value: r => r.contribution_mgm_revenue_pct },
     ]);
     downloadCsv(`mgm-pb-scorecard-${data.meta.selected_period}.csv`, csv);
   }
@@ -506,29 +555,30 @@ function PbScorecardTab({ data, onSelectPb }) {
         <div className="wr-table-wrap">
           <table className="wr-table">
             <thead><tr>
-              <th>PB</th><th>Status</th>
+              <th>PB</th>
               <Th label="Registrasi" field="registrations" right />
               <Th label="Sudah Aktif" field="active_registrations" right />
               <Th label="Belum Aktif" field="inactive_registrations" right />
-              <Th label="Conversion" field="activation_conversion_pct" right />
+              <Th label="Conversion Aktivasi" field="activation_conversion_pct" right />
+              <Th label="Revenue Transaksi" field="transaction_revenue" right />
+              <Th label="Revenue Aktivasi" field="activation_revenue" right />
               <Th label="Revenue MGM" field="mgm_revenue" right />
-              <th style={{ textAlign: 'right' }}>Kontribusi Registrasi</th>
-              <th style={{ textAlign: 'right' }}>Kontribusi Revenue</th>
-              <th style={{ textAlign: 'right' }}>Perubahan vs Bulan Lalu</th>
+              <th style={{ textAlign: 'right' }}>Kontribusi Revenue MGM</th>
+              <th>Status</th>
             </tr></thead>
             <tbody>
               {rows.map(r => (
                 <tr key={r.pb} onClick={() => onSelectPb(r.pb)} style={{ cursor: 'pointer' }}>
                   <td><code>{r.pb}</code></td>
-                  <td><StatusPill status={r.status} /></td>
                   <td style={{ textAlign: 'right' }}>{fmt(r.registrations)}</td>
                   <td style={{ textAlign: 'right' }}>{fmt(r.active_registrations)}</td>
                   <td style={{ textAlign: 'right' }}>{fmt(r.inactive_registrations)}</td>
                   <td style={{ textAlign: 'right' }}>{nfPct(r.activation_conversion_pct)}</td>
-                  <td style={{ textAlign: 'right' }}>{fmtRp(r.mgm_revenue)}</td>
-                  <td style={{ textAlign: 'right' }}>{nfPct(r.contribution_registration_pct)}</td>
-                  <td style={{ textAlign: 'right' }}>{nfPct(r.contribution_revenue_pct)}</td>
-                  <td style={{ textAlign: 'right', color: deltaColor(r.deltas?.registrations) }}>{fmtDeltaPct(r.deltas?.registrations)}</td>
+                  <td style={{ textAlign: 'right' }}>{fmtRp(r.transaction_revenue)}</td>
+                  <td style={{ textAlign: 'right' }}>{fmtRp(r.activation_revenue)}</td>
+                  <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmtRp(r.mgm_revenue)}</td>
+                  <td style={{ textAlign: 'right' }}>{nfPct(r.contribution_mgm_revenue_pct)}</td>
+                  <td><StatusPill status={r.status} /></td>
                 </tr>
               ))}
               {!rows.length && <tr><td colSpan={10} style={{ textAlign: 'center', padding: 20, color: 'var(--text-4)' }}>Belum ada data</td></tr>}
@@ -693,11 +743,21 @@ function TransactionRevenueTab({ data }) {
   const topRevPb = [...pbScorecard].sort((a, b) => b.mgm_revenue - a.mgm_revenue).slice(0, 10);
   const bottomRevPb = [...pbScorecard].filter(r => r.registrations > 0).sort((a, b) => a.mgm_revenue - b.mgm_revenue).slice(0, 10);
   const operationalVolume = safeObj(data.operational_volume);
+  const current = safeObj(safeObj(data.summary).current);
+  const economics = safeObj(data.economics);
+
+  // revenue_per_transaction & revenue_per_transacting_outlet HARUS pakai
+  // transaction_revenue sbg numerator (bukan mgm_revenue — activation_revenue
+  // bukan revenue transaksi). null kalau denominator 0.
+  const totalTrx = operationalVolume.total_trx;
+  const transactingOutlets = operationalVolume.transacting_outlets;
+  const revenuePerTransaction = totalTrx > 0 ? current.transaction_revenue / totalTrx : null;
+  const revenuePerTransactingOutlet = transactingOutlets > 0 ? current.transaction_revenue / transactingOutlets : null;
 
   return (
     <div className="wrd-tab-content">
       <div className="mgm-quality-banner">
-        <i className="ti ti-info-circle" /> Tab ini menampilkan data transaksi (AKTIVASI) sebagai informasi pendukung. <strong>Revenue MGM</strong> (SUM komisi_aktifasi) berbeda dari <strong>Revenue Transaksi</strong> (SUM rev AKTIVASI) — jangan disamakan.
+        <i className="ti ti-info-circle" /> <strong>Revenue Transaksi</strong> (SUM rev AKTIVASI) dan <strong>Revenue Aktivasi</strong> (SUM komisi_aktifasi) adalah dua komponen terpisah dari <strong>Revenue MGM</strong> — jangan disamakan.
       </div>
 
       <ChartCard title="Trend Bulanan — TRX &amp; Revenue Transaksi (cutoff hari berbeda per bulan — lihat label)">
@@ -710,11 +770,37 @@ function TransactionRevenueTab({ data }) {
         />
       </ChartCard>
 
-      <div className="wrd-kpi-grid wrd-kpi-grid-3">
-        <KPICard label="TRANSACTING OUTLETS" value={fmt(operationalVolume.transacting_outlets)} sub={nfPct(operationalVolume.activation_to_transaction_pct)} color="#3B82F6" />
-        <KPICard label="TOTAL TRX" value={fmt(operationalVolume.total_trx)} color={COLOR_PRIMARY} />
-        <KPICard label="REVENUE TRANSAKSI" value={fmtRp(operationalVolume.transaction_revenue)} color="#8B5CF6" />
+      <div className="wrd-kpi-grid wrd-kpi-grid-4">
+        <KPICard label="TOTAL TRX" value={fmt(totalTrx)} color="#3B82F6" />
+        <KPICard label="OUTLET TRANSACTING" value={fmt(transactingOutlets)} sub={nfPct(operationalVolume.activation_to_transaction_pct)} color="#3B82F6" />
+        <KPICard label="REVENUE PER TRANSACTION" value={fmtRp(revenuePerTransaction)} color="#8B5CF6"
+          tip="Revenue Transaksi dibagi Total Trx." />
+        <KPICard label="REVENUE PER TRANSACTING OUTLET" value={fmtRp(revenuePerTransactingOutlet)} color="#8B5CF6"
+          tip="Revenue Transaksi dibagi Outlet Transacting." />
       </div>
+
+      <RevenueBreakdownRow
+        transactionRevenue={current.transaction_revenue}
+        activationRevenue={current.activation_revenue}
+        mgmRevenue={current.mgm_revenue}
+        deltaTransaction={safeObj(safeObj(data.summary).deltas).transaction_revenue}
+        deltaActivation={safeObj(safeObj(data.summary).deltas).activation_revenue}
+        deltaMgm={safeObj(safeObj(data.summary).deltas).mgm_revenue}
+      />
+
+      <ChartCard title="Kontribusi Komponen Revenue terhadap Revenue MGM">
+        <DataTable
+          columns={[
+            { key: 'component', label: 'Komponen' },
+            { key: 'value', label: 'Nilai', right: true, render: r => fmtRp(r.value) },
+            { key: 'share', label: 'Kontribusi', right: true, render: r => nfPct(r.share) },
+          ]}
+          rows={[
+            { component: 'Revenue Transaksi', value: current.transaction_revenue, share: economics.transaction_revenue_share_pct },
+            { component: 'Revenue Aktivasi', value: current.activation_revenue, share: economics.activation_revenue_share_pct },
+          ]}
+        />
+      </ChartCard>
 
       <div className="wrd-charts-row">
         <ChartCard title="Top 10 PB by Revenue MGM">
@@ -750,7 +836,8 @@ function EconomicsTab({ data }) {
   return (
     <div className="wrd-tab-content">
       <div className="wrd-kpi-grid wrd-kpi-grid-4">
-        <KPICard label="REVENUE MGM" value={fmtRp(e.mgm_revenue)} color={COLOR_PRIMARY} tip="Total pencapaian revenue unit MGM dari SUM komisi_aktifasi." />
+        <KPICard label="REVENUE AKTIVASI" value={fmtRp(e.activation_revenue)} color="#A855F7"
+          tip="Total revenue unit MGM dari proses aktivasi agen. Dihitung dari SUM komisi_aktifasi pada data MGM AKTIV." />
         <KPICard label="AVG KOMISI/EVENT" value={fmtRp(e.avg_commission_per_activation)} color="#8B5CF6" />
         <KPICard label="NEGATIVE ACTIVATION" value={`${fmt(e.negative_activation_count)} (${nfPct(e.negative_activation_rate)})`} color="#DC2626" />
         <KPICard label="PAID ACTIVATION EVENTS (audit)" value={fmt(e.paid_activation_events)} color="#9CA3AF" sub="Jumlah record id_aktifasi — bukan KPI utama" />
@@ -761,14 +848,14 @@ function EconomicsTab({ data }) {
           <DataTable columns={[
             { key: 'key', label: 'Tipe' }, { key: 'count', label: 'Jumlah', right: true },
             { key: 'fee_upline', label: 'Fee Upline', right: true, render: r => fmtRp(r.fee_upline) },
-            { key: 'komisi_aktifasi', label: 'Revenue MGM', right: true, render: r => fmtRp(r.komisi_aktifasi) },
+            { key: 'komisi_aktifasi', label: 'Revenue Aktivasi', right: true, render: r => fmtRp(r.komisi_aktifasi) },
           ]} rows={e.by_tipe_outlet} />
         </ChartCard>
         <ChartCard title="Breakdown per Pembayaran">
           <DataTable columns={[
             { key: 'key', label: 'Metode' }, { key: 'count', label: 'Jumlah', right: true },
             { key: 'fee_upline', label: 'Fee Upline', right: true, render: r => fmtRp(r.fee_upline) },
-            { key: 'komisi_aktifasi', label: 'Revenue MGM', right: true, render: r => fmtRp(r.komisi_aktifasi) },
+            { key: 'komisi_aktifasi', label: 'Revenue Aktivasi', right: true, render: r => fmtRp(r.komisi_aktifasi) },
           ]} rows={e.by_pembayaran_via} />
         </ChartCard>
       </div>
@@ -777,7 +864,7 @@ function EconomicsTab({ data }) {
         <DataTable columns={[
           { key: 'key', label: 'Group' }, { key: 'count', label: 'Jumlah', right: true },
           { key: 'fee_upline', label: 'Fee Upline', right: true, render: r => fmtRp(r.fee_upline) },
-          { key: 'komisi_aktifasi', label: 'Revenue MGM', right: true, render: r => fmtRp(r.komisi_aktifasi) },
+          { key: 'komisi_aktifasi', label: 'Revenue Aktivasi', right: true, render: r => fmtRp(r.komisi_aktifasi) },
         ]} rows={e.by_nama_group} />
       </ChartCard>
 
@@ -795,7 +882,7 @@ function EconomicsTab({ data }) {
       </ChartCard>
 
       {e.formula_mismatch.length > 0 && (
-        <ChartCard title={`⚠️ Formula Audit Mismatch (${e.formula_mismatch.length}) — Revenue MGM resmi TETAP nilai sumber sheet`}>
+        <ChartCard title={`⚠️ Formula Audit Mismatch (${e.formula_mismatch.length}) — Revenue Aktivasi resmi TETAP nilai sumber sheet`}>
           <DataTable columns={[
             { key: 'id_aktifasi', label: 'ID Aktifasi' }, { key: 'id_outlet', label: 'ID Outlet' },
             { key: 'expected', label: 'Formula (audit)', right: true, render: r => fmtRp(r.expected) },
@@ -823,8 +910,8 @@ function TerritoryMixTab({ data }) {
 
   return (
     <div className="wrd-tab-content">
-      <ChartCard title="Top Provinsi by Revenue Transaksi (info AKTIVASI)">
-        <BarChart horizontal labels={territories.slice(0, 10).map(t => t.provinsi)} datasets={[{ data: territories.slice(0, 10).map(t => t.transaction_revenue), backgroundColor: COLOR_PRIMARY + 'CC' }]} height={280} />
+      <ChartCard title="Top Provinsi by Revenue MGM (Revenue Transaksi + Revenue Aktivasi)">
+        <BarChart horizontal labels={territories.slice(0, 10).map(t => t.provinsi)} datasets={[{ data: territories.slice(0, 10).map(t => t.mgm_revenue), backgroundColor: COLOR_PRIMARY + 'CC' }]} height={280} />
       </ChartCard>
 
       <ChartCard title="Detail per Provinsi">
@@ -832,7 +919,10 @@ function TerritoryMixTab({ data }) {
           { key: 'provinsi', label: 'Provinsi' },
           { key: 'registrations', label: 'Reg', right: true }, { key: 'activated_outlets', label: 'Aktif (info)', right: true },
           { key: 'transacting_outlets', label: 'Transacting', right: true },
-          { key: 'total_trx', label: 'TRX', right: true }, { key: 'transaction_revenue', label: 'Revenue Transaksi', right: true, render: r => fmtRp(r.transaction_revenue) },
+          { key: 'total_trx', label: 'TRX', right: true },
+          { key: 'transaction_revenue', label: 'Revenue Transaksi', right: true, render: r => fmtRp(r.transaction_revenue) },
+          { key: 'activation_revenue', label: 'Revenue Aktivasi', right: true, render: r => fmtRp(r.activation_revenue) },
+          { key: 'mgm_revenue', label: 'Revenue MGM', right: true, render: r => <strong>{fmtRp(r.mgm_revenue)}</strong> },
         ]} rows={territories} />
       </ChartCard>
 
@@ -982,7 +1072,7 @@ function ActionCenterTab({ data, periode }) {
       <ChartCard title="Data Quality" right={<button className="wr-btn-update" onClick={exportQualityCsv}><i className="ti ti-download" /></button>}>
         <DataTable
           columns={[{ key: 'k', label: 'Metrik' }, { key: 'v', label: 'Nilai', right: true }]}
-          rows={Object.entries(safeObj(safeObj(data.meta).quality)).map(([k, v]) => ({ k, v: typeof v === 'object' ? JSON.stringify(v) : v }))}
+          rows={Object.entries(safeObj(safeObj(data.meta).quality)).map(([k, v]) => ({ k, v: typeof v === 'boolean' ? String(v) : (typeof v === 'object' && v !== null ? JSON.stringify(v) : v) }))}
         />
       </ChartCard>
 
@@ -1148,22 +1238,29 @@ export default function WarRoomMgmPa() {
 
         <div className="wrd-kpi-grid wrd-kpi-grid-4">
           <KPICard label="TOTAL REGISTRASI" value={fmt(s.current.registrations)} deltaVal={s.deltas.registrations} deltaKind="pct" color="#3B82F6"
-            tip="Jumlah outlet/agen unik yang terdaftar pada data REG periode terpilih." />
+            tip="Jumlah agen/outlet unik pada data REG." />
           <KPICard label="SUDAH AKTIF" value={fmt(s.current.active_registrations)} deltaVal={s.deltas.active_registrations} deltaKind="pct" color={COLOR_ACCENT}
-            tip="Jumlah agen registrasi dengan is_active = 1." />
+            tip="Agen registrasi dengan is_active = 1." />
           <KPICard label="BELUM AKTIF" value={fmt(s.current.inactive_registrations)} deltaVal={s.deltas.inactive_registrations} deltaKind="pct" color="#F59E0B"
-            tip="Jumlah agen registrasi dengan is_active = 0." />
+            tip="Agen registrasi dengan is_active = 0." />
           <KPICard label="CONVERSION AKTIVASI" value={nfPct(s.current.activation_conversion_pct)} deltaVal={s.deltas.activation_conversion_pct} deltaKind="pt" color="#059669"
-            tip="Persentase agen registrasi yang sudah aktif: Sudah Aktif ÷ Total Registrasi." />
+            tip="Sudah Aktif dibagi Total Registrasi." />
           <KPICard label="PB AKTIF MEREKRUT" value={fmt(s.current.active_recruiting_pb)} deltaVal={s.deltas.active_recruiting_pb} deltaKind="pct" color="#8B5CF6"
-            tip="Jumlah upline/PB unik yang mempunyai minimal satu agen registrasi." />
+            tip="Jumlah upline/PB unik yang memiliki registrasi agen." />
           <KPICard label="RATA-RATA REKRUT / PB" value={fmt2(s.current.avg_registration_per_pb)} deltaVal={s.deltas.avg_registration_per_pb} deltaKind="pct" color="#F97316"
-            tip="Rata-rata jumlah agen baru yang direkrut setiap PB aktif." />
-          <KPICard label="REVENUE MGM" value={fmtRp(s.current.mgm_revenue)} deltaVal={s.deltas.mgm_revenue} deltaKind="pct" color="#EC4899"
-            tip="Total pencapaian revenue unit MGM yang berasal dari SUM komisi_aktifasi." />
+            tip="Total Registrasi dibagi PB Aktif Merekrut." />
           <KPICard label="OUTLET TRANSACTING" value={fmt(s.current.transacting_outlets)} deltaVal={s.deltas.transacting_outlets} deltaKind="pct" color="#3B82F6"
-            sub="Informasi pendukung (AKTIVASI)" />
+            tip="Outlet pada data transaksi dengan Trx > 0." sub="Informasi pendukung (AKTIVASI)" />
         </div>
+
+        <RevenueBreakdownRow
+          transactionRevenue={s.current.transaction_revenue}
+          activationRevenue={s.current.activation_revenue}
+          mgmRevenue={s.current.mgm_revenue}
+          deltaTransaction={s.deltas.transaction_revenue}
+          deltaActivation={s.deltas.activation_revenue}
+          deltaMgm={s.deltas.mgm_revenue}
+        />
 
         <div className="wrd-tabs">
           {TABS.map(t => (
