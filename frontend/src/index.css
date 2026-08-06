@@ -6451,23 +6451,37 @@ body {
 .mgm-info-tip { color: var(--text-4); cursor: help; margin-left: 4px; font-size: 12px; }
 .mgm-info-tip:hover { color: var(--text-2); }
 
-/* Grid KPI utama Command Center — 6 kolom tetap di desktop (Outlet
-   Transacting wrap ke baris ke-2), BUKAN auto-fit tak terbatas (auto-fit
-   dgn 7 kartu di layar lebar membuat tiap kartu melar & terlihat kosong). */
-.mgm-kpi-grid-main { display: grid; gap: 12px; grid-template-columns: repeat(6, 1fr); }
-@media (max-width: 1200px) { .mgm-kpi-grid-main { grid-template-columns: repeat(3, 1fr); } }
-@media (max-width: 700px)  { .mgm-kpi-grid-main { grid-template-columns: repeat(2, 1fr); } }
+/* Grid KPI utama Command Center — SATU container 12-kolom utk seluruh 10
+   kartu (6 registrasi/status + Outlet Transacting + 3 revenue), tepat 2
+   baris di desktop: baris 1 = 6 kartu span-2 (6x2=12), baris 2 = 4 kartu
+   span-3 (4x3=12). Kartu default span 2 (.wrd-kpi-card polos); span 3/4
+   lewat class .mgm-kpi-span-3/.mgm-kpi-span-4 (lihat prop `span` di
+   KPICard). Ini SATU-SATUNYA grid — tidak ada grid revenue terpisah di
+   bawahnya, supaya tidak ada baris ketiga / celah kosong di antara Outlet
+   Transacting dan kartu revenue. */
+.mgm-command-kpi-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 16px; align-items: stretch; }
+.mgm-command-kpi-grid > .wrd-kpi-card { grid-column: span 2; }
+.mgm-command-kpi-grid > .wrd-kpi-card.mgm-kpi-span-3 { grid-column: span 3; }
+.mgm-command-kpi-grid > .wrd-kpi-card.mgm-kpi-span-4 { grid-column: span 4; }
+@media (max-width: 1200px) {
+  .mgm-command-kpi-grid { grid-template-columns: repeat(6, 1fr); }
+}
+@media (max-width: 700px) {
+  .mgm-command-kpi-grid { grid-template-columns: repeat(2, 1fr); }
+  .mgm-command-kpi-grid > .wrd-kpi-card,
+  .mgm-command-kpi-grid > .wrd-kpi-card.mgm-kpi-span-3,
+  .mgm-command-kpi-grid > .wrd-kpi-card.mgm-kpi-span-4 { grid-column: span 1; }
+}
 
-/* Revenue breakdown — 3 kartu rapat dalam satu grid row, TANPA elemen
+/* Kartu revenue paling menonjol (Revenue MGM) — dipakai lewat prop
+   `emphasis` KPICard, TIDAK mengubah lebar kolom. */
+.mgm-kpi-emphasis { box-shadow: var(--shadow-md); }
+.mgm-kpi-emphasis .wrd-kpi-value { font-size: 26px; }
+
+/* Revenue breakdown standalone (tab Transaction & Revenue) — 3 kartu
+   .wrd-kpi-card rapat dalam satu grid row tersendiri, TANPA elemen
    operator (+/=) dan TANPA spacer kosong di antaranya. */
 .mgm-revenue-breakdown { display: grid; gap: 12px; grid-template-columns: repeat(3, 1fr); }
-.mgm-revenue-component {
-  background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px;
-  padding: 14px 16px;
-}
-.mgm-revenue-component .wrd-kpi-value { font-size: 22px; font-weight: 700; margin: 4px 0; }
-.mgm-revenue-total { box-shadow: var(--shadow-md); }
-.mgm-revenue-total .wrd-kpi-value { font-size: 28px; }
 @media (max-width: 700px) { .mgm-revenue-breakdown { grid-template-columns: 1fr; } }
 
 .mgm-funnel { display: flex; flex-direction: column; gap: 10px; padding: 4px 0; }

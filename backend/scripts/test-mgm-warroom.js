@@ -250,12 +250,7 @@ console.log('\n-- 11-13. KPI utama Command Center TIDAK boleh berisi field/label
 const frontendPath = path.join(__dirname, '../../frontend/src/pages/WarRoomMgmPa.jsx');
 const frontendSrc = fs.readFileSync(frontendPath, 'utf8');
 const tabsMarkerIdx = frontendSrc.indexOf('<div className="wrd-tabs">');
-const mainGridStart = frontendSrc.lastIndexOf('<div className="mgm-kpi-grid-main', tabsMarkerIdx);
-if (mainGridStart === -1) throw new Error('mgm-kpi-grid-main tidak ditemukan — cek className grid KPI utama Command Center');
-const mainKpiSlice = frontendSrc.slice(mainGridStart, tabsMarkerIdx);
-// RevenueBreakdownRow dirender persis setelah grid KPI utama (lihat mainKpiSlice
-// di atas, yang memuat <RevenueBreakdownRow .../> sbg component call) — label
-// REVENUE TRANSAKSI/AKTIVASI/MGM ada di BODY fungsinya, bukan di call site.
+
 function extractFunctionBody(src, marker) {
   const start = src.indexOf(marker);
   if (start === -1) throw new Error(`${marker.trim()} tidak ditemukan di source`);
@@ -278,8 +273,18 @@ function extractFunctionBody(src, marker) {
   }
   throw new Error(`${marker.trim()} — brace tidak seimbang, tidak bisa mengekstrak body`);
 }
+// Grid KPI utama Command Center dipindah ke komponen CommandKpiGrid sendiri
+// (dipanggil <CommandKpiGrid s={s} /> dari komponen utama) — mainKpiSlice di
+// sini adalah BODY komponen itu, bukan lagi potongan JSX komponen utama.
+const mainKpiSlice = extractFunctionBody(frontendSrc, 'function CommandKpiGrid(');
+const mainComponentSlice = frontendSrc.slice(frontendSrc.lastIndexOf('export default function WarRoomMgmPa'), tabsMarkerIdx);
+// Kartu revenue (REVENUE TRANSAKSI/AKTIVASI/MGM) dirender lewat panggilan
+// buildRevenueCards({...}) LANGSUNG di dalam grid tunggal .mgm-command-kpi-grid
+// (bukan komponen RevenueBreakdownRow terpisah lagi) — label ada di BODY
+// fungsi buildRevenueCards, bukan di call site.
+const revenueCardsBody = extractFunctionBody(frontendSrc, 'function buildRevenueCards(');
 const revenueRowBody = extractFunctionBody(frontendSrc, 'function RevenueBreakdownRow(');
-const commandCenterKpiArea = mainKpiSlice + '\n' + revenueRowBody;
+const commandCenterKpiArea = mainKpiSlice + '\n' + revenueCardsBody;
 
 test('11. "PAID ACTIVATION EVENTS" tidak muncul di KPI utama Command Center (boleh tetap di Data Audit/Economics)', () => {
   assert.ok(!/PAID ACTIVATION EVENTS/.test(commandCenterKpiArea));
@@ -299,35 +304,58 @@ test('13b. 7 KPI utama non-revenue ada di Command Center: Total Registrasi, Suda
 test('13c. "CONVERTED REGISTRATIONS" (KPI lama) sudah dihapus dari KPI utama', () => {
   assert.ok(!/CONVERTED REGISTRATIONS/.test(commandCenterKpiArea));
 });
-test('13d. Kartu REVENUE TRANSAKSI, REVENUE AKTIVASI, REVENUE MGM ada di area KPI utama (RevenueBreakdownRow)', () => {
+test('13d. Kartu REVENUE TRANSAKSI, REVENUE AKTIVASI, REVENUE MGM ada di area KPI utama (buildRevenueCards, dipanggil langsung di grid)', () => {
   for (const label of ['REVENUE TRANSAKSI', 'REVENUE AKTIVASI', 'REVENUE MGM']) {
-    assert.ok(revenueRowBody.includes(label), `RevenueBreakdownRow harus memuat label "${label}"`);
+    assert.ok(revenueCardsBody.includes(label), `buildRevenueCards harus memuat label "${label}"`);
   }
-  assert.ok(mainKpiSlice.includes('<RevenueBreakdownRow'), 'RevenueBreakdownRow harus dipanggil tepat setelah grid KPI utama');
+  assert.ok(mainKpiSlice.includes('buildRevenueCards('), 'buildRevenueCards harus dipanggil LANGSUNG di dalam mgm-command-kpi-grid (bukan lewat wrapper grid terpisah)');
 });
-test('13e. Revenue MGM = Revenue Transaksi + Revenue Aktivasi (relasi eksplisit di RevenueBreakdownRow)', () => {
-  assert.ok(/mgmRevenue=\{s\.current\.mgm_revenue\}/.test(mainKpiSlice) || /mgmRevenue=/.test(mainKpiSlice),
-    'RevenueBreakdownRow harus menerima mgmRevenue dari summary.current.mgm_revenue (hasil penjumlahan backend)');
+test('13e. Revenue MGM = Revenue Transaksi + Revenue Aktivasi (relasi eksplisit di buildRevenueCards)', () => {
+  assert.ok(/mgmRevenue:\s*s\.current\.mgm_revenue/.test(mainKpiSlice),
+    'buildRevenueCards harus menerima mgmRevenue dari summary.current.mgm_revenue (hasil penjumlahan backend)');
 });
-test('13f. Elemen operator (+/=) DIHAPUS dari RevenueBreakdownRow — tiga kartu revenue tanpa simbol/kolom operator', () => {
-  assert.ok(!revenueRowBody.includes('mgm-revenue-operator'), 'className mgm-revenue-operator tidak boleh dipakai lagi di JSX');
-  assert.ok(!/>\s*\+\s*<\/div>/.test(revenueRowBody), 'tidak boleh ada <div>...+...</div> sbg simbol operator penjumlahan');
-  assert.ok(!/>\s*=\s*<\/div>/.test(revenueRowBody), 'tidak boleh ada <div>...=...</div> sbg simbol operator sama-dengan');
+test('13f. Elemen operator (+/=) DIHAPUS dari kartu revenue — tanpa simbol/kolom operator', () => {
+  for (const body of [revenueCardsBody, revenueRowBody]) {
+    assert.ok(!body.includes('mgm-revenue-operator'), 'className mgm-revenue-operator tidak boleh dipakai lagi di JSX');
+    assert.ok(!/>\s*\+\s*<\/div>/.test(body), 'tidak boleh ada <div>...+...</div> sbg simbol operator penjumlahan');
+    assert.ok(!/>\s*=\s*<\/div>/.test(body), 'tidak boleh ada <div>...=...</div> sbg simbol operator sama-dengan');
+  }
 });
 test('13g. CSS .mgm-revenue-operator sudah dihapus (dead class, tidak dipakai lagi)', () => {
   const cssSrc = fs.readFileSync(path.join(__dirname, '../../frontend/src/index.css'), 'utf8');
   assert.ok(!/\.mgm-revenue-operator\s*\{/.test(cssSrc), 'rule CSS .mgm-revenue-operator harus sudah dihapus, bukan cuma tidak dipakai');
 });
-test('13h. Grid KPI utama Command Center pakai kolom tetap (bukan auto-fit tak terbatas) supaya tidak melar/kosong di layar lebar', () => {
+test('13h. Grid KPI utama Command Center SATU container 12-kolom, tepat 2 baris (6 kartu span-2 + 4 kartu span-3)', () => {
   const cssSrc = fs.readFileSync(path.join(__dirname, '../../frontend/src/index.css'), 'utf8');
-  assert.ok(/\.mgm-kpi-grid-main\s*\{[^}]*grid-template-columns:\s*repeat\(6,\s*1fr\)/.test(cssSrc),
-    '.mgm-kpi-grid-main harus grid-template-columns: repeat(6, 1fr) di desktop, supaya Outlet Transacting (kartu ke-7) wrap ke baris baru');
+  assert.ok(/\.mgm-command-kpi-grid\s*\{[^}]*grid-template-columns:\s*repeat\(12,\s*minmax\(0,\s*1fr\)\)/.test(cssSrc),
+    '.mgm-command-kpi-grid harus grid-template-columns: repeat(12, minmax(0, 1fr)) di desktop');
+  assert.ok(/\.mgm-command-kpi-grid\s*>\s*\.wrd-kpi-card\s*\{[^}]*grid-column:\s*span 2/.test(cssSrc),
+    'kartu default (6 KPI registrasi/status) harus span 2 dari 12 kolom -> 6x2=12 (baris 1 penuh)');
+  assert.ok(/\.mgm-kpi-span-3\s*\{[^}]*grid-column:\s*span 3/.test(cssSrc),
+    'kartu span-3 (Outlet Transacting + 3 revenue) harus span 3 dari 12 kolom -> 4x3=12 (baris 2 penuh)');
+  // Hitung kartu di baris 1 (span implisit 2, tanpa prop span) vs baris 2 (span={3}) langsung dari JSX.
+  const spanlessCards = (mainKpiSlice.match(/<KPICard span=\{2\}/g) || []).length;
+  const span3Cards = (mainKpiSlice.match(/<KPICard span=\{3\}/g) || []).length; // Outlet Transacting saja (literal di JSX)
+  assert.strictEqual(spanlessCards, 6, `baris 1 harus tepat 6 kartu span-2 (6x2=12), ditemukan ${spanlessCards}`);
+  assert.strictEqual(span3Cards, 1, `hanya Outlet Transacting yang literal span={3} di JSX utama (3 kartu revenue via buildRevenueCards span:3), ditemukan ${span3Cards}`);
+  assert.ok(/span:\s*3/.test(mainKpiSlice), 'buildRevenueCards harus dipanggil dgn span: 3 supaya 3 kartu revenue ikut span-3 di baris 2');
 });
-test('13i. Revenue breakdown pakai CSS grid rapat (bukan flex-wrap dgn margin-bottom berlebihan)', () => {
+test('13h2. Tidak ada grid/wrapper terpisah lagi di antara Outlet Transacting dan kartu revenue (satu container, bukan dua)', () => {
+  // Sebelumnya ada 2 container (.mgm-kpi-grid-main lalu <RevenueBreakdownRow/> terpisah) yang
+  // menyebabkan 3 baris. Sekarang CommandKpiGrid harus TEPAT SATU <div className="mgm-command-kpi-grid">
+  // yang membungkus baik KPI registrasi/status maupun 4 kartu baris ke-2 — TIDAK ADA
+  // wrapper grid kedua (.mgm-revenue-breakdown) di dalamnya.
+  const divOpenCount = (mainKpiSlice.match(/<div className="mgm-command-kpi-grid/g) || []).length;
+  assert.strictEqual(divOpenCount, 1, 'CommandKpiGrid harus tepat satu <div className="mgm-command-kpi-grid">');
+  assert.ok(!mainKpiSlice.includes('mgm-revenue-breakdown'),
+    'tidak boleh ada wrapper grid kedua (.mgm-revenue-breakdown) yang membungkus kartu revenue di dalam CommandKpiGrid');
+  assert.ok(mainComponentSlice.includes('<CommandKpiGrid'), 'komponen utama harus memanggil <CommandKpiGrid s={s} />');
+});
+test('13i. Revenue breakdown standalone (tab Transaction & Revenue) pakai CSS grid rapat (bukan flex-wrap dgn margin-bottom berlebihan)', () => {
   const cssSrc = fs.readFileSync(path.join(__dirname, '../../frontend/src/index.css'), 'utf8');
   assert.ok(/\.mgm-revenue-breakdown\s*\{[^}]*display:\s*grid/.test(cssSrc), '.mgm-revenue-breakdown harus display:grid (3 kartu rapat dlm satu baris)');
   assert.ok(!/\.mgm-revenue-breakdown\s*\{[^}]*margin-bottom:\s*16px/.test(cssSrc),
-    'margin-bottom 16px eksplisit harus dihapus — biarkan gap flex .wr-page (20px) yang mengatur jarak, jangan dobel spacing');
+    'margin-bottom 16px eksplisit harus dihapus — biarkan gap flex .wr-page/.wrd-tab-content yang mengatur jarak, jangan dobel spacing');
 });
 
 console.log('\n-- 14-20. Baseline Agustus 2026 (angka nyata, tervalidasi read-only terhadap production DB) --');
@@ -565,9 +593,9 @@ test('§15.8 Label generik "REVENUE" tanpa konteks / "TOTAL REVENUE" tanpa defin
   assert.ok(!/label="KOMISI"/.test(frontendSrc), 'tidak boleh ada KPICard label="KOMISI" sbg pengganti Revenue MGM');
 });
 test('§15.12 Tooltip Revenue Transaksi/Aktivasi/MGM sesuai teks spesifikasi', () => {
-  assert.ok(revenueRowBody.includes('Dihitung dari SUM kolom Rev pada data AKTIVASI'), 'tooltip Revenue Transaksi harus menyebut SUM kolom Rev AKTIVASI');
-  assert.ok(revenueRowBody.includes('Dihitung dari SUM komisi_aktifasi pada data MGM AKTIV'), 'tooltip Revenue Aktivasi harus menyebut SUM komisi_aktifasi');
-  assert.ok(revenueRowBody.includes('Revenue Transaksi ditambah Revenue Aktivasi'), 'tooltip Revenue MGM harus menjelaskan penjumlahan dua komponen');
+  assert.ok(revenueCardsBody.includes('Dihitung dari SUM kolom Rev pada data AKTIVASI'), 'tooltip Revenue Transaksi harus menyebut SUM kolom Rev AKTIVASI');
+  assert.ok(revenueCardsBody.includes('Dihitung dari SUM komisi_aktifasi pada data MGM AKTIV'), 'tooltip Revenue Aktivasi harus menyebut SUM komisi_aktifasi');
+  assert.ok(revenueCardsBody.includes('Revenue Transaksi ditambah Revenue Aktivasi'), 'tooltip Revenue MGM harus menjelaskan penjumlahan dua komponen');
 });
 test('§15.13 Format rupiah pakai locale id-ID (fmtRp)', () => {
   assert.ok(/function fmtRp\(n\) \{ return n == null \? '-' : 'Rp ' \+ nf\.format/.test(frontendSrc));
