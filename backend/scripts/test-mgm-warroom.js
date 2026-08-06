@@ -50,7 +50,8 @@ const {
 const {
   safeNumber, safeBoolean, safePct, pctDelta, pointDelta, dedupeLastWins,
   classifyPb, computeSegmentationThresholds,
-  computeRegistrationFunnel, computeMgmRevenue, computeTransactionInfo,
+  computeRegistrationFunnel, computeActivationRevenue, computeTransactionInfo,
+  computeSummary, summaryDeltas,
   buildPbScorecard, buildPeriodAnalytics,
 } = require('../src/lib/mgm-utils');
 
@@ -235,14 +236,14 @@ test('9b. avg_registration_per_pb = null kalau tidak ada PB (denominator 0)', ()
   assert.strictEqual(computeRegistrationFunnel([]).avg_registration_per_pb, null);
 });
 
-console.log('\n-- 10. Revenue MGM = SUM(mgm_pa_aktivasi_detail.komisi_aktifasi) --');
-test('10. mgm_revenue = SUM komisi_aktifasi, nilai sumber dipakai apa adanya', () => {
+console.log('\n-- 10. Revenue Aktivasi = SUM(mgm_pa_aktivasi_detail.komisi_aktifasi) --');
+test('10. activation_revenue = SUM komisi_aktifasi, nilai sumber dipakai apa adanya', () => {
   const det = [
     { id_aktifasi: '1', id_outlet: 'A', upline: 'PB1', komisi_aktifasi: 5000 },
     { id_aktifasi: '2', id_outlet: 'B', upline: 'PB1', komisi_aktifasi: 3000 },
     { id_aktifasi: '3', id_outlet: 'C', upline: 'PB2', komisi_aktifasi: -500 }, // negatif tetap dijumlah apa adanya
   ];
-  assert.strictEqual(computeMgmRevenue(det).mgm_revenue, 7500);
+  assert.strictEqual(computeActivationRevenue(det).activation_revenue, 7500);
 });
 
 console.log('\n-- 11-13. KPI utama Command Center TIDAK boleh berisi field/label yang dihapus --');
@@ -251,24 +252,61 @@ const frontendSrc = fs.readFileSync(frontendPath, 'utf8');
 const tabsMarkerIdx = frontendSrc.indexOf('<div className="wrd-tabs">');
 const mainGridStart = frontendSrc.lastIndexOf('<div className="wrd-kpi-grid', tabsMarkerIdx);
 const mainKpiSlice = frontendSrc.slice(mainGridStart, tabsMarkerIdx);
+// RevenueBreakdownRow dirender persis setelah grid KPI utama (lihat mainKpiSlice
+// di atas, yang memuat <RevenueBreakdownRow .../> sbg component call) — label
+// REVENUE TRANSAKSI/AKTIVASI/MGM ada di BODY fungsinya, bukan di call site.
+function extractFunctionBody(src, marker) {
+  const start = src.indexOf(marker);
+  if (start === -1) throw new Error(`${marker.trim()} tidak ditemukan di source`);
+  // Lewati dulu parameter list (...) supaya destructured params { a, b } tidak
+  // dikira body function-nya sendiri.
+  const parenStart = src.indexOf('(', start);
+  let pdepth = 0, parenEnd = parenStart;
+  for (let i = parenStart; i < src.length; i++) {
+    if (src[i] === '(') pdepth++;
+    else if (src[i] === ')') { pdepth--; if (pdepth === 0) { parenEnd = i; break; } }
+  }
+  const braceStart = src.indexOf('{', parenEnd);
+  let depth = 0;
+  for (let i = braceStart; i < src.length; i++) {
+    if (src[i] === '{') depth++;
+    else if (src[i] === '}') {
+      depth--;
+      if (depth === 0) return src.slice(start, i + 1);
+    }
+  }
+  throw new Error(`${marker.trim()} — brace tidak seimbang, tidak bisa mengekstrak body`);
+}
+const revenueRowBody = extractFunctionBody(frontendSrc, 'function RevenueBreakdownRow(');
+const commandCenterKpiArea = mainKpiSlice + '\n' + revenueRowBody;
 
 test('11. "PAID ACTIVATION EVENTS" tidak muncul di KPI utama Command Center (boleh tetap di Data Audit/Economics)', () => {
-  assert.ok(!/PAID ACTIVATION EVENTS/.test(mainKpiSlice));
+  assert.ok(!/PAID ACTIVATION EVENTS/.test(commandCenterKpiArea));
   assert.ok(/PAID ACTIVATION EVENTS/.test(frontendSrc), 'field ini tetap harus ada sebagai audit record count di tab lain');
 });
 test('12. "FEE UPLINE" tidak muncul di KPI utama Command Center', () => {
-  assert.ok(!/FEE UPLINE/.test(mainKpiSlice));
+  assert.ok(!/FEE UPLINE/.test(commandCenterKpiArea));
 });
-test('13. Label "ACTIVATION COMMISSION" tidak muncul sama sekali (diganti Revenue MGM)', () => {
-  assert.ok(!/ACTIVATION COMMISSION/i.test(frontendSrc), 'label lama harus sudah diganti Revenue MGM di seluruh halaman');
+test('13. Label "ACTIVATION COMMISSION" tidak muncul sama sekali (diganti Revenue Aktivasi / Revenue MGM)', () => {
+  assert.ok(!/ACTIVATION COMMISSION/i.test(frontendSrc), 'label lama harus sudah diganti di seluruh halaman');
 });
-test('13b. 8 KPI utama baru ada di Command Center: Total Registrasi, Sudah Aktif, Belum Aktif, Conversion Aktivasi, PB Aktif Merekrut, Rata-rata Rekrut/PB, Revenue MGM, Outlet Transacting', () => {
-  for (const label of ['TOTAL REGISTRASI', 'SUDAH AKTIF', 'BELUM AKTIF', 'CONVERSION AKTIVASI', 'PB AKTIF MEREKRUT', 'RATA-RATA REKRUT', 'REVENUE MGM', 'OUTLET TRANSACTING']) {
+test('13b. 7 KPI utama non-revenue ada di Command Center: Total Registrasi, Sudah Aktif, Belum Aktif, Conversion Aktivasi, PB Aktif Merekrut, Rata-rata Rekrut/PB, Outlet Transacting', () => {
+  for (const label of ['TOTAL REGISTRASI', 'SUDAH AKTIF', 'BELUM AKTIF', 'CONVERSION AKTIVASI', 'PB AKTIF MEREKRUT', 'RATA-RATA REKRUT', 'OUTLET TRANSACTING']) {
     assert.ok(mainKpiSlice.includes(label), `KPI utama harus memuat label "${label}"`);
   }
 });
 test('13c. "CONVERTED REGISTRATIONS" (KPI lama) sudah dihapus dari KPI utama', () => {
-  assert.ok(!/CONVERTED REGISTRATIONS/.test(mainKpiSlice));
+  assert.ok(!/CONVERTED REGISTRATIONS/.test(commandCenterKpiArea));
+});
+test('13d. Kartu REVENUE TRANSAKSI, REVENUE AKTIVASI, REVENUE MGM ada di area KPI utama (RevenueBreakdownRow)', () => {
+  for (const label of ['REVENUE TRANSAKSI', 'REVENUE AKTIVASI', 'REVENUE MGM']) {
+    assert.ok(revenueRowBody.includes(label), `RevenueBreakdownRow harus memuat label "${label}"`);
+  }
+  assert.ok(mainKpiSlice.includes('<RevenueBreakdownRow'), 'RevenueBreakdownRow harus dipanggil tepat setelah grid KPI utama');
+});
+test('13e. Revenue MGM = Revenue Transaksi + Revenue Aktivasi (relasi eksplisit di RevenueBreakdownRow)', () => {
+  assert.ok(/mgmRevenue=\{s\.current\.mgm_revenue\}/.test(mainKpiSlice) || /mgmRevenue=/.test(mainKpiSlice),
+    'RevenueBreakdownRow harus menerima mgmRevenue dari summary.current.mgm_revenue (hasil penjumlahan backend)');
 });
 
 console.log('\n-- 14-20. Baseline Agustus 2026 (angka nyata, tervalidasi read-only terhadap production DB) --');
@@ -302,11 +340,22 @@ function buildAugustBaselineDetailRows() {
   rows.push({ id_aktifasi: 'DET629', id_outlet: 'OUT1', upline: 'PB0', komisi_aktifasi: 34475, fee_upline: 0 });
   return rows; // 630 record, SUM komisi_aktifasi = 629*20000 + 34475 = 12.614.475
 }
+// AKTIVASI: 1582 outlet, SUM(trx) = 1582, SUM(rev) = 1.851.802 (distribusi
+// nilai per-baris tidak relevan — hanya SUM yang diuji terhadap baseline).
+function buildAugustBaselineAktRows() {
+  const rows = [];
+  for (let i = 0; i < 1582; i++) {
+    rows.push({ id_outlet: `AKTOUT${i}`, upline: `PB${i % 281}`, trx: 1, rev: i === 0 ? 1851802 : 0 });
+  }
+  return rows;
+}
 
 const augReg = buildAugustBaselineRegRows();
 const augDet = buildAugustBaselineDetailRows();
+const augAkt = buildAugustBaselineAktRows();
 const augFunnel = computeRegistrationFunnel(augReg);
-const augRevenue = computeMgmRevenue(augDet);
+const augActivation = computeActivationRevenue(augDet);
+const augSummary = computeSummary(augReg, augAkt, augDet);
 
 test('14. current August registrations = 931', () => {
   assert.strictEqual(augFunnel.registrations, 931);
@@ -326,9 +375,152 @@ test('18. current August activation_conversion_pct = 51,5575% (480/931x100)', ()
 test('19. current August avg_registration_per_pb = 3,3132 (931/281)', () => {
   closeTo(augFunnel.avg_registration_per_pb, 3.3132, 0.01);
 });
-test('20. current August mgm_revenue = Rp12.614.475 (SUM komisi_aktifasi, 630 record)', () => {
-  assert.strictEqual(augRevenue.mgm_revenue, 12614475);
-  assert.strictEqual(augRevenue.paid_activation_events, 630);
+test('20. current August activation_revenue = Rp12.614.475 (SUM komisi_aktifasi, 630 record)', () => {
+  assert.strictEqual(augActivation.activation_revenue, 12614475);
+  assert.strictEqual(augActivation.paid_activation_events, 630);
+});
+
+console.log('\n-- §14 (item 1-20 spesifikasi pemisahan revenue) --');
+test('§14.1 transaction_revenue = SUM aktivasi.rev', () => {
+  assert.strictEqual(computeTransactionInfo(augAkt).transaction_revenue, 1851802);
+});
+test('§14.2 transaction_revenue TIDAK menggunakan trx (trx tinggi, rev kecil tetap benar)', () => {
+  const akt = [{ id_outlet: 'A', trx: 999999, rev: 5 }];
+  assert.strictEqual(computeTransactionInfo(akt).transaction_revenue, 5, 'harus 5 (rev), bukan 999999 (trx)');
+});
+test('§14.3 activation_revenue = SUM detail.komisi_aktifasi', () => {
+  assert.strictEqual(computeActivationRevenue(augDet).activation_revenue, 12614475);
+});
+test('§14.4 mgm_revenue = transaction_revenue + activation_revenue', () => {
+  assert.strictEqual(augSummary.mgm_revenue, augSummary.transaction_revenue + augSummary.activation_revenue);
+});
+test('§14.5 current August Revenue Transaksi = 1.851.802', () => {
+  assert.strictEqual(augSummary.transaction_revenue, 1851802);
+});
+test('§14.6 current August Revenue Aktivasi = 12.614.475', () => {
+  assert.strictEqual(augSummary.activation_revenue, 12614475);
+});
+test('§14.7 current August Revenue MGM = 14.466.277', () => {
+  assert.strictEqual(augSummary.mgm_revenue, 14466277);
+});
+test('§14.8 1.851.802 + 12.614.475 = 14.466.277', () => {
+  assert.strictEqual(1851802 + 12614475, 14466277);
+});
+test('§14.9 total_trx tetap 1.582', () => {
+  assert.strictEqual(augSummary.total_trx, 1582);
+});
+test('§14.10 revenue_per_transaction (frontend) memakai transaction_revenue / total_trx', () => {
+  const frontendTabSrc = fs.readFileSync(path.join(__dirname, '../../frontend/src/pages/WarRoomMgmPa.jsx'), 'utf8');
+  assert.ok(/revenuePerTransaction = totalTrx > 0 \? current\.transaction_revenue \/ totalTrx : null/.test(frontendTabSrc),
+    'formula revenue per transaction harus pakai transaction_revenue sbg numerator, BUKAN mgm_revenue');
+});
+test('§14.11 previous period mempunyai tiga field revenue', () => {
+  const result = buildPeriodAnalytics({
+    registrasi: augReg, aktivasi: augAkt, detail: augDet,
+    previousRegistrasi: [{ id_outlet: 'P1', upline: 'PBX', is_active: true }],
+    previousAktivasi: [{ id_outlet: 'P1', upline: 'PBX', trx: 2, rev: 100 }],
+    previousDetail: [{ id_aktifasi: 'PD1', id_outlet: 'P1', upline: 'PBX', komisi_aktifasi: 50 }],
+  }, {});
+  assert.strictEqual(result.summary.previous.transaction_revenue, 100);
+  assert.strictEqual(result.summary.previous.activation_revenue, 50);
+  assert.strictEqual(result.summary.previous.mgm_revenue, 150);
+});
+test('§14.12 previous zero menghasilkan delta null (bukan Infinity)', () => {
+  const deltas = summaryDeltas({ transaction_revenue: 100, activation_revenue: 50, mgm_revenue: 150 }, { transaction_revenue: 0, activation_revenue: 0, mgm_revenue: 0 });
+  assert.strictEqual(deltas.transaction_revenue, null);
+  assert.strictEqual(deltas.activation_revenue, null);
+  assert.strictEqual(deltas.mgm_revenue, null);
+  assert.strictEqual(deltas.transaction_revenue_pct, null);
+  assert.strictEqual(deltas.activation_revenue_pct, null);
+  assert.strictEqual(deltas.mgm_revenue_pct, null);
+});
+
+console.log('\n-- §14.13-17 PB scorecard revenue: full outer universe, atribusi per sumber, no double count --');
+test('§14.13 PB transaction_revenue memakai AKTIVASI.upline', () => {
+  const reg = [{ id_outlet: 'A', upline: 'PB1', is_active: true }];
+  const akt = [{ id_outlet: 'A', upline: 'PB1', trx: 1, rev: 500 }, { id_outlet: 'B', upline: 'PB2', trx: 1, rev: 700 }];
+  const { rows } = buildPbScorecard(reg, akt, [], [], [], []);
+  assert.strictEqual(rows.find(r => r.pb === 'PB1').transaction_revenue, 500);
+  assert.strictEqual(rows.find(r => r.pb === 'PB2').transaction_revenue, 700);
+});
+test('§14.14 PB activation_revenue memakai DETAIL.upline', () => {
+  const reg = [{ id_outlet: 'A', upline: 'PB1', is_active: true }];
+  const det = [{ id_aktifasi: '1', id_outlet: 'A', upline: 'PB1', komisi_aktifasi: 300 }, { id_aktifasi: '2', id_outlet: 'B', upline: 'PB2', komisi_aktifasi: 400 }];
+  const { rows } = buildPbScorecard(reg, [], det, [], [], []);
+  assert.strictEqual(rows.find(r => r.pb === 'PB1').activation_revenue, 300);
+  assert.strictEqual(rows.find(r => r.pb === 'PB2').activation_revenue, 400);
+});
+test('§14.15 PB mgm_revenue = transaction_revenue + activation_revenue per PB', () => {
+  const reg = [{ id_outlet: 'A', upline: 'PB1', is_active: true }];
+  const akt = [{ id_outlet: 'A', upline: 'PB1', trx: 1, rev: 500 }];
+  const det = [{ id_aktifasi: '1', id_outlet: 'A', upline: 'PB1', komisi_aktifasi: 300 }];
+  const { rows } = buildPbScorecard(reg, akt, det, [], [], []);
+  const pb1 = rows.find(r => r.pb === 'PB1');
+  assert.strictEqual(pb1.mgm_revenue, 800);
+});
+test('§14.16 PB yang hanya muncul di satu sumber TIDAK hilang (full outer universe REG ∪ AKTIVASI ∪ DETAIL)', () => {
+  const reg = [{ id_outlet: 'A', upline: 'PB1', is_active: true }]; // PB1 hanya di REG
+  const akt = [{ id_outlet: 'B', upline: 'PB2', trx: 1, rev: 999 }]; // PB2 hanya di AKTIVASI
+  const det = [{ id_aktifasi: '1', id_outlet: 'C', upline: 'PB3', komisi_aktifasi: 111 }]; // PB3 hanya di DETAIL
+  const { rows } = buildPbScorecard(reg, akt, det, [], [], []);
+  assert.ok(rows.find(r => r.pb === 'PB1'), 'PB1 (hanya REG) harus tetap muncul');
+  assert.ok(rows.find(r => r.pb === 'PB2'), 'PB2 (hanya AKTIVASI) harus tetap muncul');
+  assert.ok(rows.find(r => r.pb === 'PB3'), 'PB3 (hanya DETAIL) harus tetap muncul');
+  assert.strictEqual(rows.find(r => r.pb === 'PB2').registrations, 0, 'PB2 tidak punya baris REG -> registrations 0, bukan hilang');
+  assert.strictEqual(rows.find(r => r.pb === 'PB2').transaction_revenue, 999);
+  assert.strictEqual(rows.find(r => r.pb === 'PB3').activation_revenue, 111);
+});
+test('§14.17 total SUM(pb.transaction_revenue) tidak melebihi total source (tidak ada double count akibat join)', () => {
+  const reg = [
+    { id_outlet: 'A', upline: 'PB1', is_active: true }, { id_outlet: 'B', upline: 'PB1', is_active: true },
+    { id_outlet: 'C', upline: 'PB2', is_active: false },
+  ];
+  const akt = [
+    { id_outlet: 'A', upline: 'PB1', trx: 2, rev: 1000 }, { id_outlet: 'B', upline: 'PB1', trx: 1, rev: 500 },
+    { id_outlet: 'C', upline: 'PB2', trx: 3, rev: 300 },
+  ];
+  const det = [
+    { id_aktifasi: '1', id_outlet: 'A', upline: 'PB1', komisi_aktifasi: 200 },
+    { id_aktifasi: '2', id_outlet: 'A', upline: 'PB1', komisi_aktifasi: 150 }, // outlet sama, 2 event aktivasi berbeda
+    { id_aktifasi: '3', id_outlet: 'C', upline: 'PB2', komisi_aktifasi: 90 },
+  ];
+  const totalTransactionRevenueSource = akt.reduce((s, a) => s + a.rev, 0);
+  const totalActivationRevenueSource = det.reduce((s, d) => s + d.komisi_aktifasi, 0);
+  const { rows } = buildPbScorecard(reg, akt, det, [], [], []);
+  const sumPbTransactionRevenue = rows.reduce((s, r) => s + r.transaction_revenue, 0);
+  const sumPbActivationRevenue = rows.reduce((s, r) => s + r.activation_revenue, 0);
+  assert.strictEqual(sumPbTransactionRevenue, totalTransactionRevenueSource, 'SUM per-PB transaction_revenue harus PERSIS sama dgn total source, tidak boleh lebih (double count)');
+  assert.strictEqual(sumPbActivationRevenue, totalActivationRevenueSource, 'SUM per-PB activation_revenue harus PERSIS sama dgn total source, tidak boleh lebih (double count)');
+});
+
+console.log('\n-- §14.18-20 Kontribusi revenue share & konsistensi formula --');
+test('§14.18 transaction_revenue_share_pct + activation_revenue_share_pct = 100% (toleransi pembulatan)', () => {
+  const result = buildPeriodAnalytics({
+    registrasi: augReg, aktivasi: augAkt, detail: augDet,
+    previousRegistrasi: [], previousAktivasi: [], previousDetail: [],
+  }, {});
+  const total = result.economics.transaction_revenue_share_pct + result.economics.activation_revenue_share_pct;
+  closeTo(total, 100, 0.01);
+});
+test('§14.19 toleransi uang maksimal Rp0,01 pada revenue_formula_consistent', () => {
+  const result = buildPeriodAnalytics({
+    registrasi: augReg, aktivasi: augAkt, detail: augDet,
+    previousRegistrasi: [], previousAktivasi: [], previousDetail: [],
+  }, {});
+  const diff = Math.abs(result.summary.current.mgm_revenue - (result.summary.current.transaction_revenue + result.summary.current.activation_revenue));
+  assert.ok(diff <= 0.01, `selisih formula harus <= Rp0,01, dapat ${diff}`);
+});
+test('§14.20 quality.revenue_formula_consistent = true utk data normal', () => {
+  const result = buildPeriodAnalytics({
+    registrasi: augReg, aktivasi: augAkt, detail: augDet,
+    previousRegistrasi: [], previousAktivasi: [], previousDetail: [],
+  }, {});
+  assert.strictEqual(result.quality.revenue_formula_consistent, true);
+  assert.strictEqual(result.quality.transaction_revenue_total, 1851802);
+  assert.strictEqual(result.quality.activation_revenue_total, 12614475);
+  assert.strictEqual(result.quality.mgm_revenue_total, 14466277);
+  assert.strictEqual(result.quality.transaction_revenue_source_rows, augAkt.length);
+  assert.strictEqual(result.quality.activation_revenue_source_rows, augDet.length);
 });
 
 console.log('\n-- 21-22. Cutoff current period TIDAK memotong data; previous tetap same-day --');
@@ -343,6 +535,25 @@ test('21. loadPeriodDataset current period dipanggil dengan cutoff NULL (tidak d
 test('22. Previous period tetap dibandingkan same-day (loadPreviousDataset dengan compareCutoff)', () => {
   assert.ok(/loadPreviousDataset\(comparePeriod,\s*compareCutoff\)/.test(routeSrc),
     'previous period harus tetap dipotong compareCutoff untuk perbandingan same-day yang adil');
+});
+
+console.log('\n-- §15 (item 1-14 spesifikasi frontend) — label, tooltip, format --');
+test('§15.8 Label generik "REVENUE" tanpa konteks / "TOTAL REVENUE" tanpa definisi / "KOMISI" sbg pengganti Revenue MGM tidak dipakai sbg KPI', () => {
+  assert.ok(!/label="REVENUE"/.test(frontendSrc), 'tidak boleh ada KPICard label="REVENUE" generik');
+  assert.ok(!/label="TOTAL REVENUE"/.test(frontendSrc), 'tidak boleh ada KPICard label="TOTAL REVENUE" tanpa definisi sumber');
+  assert.ok(!/label="KOMISI"/.test(frontendSrc), 'tidak boleh ada KPICard label="KOMISI" sbg pengganti Revenue MGM');
+});
+test('§15.12 Tooltip Revenue Transaksi/Aktivasi/MGM sesuai teks spesifikasi', () => {
+  assert.ok(revenueRowBody.includes('Dihitung dari SUM kolom Rev pada data AKTIVASI'), 'tooltip Revenue Transaksi harus menyebut SUM kolom Rev AKTIVASI');
+  assert.ok(revenueRowBody.includes('Dihitung dari SUM komisi_aktifasi pada data MGM AKTIV'), 'tooltip Revenue Aktivasi harus menyebut SUM komisi_aktifasi');
+  assert.ok(revenueRowBody.includes('Revenue Transaksi ditambah Revenue Aktivasi'), 'tooltip Revenue MGM harus menjelaskan penjumlahan dua komponen');
+});
+test('§15.13 Format rupiah pakai locale id-ID (fmtRp)', () => {
+  assert.ok(/function fmtRp\(n\) \{ return n == null \? '-' : 'Rp ' \+ nf\.format/.test(frontendSrc));
+  assert.ok(/new Intl\.NumberFormat\('id-ID'\)/.test(frontendSrc), 'formatter angka harus pakai locale id-ID');
+});
+test('§15 payment_mix TIDAK lagi memakai field ambigu mgm_revenue (sudah di-rename activation_revenue di backend+frontend)', () => {
+  assert.ok(!/payments\.map\(p => p\.mgm_revenue\)/.test(frontendSrc), 'payment_mix di frontend tidak boleh lagi mereferensikan field mgm_revenue lama');
 });
 
 console.log('\n-- 23-24. Frontend defensif: error boundary & 7 tab (lihat juga SSR render test terpisah) --');
@@ -363,7 +574,7 @@ test('23. safeArr/safeObj tetap dipakai di seluruh 7 tab (defensive defaults tid
 // Formula audit non-destructive (tetap dipertahankan dari rebuild sebelumnya)
 // ═══════════════════════════════════════════════════════════════
 console.log('\n-- Formula audit TIDAK menimpa nilai sumber komisi_aktifasi --');
-test('economics.formula_mismatch melaporkan selisih, mgm_revenue tetap pakai nilai sumber', () => {
+test('economics.formula_mismatch melaporkan selisih, activation_revenue tetap pakai nilai sumber', () => {
   const reg = [{ id_outlet: 'A', upline: 'PB1', is_active: true }];
   const akt = [{ id_outlet: 'A', upline: 'PB1', trx: 1, rev: 10 }];
   // Formula: biaya_aktifasi_2 - hpp - ongkos_kirim - fee_upline = 200-30-20-100=50
@@ -373,7 +584,9 @@ test('economics.formula_mismatch melaporkan selisih, mgm_revenue tetap pakai nil
     registrasi: reg, aktivasi: akt, detail: det,
     previousRegistrasi: [], previousAktivasi: [], previousDetail: [],
   }, {});
-  assert.strictEqual(result.summary.current.mgm_revenue, 999, 'revenue MGM resmi = nilai sumber, BUKAN hasil formula (50)');
+  assert.strictEqual(result.summary.current.activation_revenue, 999, 'revenue aktivasi resmi = nilai sumber, BUKAN hasil formula (50)');
+  assert.strictEqual(result.summary.current.transaction_revenue, 10, 'revenue transaksi = SUM aktivasi.rev, tidak tersentuh formula audit');
+  assert.strictEqual(result.summary.current.mgm_revenue, 1009, 'mgm_revenue = transaction_revenue(10) + activation_revenue(999)');
   assert.strictEqual(result.economics.formula_mismatch.length, 1, 'mismatch harus terdeteksi & dilaporkan');
   assert.strictEqual(result.economics.formula_mismatch[0].expected, 50);
   assert.strictEqual(result.economics.formula_mismatch[0].actual, 999);

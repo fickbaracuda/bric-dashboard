@@ -439,7 +439,7 @@ async function analyticsHandler(req, res) {
         FROM mgm_pa_aktivasi GROUP BY periode
       ), det AS (
         SELECT periode, COUNT(DISTINCT id_aktifasi) AS paid_activation_events,
-          COALESCE(SUM(fee_upline),0) AS fee_upline, COALESCE(SUM(komisi_aktifasi),0) AS mgm_revenue,
+          COALESCE(SUM(fee_upline),0) AS fee_upline, COALESCE(SUM(komisi_aktifasi),0) AS activation_revenue,
           COUNT(*) FILTER (WHERE komisi_aktifasi<0) AS negative_activation_count
         FROM mgm_pa_aktivasi_detail GROUP BY periode
       )
@@ -455,7 +455,7 @@ async function analyticsHandler(req, res) {
         COALESCE(akt.total_trx,0)::bigint AS total_trx,
         COALESCE(akt.transaction_revenue,0) AS transaction_revenue,
         COALESCE(det.fee_upline,0) AS fee_upline,
-        COALESCE(det.mgm_revenue,0) AS mgm_revenue,
+        COALESCE(det.activation_revenue,0) AS activation_revenue,
         COALESCE(det.negative_activation_count,0)::int AS negative_activation_count,
         GREATEST(reg.reg_cutoff, akt.akt_cutoff)::text AS cutoff_day_date
       FROM (SELECT DISTINCT periode FROM mgm_pa_registrasi UNION SELECT DISTINCT periode FROM mgm_pa_aktivasi) periods
@@ -466,6 +466,7 @@ async function analyticsHandler(req, res) {
     `);
     const monthly_trend = trendRes.rows.map(r => ({
       ...r,
+      mgm_revenue: Number(r.transaction_revenue) + Number(r.activation_revenue),
       activation_conversion_pct: safePct(r.active_registrations, r.registrations),
       avg_registration_per_pb: r.active_recruiting_pb > 0 ? r.registrations / r.active_recruiting_pb : null,
       cutoff_day: r.cutoff_day_date ? Number(r.cutoff_day_date.slice(8, 10)) : null,
