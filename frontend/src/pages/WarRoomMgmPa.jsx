@@ -55,7 +55,7 @@ const COLOR_PRIMARY = '#10B981';
 const COLOR_ACCENT  = '#059669';
 
 // Segmentasi PB — 5 status, cascade rule berbasis percentile aktual
-// (registrations P50, conversion P50/P75, inactive_registrations P75).
+// (registrations P50, conversion P50/P75, inactive_outlets P75).
 // Lihat backend/src/lib/mgm-utils.js classifyPb().
 const STATUS_COLORS = {
   'Growth Engine': '#059669',
@@ -156,28 +156,31 @@ function RevenueBreakdownRow(props) {
 // Grid tunggal 5-kolom seragam — 10 kartu tersusun TEPAT 2 baris x 5 kolom
 // di desktop (>=1200px), SEMUA kartu berukuran sama (tidak ada grid-column
 // span berbeda). SATU container grid, tidak ada container Revenue
-// terpisah, tidak ada Outlet Transacting berdiri sendiri.
-//   Baris 1: Total Registrasi, Sudah Aktif, Belum Aktif, Conversion
-//            Aktivasi, PB Aktif Merekrut
-//   Baris 2: Rata-rata Rekrut/PB, NMAT, Revenue Transaksi,
-//            Revenue Aktivasi, Revenue MGM
+// terpisah, tidak ada Outlet Transacting berdiri sendiri, tidak ada kartu
+// Conversion Aktivasi berdiri sendiri (digabung sbg sub-text di kartu
+// Sudah Aktif — lihat koreksi definisi aktif di backend/src/lib/mgm-utils.js).
+//   Baris 1: Total Registrasi, Sudah Aktif (+Conversion), Belum Aktif,
+//            PB Aktif Merekrut, Rata-rata Rekrut/PB
+//   Baris 2: NMAT, Transaksi NMAT, Revenue Transaksi, Revenue Aktivasi,
+//            Revenue MGM
 function CommandKpiGrid({ s }) {
   return (
     <div className="mgm-command-grid">
       <KPICard label="TOTAL REGISTRASI" value={fmt(s.current.registrations)} deltaVal={s.deltas.registrations} deltaKind="pct" color="#3B82F6"
-        tip="Jumlah agen/outlet unik pada data REG." />
-      <KPICard label="SUDAH AKTIF" value={fmt(s.current.active_registrations)} deltaVal={s.deltas.active_registrations} deltaKind="pct" color={COLOR_ACCENT}
-        tip="Agen registrasi dengan is_active = 1." />
-      <KPICard label="BELUM AKTIF" value={fmt(s.current.inactive_registrations)} deltaVal={s.deltas.inactive_registrations} deltaKind="pct" color="#F59E0B"
-        tip="Agen registrasi dengan is_active = 0." />
-      <KPICard label="CONVERSION AKTIVASI" value={nfPct(s.current.activation_conversion_pct)} deltaVal={s.deltas.activation_conversion_pct} deltaKind="pt" color="#059669"
-        tip="Sudah Aktif dibagi Total Registrasi." />
+        tip="Jumlah agen/outlet unik pada data REGISTRASI (REG) periode terpilih. Dihitung dari COUNT DISTINCT id_outlet." />
+      <KPICard label="SUDAH AKTIF" value={fmt(s.current.active_outlets)} deltaVal={s.deltas.active_outlets} deltaKind="pct" color={COLOR_ACCENT}
+        sub={`Conversion ${nfPct(s.current.activation_conversion_pct)}`}
+        tip="Outlet REGISTRASI yang berhasil dicocokkan (JOIN) ke data AKTIVASI dengan status is_active = true. BUKAN dari kolom is_active pada data REGISTRASI (sumber lama, sudah terbukti salah). Conversion Aktivasi = Sudah Aktif dibagi Total Registrasi, ditampilkan sbg sub-metrik pada kartu ini." />
+      <KPICard label="BELUM AKTIF" value={fmt(s.current.inactive_outlets)} deltaVal={s.deltas.inactive_outlets} deltaKind="pct" color="#F59E0B"
+        tip="Outlet REGISTRASI yang belum ditemukan sebagai aktif di data AKTIVASI. Dihitung sebagai Total Registrasi dikurangi Sudah Aktif — bukan dari kolom is_active pada data REGISTRASI." />
       <KPICard label="PB AKTIF MEREKRUT" value={fmt(s.current.active_recruiting_pb)} deltaVal={s.deltas.active_recruiting_pb} deltaKind="pct" color="#8B5CF6"
         tip="Jumlah upline/PB unik yang memiliki registrasi agen." />
       <KPICard label="RATA-RATA REKRUT / PB" value={fmt2(s.current.avg_registration_per_pb)} deltaVal={s.deltas.avg_registration_per_pb} deltaKind="pct" color="#F97316"
         tip="Total Registrasi dibagi PB Aktif Merekrut." />
       <KPICard label="NMAT" value={fmt(s.current.nmat_outlets)} deltaVal={s.deltas.nmat_outlets} deltaKind="pct" color="#3B82F6"
         tip="New Member Aktif Transaksi — outlet dengan tanggal aktifasi PADA bulan terpilih DAN trx > 0 pada periode tersebut. Beda dari Outlet Transacting (tab Transaction & Revenue), yang mencakup semua outlet bertransaksi tanpa melihat kapan diaktivasi." />
+      <KPICard label="TRANSAKSI NMAT" value={fmt(s.current.nmat_trx)} deltaVal={s.deltas.nmat_trx} deltaKind="pct" color="#0EA5E9"
+        tip="Total transaksi (SUM trx) HANYA dari outlet yang memenuhi syarat NMAT (aktivasi pada bulan terpilih DAN trx > 0). Berbeda dari Total TRX (tab Transaction & Revenue), yang menjumlahkan transaksi seluruh outlet tanpa syarat NMAT." />
       {buildRevenueCards({
         transactionRevenue: s.current.transaction_revenue,
         activationRevenue: s.current.activation_revenue,
@@ -341,17 +344,17 @@ function buildExecutiveInsight(data) {
     });
   }
 
-  if (current.active_registrations != null) {
+  if (current.active_outlets != null) {
     insights.push({
       icon: '✅',
-      text: `${fmt(current.active_registrations)} agen sudah aktif (${nfPct(current.activation_conversion_pct)} dari total registrasi).`,
+      text: `${fmt(current.active_outlets)} agen sudah aktif (${nfPct(current.activation_conversion_pct)} dari total registrasi).`,
     });
   }
 
-  if (current.inactive_registrations != null && current.inactive_registrations > 0) {
+  if (current.inactive_outlets != null && current.inactive_outlets > 0) {
     insights.push({
       icon: '⚠️',
-      text: `Backlog belum aktif: ${fmt(current.inactive_registrations)} agen registrasi masih menunggu aktivasi.`,
+      text: `Backlog belum aktif: ${fmt(current.inactive_outlets)} agen registrasi masih menunggu aktivasi.`,
     });
   }
 
@@ -380,6 +383,29 @@ function buildExecutiveInsight(data) {
     });
   } else {
     insights.push({ icon: 'ℹ️', text: `Belum ada PB dengan minimum ${MIN_VOLUME_FOR_BEST_CONVERSION} registrasi untuk dibandingkan conversion-nya.` });
+  }
+
+  const highVolLowConv = pbScorecard.filter(r => (r.registrations || 0) >= MIN_VOLUME_FOR_BEST_CONVERSION &&
+    (r.activation_conversion_pct == null || r.activation_conversion_pct < 50));
+  if (highVolLowConv.length > 0) {
+    const worst = [...highVolLowConv].sort((a, b) => (a.activation_conversion_pct ?? 0) - (b.activation_conversion_pct ?? 0))[0];
+    insights.push({
+      icon: '⚠️',
+      text: `${highVolLowConv.length} PB volume tinggi (≥${MIN_VOLUME_FOR_BEST_CONVERSION} registrasi) tapi conversion di bawah 50% — terburuk: ${worst.pb} (${nfPct(worst.activation_conversion_pct)}).`,
+    });
+  }
+
+  if (current.nmat_outlets != null) {
+    const d = deltas.nmat_outlets;
+    insights.push({
+      icon: 'ℹ️',
+      text: `NMAT (outlet baru aktif & bertransaksi bulan ini): ${fmt(current.nmat_outlets)} outlet, total ${fmt(current.nmat_trx)} transaksi${d == null ? '' : ` (${fmtDeltaPct(d)} vs periode lalu)`}.`,
+    });
+  }
+
+  const topByNmat = [...pbScorecard].filter(r => (r.nmat_outlets || 0) > 0).sort((a, b) => (b.nmat_outlets || 0) - (a.nmat_outlets || 0))[0];
+  if (topByNmat) {
+    insights.push({ icon: '🏆', text: `PB dengan NMAT terbesar: ${topByNmat.pb} (${fmt(topByNmat.nmat_outlets)} outlet, ${fmt(topByNmat.nmat_trx)} transaksi).` });
   }
 
   if (current.mgm_revenue != null) {
@@ -430,7 +456,7 @@ function CommandCenterTab({ data }) {
           <div className="mgm-funnel">
             {[
               { label: 'Total Registrasi', val: cohortFunnel.registrations, color: '#3B82F6' },
-              { label: 'Sudah Aktif', val: cohortFunnel.active_registrations, color: COLOR_ACCENT, sub: nfPct(cohortFunnel.activation_conversion_pct) },
+              { label: 'Sudah Aktif', val: cohortFunnel.active_outlets, color: COLOR_ACCENT, sub: nfPct(cohortFunnel.activation_conversion_pct) },
               { label: 'Sudah Transaksi', val: cohortFunnel.registered_and_transacting, color: '#7C3AED', sub: nfPct(cohortFunnel.registered_to_transacting_pct) },
             ].map((f, i) => (
               <div key={i} className="mgm-funnel-step">
@@ -444,9 +470,9 @@ function CommandCenterTab({ data }) {
             <div className="mgm-funnel-step">
               <div className="mgm-funnel-bar" style={{ background: '#F59E0B15', borderLeft: '4px solid #F59E0B' }}>
                 <span>Belum Aktif</span>
-                <strong style={{ color: '#F59E0B' }}>{fmt(cohortFunnel.inactive_registrations)}</strong>
+                <strong style={{ color: '#F59E0B' }}>{fmt(cohortFunnel.inactive_outlets)}</strong>
               </div>
-              <div className="mgm-funnel-sub">Total Registrasi − Sudah Aktif − Unknown</div>
+              <div className="mgm-funnel-sub">Total Registrasi − Sudah Aktif</div>
             </div>
           </div>
         </ChartCard>
@@ -550,9 +576,10 @@ function PbScorecardTab({ data, onSelectPb }) {
   function exportCsv() {
     const csv = toCsv(rows, [
       { label: 'PB', value: 'pb' }, { label: 'Status', value: 'status' },
-      { label: 'Registrasi', value: 'registrations' }, { label: 'Sudah Aktif', value: 'active_registrations' },
-      { label: 'Belum Aktif', value: 'inactive_registrations' }, { label: 'Unknown', value: 'unknown_active_status' },
+      { label: 'Registrasi', value: 'registrations' }, { label: 'Sudah Aktif', value: 'active_outlets' },
+      { label: 'Belum Aktif', value: 'inactive_outlets' },
       { label: 'Conversion (%)', value: r => r.activation_conversion_pct },
+      { label: 'NMAT', value: 'nmat_outlets' }, { label: 'Transaksi NMAT', value: 'nmat_trx' },
       { label: 'Revenue Transaksi', value: 'transaction_revenue' },
       { label: 'Revenue Aktivasi', value: 'activation_revenue' },
       { label: 'Revenue MGM', value: 'mgm_revenue' },
@@ -592,9 +619,11 @@ function PbScorecardTab({ data, onSelectPb }) {
             <thead><tr>
               <th>PB</th>
               <Th label="Registrasi" field="registrations" right />
-              <Th label="Sudah Aktif" field="active_registrations" right />
-              <Th label="Belum Aktif" field="inactive_registrations" right />
+              <Th label="Sudah Aktif" field="active_outlets" right />
+              <Th label="Belum Aktif" field="inactive_outlets" right />
               <Th label="Conversion Aktivasi" field="activation_conversion_pct" right />
+              <Th label="NMAT" field="nmat_outlets" right />
+              <Th label="Transaksi NMAT" field="nmat_trx" right />
               <Th label="Revenue Transaksi" field="transaction_revenue" right />
               <Th label="Revenue Aktivasi" field="activation_revenue" right />
               <Th label="Revenue MGM" field="mgm_revenue" right />
@@ -606,9 +635,11 @@ function PbScorecardTab({ data, onSelectPb }) {
                 <tr key={r.pb} onClick={() => onSelectPb(r.pb)} style={{ cursor: 'pointer' }}>
                   <td><code>{r.pb}</code></td>
                   <td style={{ textAlign: 'right' }}>{fmt(r.registrations)}</td>
-                  <td style={{ textAlign: 'right' }}>{fmt(r.active_registrations)}</td>
-                  <td style={{ textAlign: 'right' }}>{fmt(r.inactive_registrations)}</td>
+                  <td style={{ textAlign: 'right' }}>{fmt(r.active_outlets)}</td>
+                  <td style={{ textAlign: 'right' }}>{fmt(r.inactive_outlets)}</td>
                   <td style={{ textAlign: 'right' }}>{nfPct(r.activation_conversion_pct)}</td>
+                  <td style={{ textAlign: 'right' }}>{fmt(r.nmat_outlets)}</td>
+                  <td style={{ textAlign: 'right' }}>{fmt(r.nmat_trx)}</td>
                   <td style={{ textAlign: 'right' }}>{fmtRp(r.transaction_revenue)}</td>
                   <td style={{ textAlign: 'right' }}>{fmtRp(r.activation_revenue)}</td>
                   <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmtRp(r.mgm_revenue)}</td>
@@ -616,7 +647,7 @@ function PbScorecardTab({ data, onSelectPb }) {
                   <td><StatusPill status={r.status} /></td>
                 </tr>
               ))}
-              {!rows.length && <tr><td colSpan={10} style={{ textAlign: 'center', padding: 20, color: 'var(--text-4)' }}>Belum ada data</td></tr>}
+              {!rows.length && <tr><td colSpan={12} style={{ textAlign: 'center', padding: 20, color: 'var(--text-4)' }}>Belum ada data</td></tr>}
             </tbody>
           </table>
         </div>
@@ -703,7 +734,7 @@ function FunnelAgingTab({ data, periode }) {
   const p1Queue = safeArr(safeObj(data.derived_queues).p1);
   const regNotActive = p1Queue.filter(q => q.type === 'registered_not_active');
   const pbHighBacklog = p1Queue.filter(q => q.type === 'pb_high_inactive_backlog');
-  const unknownActive = p0Queue.filter(q => q.type === 'unknown_active_status');
+  const uplineMismatch = p0Queue.filter(q => q.type === 'upline_mismatch');
   const cohortFunnel = safeObj(data.cohort_funnel);
   const operationalVolume = safeObj(data.operational_volume);
 
@@ -717,12 +748,12 @@ function FunnelAgingTab({ data, periode }) {
             columns={[{ key: 'label', label: 'Tahap' }, { key: 'val', label: 'Jumlah', right: true }]}
             rows={[
               { label: 'Total Registrasi', val: fmt(cohortFunnel.registrations) },
-              { label: 'Sudah Aktif', val: fmt(cohortFunnel.active_registrations) },
-              { label: 'Belum Aktif', val: fmt(cohortFunnel.inactive_registrations) },
-              { label: 'Status Tidak Diketahui', val: fmt(cohortFunnel.unknown_active_status) },
+              { label: 'Sudah Aktif', val: fmt(cohortFunnel.active_outlets) },
+              { label: 'Belum Aktif', val: fmt(cohortFunnel.inactive_outlets) },
               { label: 'Sudah Transaksi', val: fmt(cohortFunnel.registered_and_transacting) },
               { label: 'Activated Outlets (info AKTIVASI)', val: fmt(operationalVolume.activated_outlets) },
               { label: 'Transacting Outlets (info AKTIVASI)', val: fmt(operationalVolume.transacting_outlets) },
+              { label: 'NMAT (outlet baru aktif & transaksi)', val: fmt(operationalVolume.nmat_outlets) },
             ]}
           />
         </ChartCard>
@@ -750,17 +781,22 @@ function FunnelAgingTab({ data, periode }) {
         <DataTable
           columns={[
             { key: 'pb', label: 'PB' },
-            { key: 'inactive_registrations', label: 'Belum Aktif', right: true },
+            { key: 'inactive_outlets', label: 'Belum Aktif', right: true },
             { key: 'registrations', label: 'Total Registrasi', right: true },
           ]}
           rows={pbHighBacklog}
         />
       </ChartCard>
 
-      <ChartCard title={`Data Quality — Status Tidak Diketahui (is_active NULL) (${unknownActive.length})`}>
+      <ChartCard title={`Data Quality — Upline Mismatch antar Sumber (${uplineMismatch.length})`}>
         <DataTable
-          columns={[{ key: 'id_outlet', label: 'ID Outlet' }, { key: 'upline', label: 'PB' }]}
-          rows={unknownActive.slice(0, 100)}
+          columns={[
+            { key: 'id_outlet', label: 'ID Outlet' },
+            { key: 'upline_reg', label: 'Upline (REG)' },
+            { key: 'upline_akt', label: 'Upline (AKTIVASI)' },
+            { key: 'upline_detail', label: 'Upline (DETAIL)' },
+          ]}
+          rows={uplineMismatch.slice(0, 100)}
         />
       </ChartCard>
 
@@ -786,8 +822,8 @@ function TransactionRevenueTab({ data }) {
   // bukan revenue transaksi). null kalau denominator 0.
   const totalTrx = operationalVolume.total_trx;
   const transactingOutlets = operationalVolume.transacting_outlets;
-  const revenuePerTransaction = totalTrx > 0 ? current.transaction_revenue / totalTrx : null;
-  const revenuePerTransactingOutlet = transactingOutlets > 0 ? current.transaction_revenue / transactingOutlets : null;
+  const revenuePerTransaction = totalTrx > 0 && current.transaction_revenue != null ? current.transaction_revenue / totalTrx : null;
+  const revenuePerTransactingOutlet = transactingOutlets > 0 && current.transaction_revenue != null ? current.transaction_revenue / transactingOutlets : null;
 
   return (
     <div className="wrd-tab-content">
