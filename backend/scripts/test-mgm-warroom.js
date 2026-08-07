@@ -51,7 +51,7 @@ const {
   safeNumber, safeBoolean, safePct, pctDelta, pointDelta, dedupeLastWins,
   classifyPb, computeSegmentationThresholds,
   computeRegistrationFunnel, computeActivationRevenue, computeTransactionInfo,
-  computeSummary, summaryDeltas,
+  computeSummary, summaryDeltas, isDateInPeriod, computeNmatOutlets,
   buildPbScorecard, buildPeriodAnalytics,
 } = require('../src/lib/mgm-utils');
 
@@ -296,10 +296,15 @@ test('12. "FEE UPLINE" tidak muncul di KPI utama Command Center', () => {
 test('13. Label "ACTIVATION COMMISSION" tidak muncul sama sekali (diganti Revenue Aktivasi / Revenue MGM)', () => {
   assert.ok(!/ACTIVATION COMMISSION/i.test(frontendSrc), 'label lama harus sudah diganti di seluruh halaman');
 });
-test('13b. 7 KPI utama non-revenue ada di Command Center: Total Registrasi, Sudah Aktif, Belum Aktif, Conversion Aktivasi, PB Aktif Merekrut, Rata-rata Rekrut/PB, Outlet Transacting', () => {
-  for (const label of ['TOTAL REGISTRASI', 'SUDAH AKTIF', 'BELUM AKTIF', 'CONVERSION AKTIVASI', 'PB AKTIF MEREKRUT', 'RATA-RATA REKRUT', 'OUTLET TRANSACTING']) {
+test('13b. 7 KPI utama non-revenue ada di Command Center: Total Registrasi, Sudah Aktif, Belum Aktif, Conversion Aktivasi, PB Aktif Merekrut, Rata-rata Rekrut/PB, NMAT', () => {
+  for (const label of ['TOTAL REGISTRASI', 'SUDAH AKTIF', 'BELUM AKTIF', 'CONVERSION AKTIVASI', 'PB AKTIF MEREKRUT', 'RATA-RATA REKRUT', 'NMAT']) {
     assert.ok(mainKpiSlice.includes(label), `KPI utama harus memuat label "${label}"`);
   }
+});
+test('13b2. "OUTLET TRANSACTING" sudah diganti NMAT di Command Center, TAPI tetap ada di tab Transaction & Revenue (bukan dihapus total)', () => {
+  assert.ok(!mainKpiSlice.includes('OUTLET TRANSACTING'), 'Command Center tidak boleh lagi memakai label OUTLET TRANSACTING (diganti NMAT)');
+  assert.ok(mainKpiSlice.includes('s.current.nmat_outlets'), 'kartu NMAT harus membaca field summary.current.nmat_outlets, bukan transacting_outlets');
+  assert.ok(frontendSrc.includes('OUTLET TRANSACTING'), 'label OUTLET TRANSACTING tetap harus ada di tab Transaction & Revenue (field transacting_outlets dipertahankan sbg info)');
 });
 test('13c. "CONVERTED REGISTRATIONS" (KPI lama) sudah dihapus dari KPI utama', () => {
   assert.ok(!/CONVERTED REGISTRATIONS/.test(commandCenterKpiArea));
@@ -340,7 +345,7 @@ test('13h. Grid KPI utama Command Center — SATU container 5-kolom SERAGAM, tep
   // Urutan label PERSIS 10 kartu sesuai spesifikasi — baris 1 lalu baris 2.
   const expectedOrder = [
     'TOTAL REGISTRASI', 'SUDAH AKTIF', 'BELUM AKTIF', 'CONVERSION AKTIVASI', 'PB AKTIF MEREKRUT',
-    'RATA-RATA REKRUT', 'OUTLET TRANSACTING', 'REVENUE TRANSAKSI', 'REVENUE AKTIVASI', 'REVENUE MGM',
+    'RATA-RATA REKRUT', 'NMAT', 'REVENUE TRANSAKSI', 'REVENUE AKTIVASI', 'REVENUE MGM',
   ];
   const commandCenterFullBody = mainKpiSlice.replace('buildRevenueCards({', 'buildRevenueCards({' + revenueCardsBody);
   const positions = expectedOrder.map(label => commandCenterFullBody.indexOf(label));
@@ -589,6 +594,86 @@ test('§14.20 quality.revenue_formula_consistent = true utk data normal', () => 
   assert.strictEqual(result.quality.activation_revenue_source_rows, augDet.length);
 });
 
+console.log('\n-- §NMAT (New Member Aktif Transaksi) — 5 skenario contoh spesifikasi bisnis --');
+test('NMAT.1 Aktivasi 2 Agustus, Trx Agustus > 0 -> NMAT Agustus', () => {
+  const akt = [{ id_outlet: 'A', tanggal_aktifasi: '2026-08-02', trx: 5 }];
+  assert.strictEqual(computeNmatOutlets(akt, '2026-08-01'), 1);
+});
+test('NMAT.2 Aktivasi 25 Juli, Trx Agustus > 0 -> BUKAN NMAT Agustus', () => {
+  const akt = [{ id_outlet: 'A', tanggal_aktifasi: '2026-07-25', trx: 5 }];
+  assert.strictEqual(computeNmatOutlets(akt, '2026-08-01'), 0);
+});
+test('NMAT.3 Aktivasi 2 Agustus, Trx = 0 -> BUKAN NMAT Agustus', () => {
+  const akt = [{ id_outlet: 'A', tanggal_aktifasi: '2026-08-02', trx: 0 }];
+  assert.strictEqual(computeNmatOutlets(akt, '2026-08-01'), 0);
+});
+test('NMAT.4 Aktivasi 2 Agustus, baru transaksi September -> BUKAN NMAT Agustus DAN BUKAN NMAT September', () => {
+  // Baris ini merepresentasikan snapshot AKTIVASI bulan Agustus dgn trx=0 di Agustus
+  // (baru transaksi bulan depan) -> bukan NMAT Agustus (trx=0 saat itu).
+  const aktAgustus = [{ id_outlet: 'A', tanggal_aktifasi: '2026-08-02', trx: 0 }];
+  assert.strictEqual(computeNmatOutlets(aktAgustus, '2026-08-01'), 0, 'bukan NMAT Agustus (trx masih 0 di Agustus)');
+  // Snapshot AKTIVASI bulan September: trx sudah >0, tapi tanggal_aktifasi TETAP Agustus
+  // (outlet tsb bukan "baru diaktivasi" di September) -> bukan NMAT September juga.
+  const aktSeptember = [{ id_outlet: 'A', tanggal_aktifasi: '2026-08-02', trx: 3 }];
+  assert.strictEqual(computeNmatOutlets(aktSeptember, '2026-09-01'), 0, 'bukan NMAT September (tanggal_aktifasi bukan di bulan September)');
+});
+test('NMAT.5 Aktivasi Agustus tetapi dashboard memilih Juli -> BUKAN NMAT Juli', () => {
+  const akt = [{ id_outlet: 'A', tanggal_aktifasi: '2026-08-02', trx: 5 }];
+  assert.strictEqual(computeNmatOutlets(akt, '2026-07-01'), 0);
+});
+test('NMAT.6 id_outlet kosong tidak dihitung', () => {
+  const akt = [{ id_outlet: '', tanggal_aktifasi: '2026-08-02', trx: 5 }, { id_outlet: null, tanggal_aktifasi: '2026-08-02', trx: 5 }];
+  assert.strictEqual(computeNmatOutlets(akt, '2026-08-01'), 0);
+});
+test('NMAT.7 Setiap id_outlet dihitung SATU KALI meski ada baris duplikat', () => {
+  const akt = [
+    { id_outlet: 'A', tanggal_aktifasi: '2026-08-02', trx: 5 },
+    { id_outlet: 'A', tanggal_aktifasi: '2026-08-02', trx: 5 },
+  ];
+  assert.strictEqual(computeNmatOutlets(akt, '2026-08-01'), 1);
+});
+test('NMAT.8 isDateInPeriod menangani akhir bulan/awal bulan berikutnya dengan benar', () => {
+  assert.strictEqual(isDateInPeriod('2026-08-31', '2026-08-01'), true, 'akhir bulan Agustus masih termasuk Agustus');
+  assert.strictEqual(isDateInPeriod('2026-09-01', '2026-08-01'), false, '1 September sudah bukan Agustus');
+  assert.strictEqual(isDateInPeriod('2026-08-01', '2026-08-01'), true, 'awal bulan Agustus termasuk Agustus');
+  assert.strictEqual(isDateInPeriod(null, '2026-08-01'), false, 'tanggal null -> false, bukan error');
+  assert.strictEqual(isDateInPeriod('2026-08-02', null), false, 'periodStart null -> false, bukan error');
+});
+test('NMAT.9 TIDAK memakai tanggal_registrasi/REG.is_active/id_aktifasi — hanya AKTIVASI.tanggal_aktifasi & trx', () => {
+  // REG (registrasi) & DETAIL (id_aktifasi) sengaja dikosongkan/diisi data yang
+  // seharusnya TIDAK berpengaruh ke NMAT sama sekali — hanya AKTIVASI yang dipakai.
+  const reg = [{ id_outlet: 'A', is_active: false, tanggal_registrasi: '2026-01-01' }]; // is_active=false, tapi TIDAK relevan utk NMAT
+  const akt = [{ id_outlet: 'A', tanggal_aktifasi: '2026-08-02', trx: 5 }];
+  const det = []; // TIDAK ADA id_aktifasi sama sekali -> NMAT tetap 1
+  const summary = computeSummary(reg, akt, det, '2026-08-01');
+  assert.strictEqual(summary.nmat_outlets, 1, 'NMAT harus 1 walau REG.is_active=false dan tidak ada DETAIL/id_aktifasi sama sekali');
+});
+test('NMAT.10 Command Center (summary.current & operational_volume) menerima nmat_outlets dari buildPeriodAnalytics dgn currentPeriod', () => {
+  const akt = [
+    { id_outlet: 'A', upline: 'PB1', tanggal_aktifasi: '2026-08-02', trx: 5, rev: 1000 }, // NMAT
+    { id_outlet: 'B', upline: 'PB1', tanggal_aktifasi: '2026-07-25', trx: 5, rev: 1000 }, // bukan NMAT (aktivasi Juli)
+  ];
+  const result = buildPeriodAnalytics({
+    registrasi: [], aktivasi: akt, detail: [],
+    previousRegistrasi: [], previousAktivasi: [], previousDetail: [],
+  }, { currentPeriod: '2026-08-01' });
+  assert.strictEqual(result.summary.current.nmat_outlets, 1);
+  assert.strictEqual(result.summary.current.transacting_outlets, 2, 'transacting_outlets TIDAK berubah — tetap hitung semua outlet trx>0 tanpa syarat tanggal aktivasi');
+  assert.strictEqual(result.operational_volume.nmat_outlets, 1);
+});
+test('NMAT.11 previous period NMAT dihitung dari previousPeriod(currentPeriod), bukan currentPeriod yang sama', () => {
+  const prevAkt = [{ id_outlet: 'X', upline: 'PB1', tanggal_aktifasi: '2026-07-10', trx: 3, rev: 500 }];
+  const result = buildPeriodAnalytics({
+    registrasi: [], aktivasi: [], detail: [],
+    previousRegistrasi: [], previousAktivasi: prevAkt, previousDetail: [],
+  }, { currentPeriod: '2026-08-01' });
+  assert.strictEqual(result.summary.previous.nmat_outlets, 1, 'previous.nmat_outlets harus dihitung thd bulan Juli (previousPeriod dari Agustus), bukan 0');
+});
+test('NMAT.12 nmat_outlets muncul di summary.deltas (pakai pctDelta, bukan null selalu)', () => {
+  const deltas = summaryDeltas({ nmat_outlets: 100 }, { nmat_outlets: 80 });
+  assert.strictEqual(deltas.nmat_outlets, 25, '100 vs 80 -> +25%');
+});
+
 console.log('\n-- 21-22. Cutoff current period TIDAK memotong data; previous tetap same-day --');
 const routePath = path.join(__dirname, '../src/routes/warroom-mgm.js');
 const routeSrc = fs.readFileSync(routePath, 'utf8');
@@ -601,6 +686,10 @@ test('21. loadPeriodDataset current period dipanggil dengan cutoff NULL (tidak d
 test('22. Previous period tetap dibandingkan same-day (loadPreviousDataset dengan compareCutoff)', () => {
   assert.ok(/loadPreviousDataset\(comparePeriod,\s*compareCutoff\)/.test(routeSrc),
     'previous period harus tetap dipotong compareCutoff untuk perbandingan same-day yang adil');
+});
+test('NMAT.13 route memanggil buildPeriodAnalytics dgn currentPeriod: requestedPeriod (wajib utk NMAT)', () => {
+  assert.ok(/buildPeriodAnalytics\(\{[\s\S]*?currentPeriod:\s*requestedPeriod/.test(routeSrc),
+    'analyticsHandler harus meneruskan currentPeriod: requestedPeriod ke buildPeriodAnalytics, kalau tidak nmat_outlets akan selalu 0');
 });
 
 console.log('\n-- §15 (item 1-14 spesifikasi frontend) — label, tooltip, format --');

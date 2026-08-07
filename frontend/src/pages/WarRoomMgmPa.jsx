@@ -159,7 +159,7 @@ function RevenueBreakdownRow(props) {
 // terpisah, tidak ada Outlet Transacting berdiri sendiri.
 //   Baris 1: Total Registrasi, Sudah Aktif, Belum Aktif, Conversion
 //            Aktivasi, PB Aktif Merekrut
-//   Baris 2: Rata-rata Rekrut/PB, Outlet Transacting, Revenue Transaksi,
+//   Baris 2: Rata-rata Rekrut/PB, NMAT, Revenue Transaksi,
 //            Revenue Aktivasi, Revenue MGM
 function CommandKpiGrid({ s }) {
   return (
@@ -176,8 +176,8 @@ function CommandKpiGrid({ s }) {
         tip="Jumlah upline/PB unik yang memiliki registrasi agen." />
       <KPICard label="RATA-RATA REKRUT / PB" value={fmt2(s.current.avg_registration_per_pb)} deltaVal={s.deltas.avg_registration_per_pb} deltaKind="pct" color="#F97316"
         tip="Total Registrasi dibagi PB Aktif Merekrut." />
-      <KPICard label="OUTLET TRANSACTING" value={fmt(s.current.transacting_outlets)} deltaVal={s.deltas.transacting_outlets} deltaKind="pct" color="#3B82F6"
-        tip="Outlet pada data transaksi dengan Trx > 0." sub="Informasi pendukung (AKTIVASI)" />
+      <KPICard label="NMAT" value={fmt(s.current.nmat_outlets)} deltaVal={s.deltas.nmat_outlets} deltaKind="pct" color="#3B82F6"
+        tip="New Member Aktif Transaksi — outlet dengan tanggal aktifasi PADA bulan terpilih DAN trx > 0 pada periode tersebut. Beda dari Outlet Transacting (tab Transaction & Revenue), yang mencakup semua outlet bertransaksi tanpa melihat kapan diaktivasi." />
       {buildRevenueCards({
         transactionRevenue: s.current.transaction_revenue,
         activationRevenue: s.current.activation_revenue,
