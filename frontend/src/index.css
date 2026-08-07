@@ -6521,10 +6521,11 @@ body {
    typography via .mgm-kpi-emphasis, bukan lebar kolom). Ini SATU-SATUNYA
    grid — tidak ada container Revenue terpisah, tidak ada Outlet
    Transacting berdiri sendiri, tidak ada baris ketiga.
-     Baris 1 (>=1200px): Total Registrasi, Sudah Aktif, Belum Aktif,
-       Conversion Aktivasi, PB Aktif Merekrut
-     Baris 2 (>=1200px): Rata-rata Rekrut/PB, Outlet Transacting,
-       Revenue Transaksi, Revenue Aktivasi, Revenue MGM */
+     Baris 1 (>=1200px): Total Registrasi, Sudah Aktif (+Conversion
+       Aktivasi sbg sub-text), Belum Aktif, PB Aktif Merekrut,
+       Rata-rata Rekrut/PB
+     Baris 2 (>=1200px): NMAT, Transaksi NMAT, Revenue Transaksi,
+       Revenue Aktivasi, Revenue MGM */
 .mgm-command-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; align-items: stretch; }
 @media (max-width: 1199px) and (min-width: 700px) {
   .mgm-command-grid { grid-template-columns: repeat(3, 1fr); }

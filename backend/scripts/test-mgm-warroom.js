@@ -50,8 +50,9 @@ const {
 const {
   safeNumber, safeBoolean, safePct, pctDelta, pointDelta, dedupeLastWins,
   classifyPb, computeSegmentationThresholds,
-  computeRegistrationFunnel, computeActivationRevenue, computeTransactionInfo,
-  computeSummary, summaryDeltas, isDateInPeriod, computeNmatOutlets,
+  computeRegistrationFunnel, computeActiveOutletMatch, computeActiveOutletMatchDetailed,
+  computeActivationMatchQuality, computeActivationRevenue, computeTransactionInfo,
+  computeSummary, summaryDeltas, isDateInPeriod, computeNmatOutlets, computeNmatDetails,
   buildPbScorecard, buildPeriodAnalytics,
 } = require('../src/lib/mgm-utils');
 
@@ -150,36 +151,103 @@ test('9b. pointDelta null jika salah satu rate null', () => {
 // KOREKSI MODEL BISNIS — test wajib §15 (item 1-24)
 // ═══════════════════════════════════════════════════════════════
 
-console.log('\n-- 1-4. Registration funnel — partisi is_active dari mgm_pa_registrasi --');
-test('1. registrations = COUNT DISTINCT REG.id_outlet', () => {
+console.log('\n-- B1-B24. KOREKSI Sudah Aktif/Belum Aktif — JOIN REG<->AKTIVASI (angka 718 lama TERBUKTI SALAH) --');
+test('B1. REG.is_active TIDAK PERNAH dipakai — mengubahnya tidak mengubah active_outlets sama sekali', () => {
+  const akt = [{ id_outlet: 'A', is_active: true, trx: 0 }];
+  const regTrueIsActive  = [{ id_outlet: 'A', upline: 'PB1', is_active: true }];
+  const regFalseIsActive = [{ id_outlet: 'A', upline: 'PB1', is_active: false }];
+  const regNullIsActive  = [{ id_outlet: 'A', upline: 'PB1', is_active: null }];
+  const a1 = computeActiveOutletMatch(regTrueIsActive, akt).active_outlets;
+  const a2 = computeActiveOutletMatch(regFalseIsActive, akt).active_outlets;
+  const a3 = computeActiveOutletMatch(regNullIsActive, akt).active_outlets;
+  assert.strictEqual(a1, 1); assert.strictEqual(a2, 1); assert.strictEqual(a3, 1);
+});
+test('B2. MGM AKTIV(DETAIL).is_active TIDAK PERNAH dipakai — computeActiveOutletMatch tidak menyentuh tabel detail sama sekali', () => {
+  const reg = [{ id_outlet: 'A', upline: 'PB1' }];
+  const akt = [{ id_outlet: 'A', is_active: true }];
+  // fungsi hanya menerima (regRows, actRows) — DETAIL tidak pernah jadi parameter,
+  // secara struktural tidak mungkin terpengaruh field is_active pada DETAIL.
+  assert.strictEqual(computeActiveOutletMatch.length, 2, 'computeActiveOutletMatch hanya menerima regRows & actRows');
+  assert.strictEqual(computeActiveOutletMatch(reg, akt).active_outlets, 1);
+});
+test('B3. AKTIVASI.is_active = true WAJIB — outlet dgn AKTIVASI.is_active=false/null TIDAK dihitung aktif walau ada di REG', () => {
   const reg = [
-    { id_outlet: 'A', upline: 'PB1', is_active: true },
-    { id_outlet: 'B', upline: 'PB1', is_active: false },
-    { id_outlet: 'A', upline: 'PB1', is_active: true }, // duplikat id_outlet -> tetap 1
+    { id_outlet: 'A', upline: 'PB1' }, { id_outlet: 'B', upline: 'PB1' }, { id_outlet: 'C', upline: 'PB1' },
   ];
-  assert.strictEqual(computeRegistrationFunnel(reg).registrations, 2);
+  const akt = [
+    { id_outlet: 'A', is_active: true },
+    { id_outlet: 'B', is_active: false },
+    { id_outlet: 'C', is_active: null },
+  ];
+  assert.strictEqual(computeActiveOutletMatch(reg, akt).active_outlets, 1, 'hanya A yang AKTIVASI.is_active=true');
 });
-test('2. active_registrations pakai REG.is_active === true', () => {
-  const reg = [{ id_outlet: 'A', upline: 'PB1', is_active: true }, { id_outlet: 'B', upline: 'PB1', is_active: false }];
-  assert.strictEqual(computeRegistrationFunnel(reg).active_registrations, 1);
+test('B4. Definisi resmi: REG.id_outlet DIMATCH ke AKTIVASI.id_outlet (JOIN), bukan union/independen', () => {
+  const reg = [{ id_outlet: 'A', upline: 'PB1' }, { id_outlet: 'B', upline: 'PB1' }];
+  const akt = [{ id_outlet: 'A', is_active: true }, { id_outlet: 'Z', is_active: true }]; // Z tidak ada di REG
+  const m = computeActiveOutletMatch(reg, akt);
+  assert.strictEqual(m.active_outlets, 1, 'hanya A (match REG & AKTIVASI aktif) — Z (AKTIVASI only) tidak dihitung dari sisi REG');
+  assert.strictEqual(m.inactive_outlets, 1, 'B ada di REG tapi tidak match AKTIVASI aktif manapun');
 });
-test('3. inactive_registrations pakai REG.is_active === false', () => {
-  const reg = [{ id_outlet: 'A', upline: 'PB1', is_active: true }, { id_outlet: 'B', upline: 'PB1', is_active: false }];
-  assert.strictEqual(computeRegistrationFunnel(reg).inactive_registrations, 1);
-});
-test('4. unknown_active_status pakai is_active === null', () => {
-  const reg = [{ id_outlet: 'A', upline: 'PB1', is_active: null }, { id_outlet: 'B', upline: 'PB1', is_active: true }];
-  assert.strictEqual(computeRegistrationFunnel(reg).unknown_active_status, 1);
-});
-test('5. active + inactive + unknown = registrations (invariant)', () => {
+test('B5. inactive_outlets = registrations MINUS active-matched (bukan REG.is_active=false)', () => {
   const reg = [
-    { id_outlet: 'A', upline: 'PB1', is_active: true },
-    { id_outlet: 'B', upline: 'PB1', is_active: false },
-    { id_outlet: 'C', upline: 'PB1', is_active: null },
-    { id_outlet: 'D', upline: 'PB2', is_active: true },
+    { id_outlet: 'A', upline: 'PB1', is_active: false }, // is_active REG sengaja false tapi AKTIVASI aktif -> tetap dihitung AKTIF
+    { id_outlet: 'B', upline: 'PB1', is_active: true },  // is_active REG sengaja true tapi tidak match AKTIVASI aktif -> BELUM AKTIF
   ];
-  const f = computeRegistrationFunnel(reg);
-  assert.strictEqual(f.active_registrations + f.inactive_registrations + f.unknown_active_status, f.registrations);
+  const akt = [{ id_outlet: 'A', is_active: true }];
+  const m = computeActiveOutletMatch(reg, akt);
+  assert.strictEqual(m.active_outlets, 1, 'A aktif krn AKTIVASI match, walau REG.is_active=false');
+  assert.strictEqual(m.inactive_outlets, 1, 'B belum aktif krn tidak match AKTIVASI aktif, walau REG.is_active=true');
+});
+test('B6. active_outlets + inactive_outlets = registrations SELALU (invariant partisi biner, tanpa bucket unknown)', () => {
+  const reg = [
+    { id_outlet: 'A', upline: 'PB1' }, { id_outlet: 'B', upline: 'PB1' },
+    { id_outlet: 'C', upline: 'PB1' }, { id_outlet: 'D', upline: 'PB2' },
+  ];
+  const akt = [{ id_outlet: 'A', is_active: true }, { id_outlet: 'D', is_active: true }];
+  const m = computeActiveOutletMatch(reg, akt);
+  assert.strictEqual(m.registrations, 4);
+  assert.strictEqual(m.active_outlets + m.inactive_outlets, m.registrations);
+  assert.strictEqual(m.active_outlets, 2);
+  assert.strictEqual(m.inactive_outlets, 2);
+});
+test('B7. Conversion Aktivasi = active_outlets / registrations x 100', () => {
+  const reg = [{ id_outlet: 'A', upline: 'PB1' }, { id_outlet: 'B', upline: 'PB1' }, { id_outlet: 'C', upline: 'PB1' }, { id_outlet: 'D', upline: 'PB1' }];
+  const akt = [{ id_outlet: 'A', is_active: true }];
+  assert.strictEqual(computeActiveOutletMatch(reg, akt).activation_conversion_pct, 25);
+});
+test('B8. registrations = 0 -> Conversion Aktivasi null (bukan NaN/Infinity)', () => {
+  const m = computeActiveOutletMatch([], []);
+  assert.strictEqual(m.activation_conversion_pct, null);
+  assert.strictEqual(m.active_outlets, 0);
+  assert.strictEqual(m.inactive_outlets, 0);
+});
+test('B9. Duplikat id_outlet pada REG tidak double-count active_outlets', () => {
+  const reg = [{ id_outlet: 'A', upline: 'PB1' }, { id_outlet: 'A', upline: 'PB1' }];
+  const akt = [{ id_outlet: 'A', is_active: true }];
+  const m = computeActiveOutletMatch(reg, akt);
+  assert.strictEqual(m.registrations, 1);
+  assert.strictEqual(m.active_outlets, 1);
+});
+test('B10. Duplikat baris AKTIVASI utk outlet sama tidak mengubah hasil (last-wins per outlet)', () => {
+  const reg = [{ id_outlet: 'A', upline: 'PB1' }];
+  const akt = [{ id_outlet: 'A', is_active: true }, { id_outlet: 'A', is_active: true }];
+  assert.strictEqual(computeActiveOutletMatch(reg, akt).active_outlets, 1);
+});
+test('B11. computeActivationMatchQuality — upline mismatch antara REG & AKTIVASI pada outlet aktif', () => {
+  const reg = [{ id_outlet: 'A', upline: 'PB1' }, { id_outlet: 'B', upline: 'PB2' }];
+  const akt = [{ id_outlet: 'A', upline: 'PBX', is_active: true }, { id_outlet: 'B', upline: 'PB2', is_active: true }];
+  const q = computeActivationMatchQuality(reg, akt);
+  assert.strictEqual(q.registration_activation_upline_mismatch, 1, 'A: PB1(REG) vs PBX(AKTIVASI) = mismatch; B: cocok');
+});
+test('B12. computeActivationMatchQuality — activation_without_registration menghitung outlet AKTIVASI tanpa baris REG sama sekali', () => {
+  const reg = [{ id_outlet: 'A', upline: 'PB1' }];
+  const akt = [{ id_outlet: 'A', is_active: true }, { id_outlet: 'ORPHAN', is_active: true }];
+  const q = computeActivationMatchQuality(reg, akt);
+  assert.strictEqual(q.activation_without_registration, 1);
+});
+test('B13. active_recruiting_pb TETAP murni REG.upline (TIDAK berubah oleh koreksi Sudah Aktif)', () => {
+  const reg = [{ id_outlet: 'A', upline: 'PB1' }, { id_outlet: 'B', upline: 'PB2' }];
+  assert.strictEqual(computeRegistrationFunnel(reg).active_recruiting_pb, 2);
 });
 
 console.log('\n-- 6-7. PB Aktif Merekrut — upline, BUKAN id_outlet --');
@@ -206,18 +274,24 @@ test('7. Jumlah id_outlet TIDAK dipakai sebagai jumlah PB (3 outlet, 2 PB unik -
 });
 
 console.log('\n-- 8-9. PB conversion & rata-rata rekrut per PB --');
-test('8. PB conversion per PB = active_registrations / registrations x 100 (per upline, bukan global)', () => {
+test('8. PB conversion per PB = active_outlets / registrations x 100 (JOIN ke AKTIVASI global, per upline REG)', () => {
   const reg = [
+    { id_outlet: 'A', upline: 'PB1' }, { id_outlet: 'B', upline: 'PB1' },
+    { id_outlet: 'C', upline: 'PB1' }, { id_outlet: 'D', upline: 'PB1' },
+    { id_outlet: 'E', upline: 'PB2' },
+  ];
+  const akt = [
     { id_outlet: 'A', upline: 'PB1', is_active: true }, { id_outlet: 'B', upline: 'PB1', is_active: true },
     { id_outlet: 'C', upline: 'PB1', is_active: false }, { id_outlet: 'D', upline: 'PB1', is_active: false },
     { id_outlet: 'E', upline: 'PB2', is_active: true },
   ];
   const det = [];
-  const { rows } = buildPbScorecard(reg, [], det, [], [], []);
+  const { rows } = buildPbScorecard(reg, akt, det, [], [], []);
   const pb1 = rows.find(r => r.pb === 'PB1');
   assert.strictEqual(pb1.registrations, 4);
-  assert.strictEqual(pb1.active_registrations, 2);
-  assert.strictEqual(pb1.activation_conversion_pct, 50, 'PB1: 2 aktif / 4 registrasi = 50%');
+  assert.strictEqual(pb1.active_outlets, 2);
+  assert.strictEqual(pb1.inactive_outlets, 2);
+  assert.strictEqual(pb1.activation_conversion_pct, 50, 'PB1: 2 aktif (AKTIVASI is_active=true) / 4 registrasi = 50%');
   const pb2 = rows.find(r => r.pb === 'PB2');
   assert.strictEqual(pb2.activation_conversion_pct, 100, 'PB2: 1 aktif / 1 registrasi = 100%');
 });
@@ -296,10 +370,24 @@ test('12. "FEE UPLINE" tidak muncul di KPI utama Command Center', () => {
 test('13. Label "ACTIVATION COMMISSION" tidak muncul sama sekali (diganti Revenue Aktivasi / Revenue MGM)', () => {
   assert.ok(!/ACTIVATION COMMISSION/i.test(frontendSrc), 'label lama harus sudah diganti di seluruh halaman');
 });
-test('13b. 7 KPI utama non-revenue ada di Command Center: Total Registrasi, Sudah Aktif, Belum Aktif, Conversion Aktivasi, PB Aktif Merekrut, Rata-rata Rekrut/PB, NMAT', () => {
-  for (const label of ['TOTAL REGISTRASI', 'SUDAH AKTIF', 'BELUM AKTIF', 'CONVERSION AKTIVASI', 'PB AKTIF MEREKRUT', 'RATA-RATA REKRUT', 'NMAT']) {
+test('13b. 7 KPI utama non-revenue ada di Command Center: Total Registrasi, Sudah Aktif, Belum Aktif, PB Aktif Merekrut, Rata-rata Rekrut/PB, NMAT, Transaksi NMAT', () => {
+  for (const label of ['TOTAL REGISTRASI', 'SUDAH AKTIF', 'BELUM AKTIF', 'PB AKTIF MEREKRUT', 'RATA-RATA REKRUT', 'NMAT', 'TRANSAKSI NMAT']) {
     assert.ok(mainKpiSlice.includes(label), `KPI utama harus memuat label "${label}"`);
   }
+});
+test('13b-conv. Kartu "CONVERSION AKTIVASI" TIDAK LAGI berdiri sendiri — digabung sbg sub-text di kartu Sudah Aktif', () => {
+  assert.ok(!/label="CONVERSION AKTIVASI"/.test(mainKpiSlice), 'tidak boleh ada KPICard label="CONVERSION AKTIVASI" berdiri sendiri lagi');
+  assert.ok(/label="SUDAH AKTIF"[\s\S]*?sub=\{`Conversion/.test(mainKpiSlice), 'kartu Sudah Aktif harus punya prop sub berisi Conversion');
+});
+test('13b-nmat-trx. Kartu TRANSAKSI NMAT membaca field summary.current.nmat_trx (bukan total_trx)', () => {
+  assert.ok(/label="TRANSAKSI NMAT"[\s\S]*?s\.current\.nmat_trx/.test(mainKpiSlice), 'kartu Transaksi NMAT harus membaca s.current.nmat_trx');
+});
+test('13b-rename. Field aktif/belum-aktif di Command Center pakai active_outlets/inactive_outlets, BUKAN active_registrations/inactive_registrations lama', () => {
+  assert.ok(mainKpiSlice.includes('s.current.active_outlets'), 'kartu Sudah Aktif harus membaca s.current.active_outlets');
+  assert.ok(mainKpiSlice.includes('s.current.inactive_outlets'), 'kartu Belum Aktif harus membaca s.current.inactive_outlets');
+  assert.ok(!frontendSrc.includes('active_registrations'), 'field lama active_registrations tidak boleh tersisa di frontend sama sekali');
+  assert.ok(!frontendSrc.includes('inactive_registrations'), 'field lama inactive_registrations tidak boleh tersisa di frontend sama sekali');
+  assert.ok(!frontendSrc.includes('unknown_active_status'), 'konsep unknown_active_status sudah dihapus, tidak boleh tersisa di frontend');
 });
 test('13b2. "OUTLET TRANSACTING" sudah diganti NMAT di Command Center, TAPI tetap ada di tab Transaction & Revenue (bukan dihapus total)', () => {
   assert.ok(!mainKpiSlice.includes('OUTLET TRANSACTING'), 'Command Center tidak boleh lagi memakai label OUTLET TRANSACTING (diganti NMAT)');
@@ -343,16 +431,19 @@ test('13h. Grid KPI utama Command Center — SATU container 5-kolom SERAGAM, tep
     '.mgm-command-grid harus grid-template-columns: repeat(5, 1fr) di desktop (>=1200px)');
 
   // Urutan label PERSIS 10 kartu sesuai spesifikasi — baris 1 lalu baris 2.
+  //   Baris 1: Total Registrasi, Sudah Aktif (+Conversion), Belum Aktif,
+  //            PB Aktif Merekrut, Rata-rata Rekrut/PB
+  //   Baris 2: NMAT, Transaksi NMAT, Revenue Transaksi, Revenue Aktivasi, Revenue MGM
   const expectedOrder = [
-    'TOTAL REGISTRASI', 'SUDAH AKTIF', 'BELUM AKTIF', 'CONVERSION AKTIVASI', 'PB AKTIF MEREKRUT',
-    'RATA-RATA REKRUT', 'NMAT', 'REVENUE TRANSAKSI', 'REVENUE AKTIVASI', 'REVENUE MGM',
+    'TOTAL REGISTRASI', 'SUDAH AKTIF', 'BELUM AKTIF', 'PB AKTIF MEREKRUT', 'RATA-RATA REKRUT',
+    'NMAT', 'TRANSAKSI NMAT', 'REVENUE TRANSAKSI', 'REVENUE AKTIVASI', 'REVENUE MGM',
   ];
   const commandCenterFullBody = mainKpiSlice.replace('buildRevenueCards({', 'buildRevenueCards({' + revenueCardsBody);
   const positions = expectedOrder.map(label => commandCenterFullBody.indexOf(label));
   positions.forEach((pos, i) => assert.ok(pos !== -1, `label "${expectedOrder[i]}" tidak ditemukan di urutan Command Center`));
   for (let i = 1; i < positions.length; i++) {
     assert.ok(positions[i] > positions[i - 1],
-      `urutan kartu salah: "${expectedOrder[i]}" harus muncul SETELAH "${expectedOrder[i - 1]}" (baris 1: Total Registrasi..PB Aktif Merekrut, baris 2: Rata-rata Rekrut/PB..Revenue MGM)`);
+      `urutan kartu salah: "${expectedOrder[i]}" harus muncul SETELAH "${expectedOrder[i - 1]}" (baris 1: Total Registrasi..Rata-rata Rekrut/PB, baris 2: NMAT..Revenue MGM)`);
   }
 
   // Hitung persis 10 kartu KPICard di dalam grid (7 literal + 3 dari buildRevenueCards).
@@ -428,20 +519,35 @@ const augFunnel = computeRegistrationFunnel(augReg);
 const augActivation = computeActivationRevenue(augDet);
 const augSummary = computeSummary(augReg, augAkt, augDet);
 
+// Overlay AKTIVASI KHUSUS utk menguji JOIN Sudah Aktif/Belum Aktif (definisi
+// resmi baru) — DIPISAH dari augAkt (dipakai battery revenue di bawah, id
+// outlet-nya AKTOUT* tidak overlap dgn REG OUT* dgn sengaja, supaya battery
+// revenue itu independen dari join aktif). Overlay ini me-replikasi rasio
+// 480/931 dari baseline lama, TAPI kini dihitung lewat JOIN REG<->AKTIVASI
+// is_active=true yang benar — augReg.is_active TIDAK dibaca sama sekali.
+function buildAugustActiveOverlayAktRows() {
+  const rows = [];
+  for (let i = 1; i <= 480; i++) rows.push({ id_outlet: `OUT${i}`, is_active: true });
+  return rows;
+}
+const augActiveOverlayAkt = buildAugustActiveOverlayAktRows();
+const augActiveMatch = computeActiveOutletMatch(augReg, augActiveOverlayAkt);
+
 test('14. current August registrations = 931', () => {
   assert.strictEqual(augFunnel.registrations, 931);
 });
-test('15. current August active_registrations = 480', () => {
-  assert.strictEqual(augFunnel.active_registrations, 480);
+test('15. current August active_outlets (JOIN REG<->AKTIVASI is_active=true) = 480', () => {
+  assert.strictEqual(augActiveMatch.active_outlets, 480);
 });
-test('16. current August inactive_registrations = 451', () => {
-  assert.strictEqual(augFunnel.inactive_registrations, 451);
+test('16. current August inactive_outlets = registrations - active_outlets = 451', () => {
+  assert.strictEqual(augActiveMatch.inactive_outlets, 451);
+  assert.strictEqual(augActiveMatch.active_outlets + augActiveMatch.inactive_outlets, augFunnel.registrations);
 });
 test('17. current August active_recruiting_pb = 281', () => {
   assert.strictEqual(augFunnel.active_recruiting_pb, 281);
 });
-test('18. current August activation_conversion_pct = 51,5575% (480/931x100)', () => {
-  closeTo(augFunnel.activation_conversion_pct, 51.5575, 0.01);
+test('18. current August activation_conversion_pct = 51,5575% (480/931x100, via JOIN)', () => {
+  closeTo(augActiveMatch.activation_conversion_pct, 51.5575, 0.01);
 });
 test('19. current August avg_registration_per_pb = 3,3132 (931/281)', () => {
   closeTo(augFunnel.avg_registration_per_pb, 3.3132, 0.01);
@@ -482,7 +588,7 @@ test('§14.9 total_trx tetap 1.582', () => {
 });
 test('§14.10 revenue_per_transaction (frontend) memakai transaction_revenue / total_trx', () => {
   const frontendTabSrc = fs.readFileSync(path.join(__dirname, '../../frontend/src/pages/WarRoomMgmPa.jsx'), 'utf8');
-  assert.ok(/revenuePerTransaction = totalTrx > 0 \? current\.transaction_revenue \/ totalTrx : null/.test(frontendTabSrc),
+  assert.ok(/revenuePerTransaction = totalTrx > 0 && current\.transaction_revenue != null \? current\.transaction_revenue \/ totalTrx : null/.test(frontendTabSrc),
     'formula revenue per transaction harus pakai transaction_revenue sbg numerator, BUKAN mgm_revenue');
 });
 test('§14.11 previous period mempunyai tiga field revenue', () => {
@@ -674,6 +780,121 @@ test('NMAT.12 nmat_outlets muncul di summary.deltas (pakai pctDelta, bukan null 
   assert.strictEqual(deltas.nmat_outlets, 25, '100 vs 80 -> +25%');
 });
 
+console.log('\n-- B14-B24. Transaksi NMAT (nmat_trx) + PB-level NMAT/aktif + Data Quality audit --');
+test('B14. nmat_trx = SUM trx HANYA dari outlet yang memenuhi syarat NMAT (bukan SUM seluruh AKTIVASI.trx)', () => {
+  const akt = [
+    { id_outlet: 'A', tanggal_aktifasi: '2026-08-02', trx: 5 },  // NMAT
+    { id_outlet: 'B', tanggal_aktifasi: '2026-07-25', trx: 100 }, // bukan NMAT (aktivasi bulan lalu) — TIDAK boleh ikut ke nmat_trx
+  ];
+  const d = computeNmatDetails(akt, '2026-08-01');
+  assert.strictEqual(d.nmat_outlets, 1);
+  assert.strictEqual(d.nmat_trx, 5, 'nmat_trx harus 5 (hanya outlet A), BUKAN 105 (A+B)');
+});
+test('B15. nmat_trx berbeda dari total_trx ketika ada outlet non-NMAT yang bertransaksi', () => {
+  const akt = [
+    { id_outlet: 'A', tanggal_aktifasi: '2026-08-02', trx: 5 },
+    { id_outlet: 'B', tanggal_aktifasi: '2026-06-01', trx: 50 },
+  ];
+  const nmat = computeNmatDetails(akt, '2026-08-01');
+  const info = computeTransactionInfo(akt);
+  assert.strictEqual(nmat.nmat_trx, 5);
+  assert.strictEqual(info.total_trx, 55);
+  assert.notStrictEqual(nmat.nmat_trx, info.total_trx, 'nmat_trx TIDAK BOLEH sama dgn total_trx ketika ada outlet non-NMAT bertransaksi');
+});
+test('B16. Baris duplikat utk id_outlet yang sama TIDAK double-count nmat_trx (last-wins per outlet)', () => {
+  const akt = [
+    { id_outlet: 'A', tanggal_aktifasi: '2026-08-02', trx: 5 },
+    { id_outlet: 'A', tanggal_aktifasi: '2026-08-02', trx: 5 },
+  ];
+  assert.strictEqual(computeNmatDetails(akt, '2026-08-01').nmat_trx, 5, 'bukan 10 — outlet A cuma dihitung sekali');
+});
+test('B17. trx=0 dikecualikan dari nmat_trx', () => {
+  const akt = [{ id_outlet: 'A', tanggal_aktifasi: '2026-08-02', trx: 0 }];
+  assert.strictEqual(computeNmatDetails(akt, '2026-08-01').nmat_trx, 0);
+});
+
+console.log('\n-- B18-B20. PB scorecard — active_outlets/inactive_outlets/nmat_outlets/nmat_trx per PB --');
+test('B18. PB active_outlets/inactive_outlets — REG outlet milik PB, di-JOIN ke AKTIVASI GLOBAL is_active=true', () => {
+  const reg = [{ id_outlet: 'A', upline: 'PB1' }, { id_outlet: 'B', upline: 'PB1' }, { id_outlet: 'C', upline: 'PB2' }];
+  const akt = [{ id_outlet: 'A', upline: 'PB1', is_active: true }, { id_outlet: 'C', upline: 'PB2', is_active: false }];
+  const { rows } = buildPbScorecard(reg, akt, [], [], [], []);
+  const pb1 = rows.find(r => r.pb === 'PB1');
+  assert.strictEqual(pb1.active_outlets, 1); assert.strictEqual(pb1.inactive_outlets, 1);
+  const pb2 = rows.find(r => r.pb === 'PB2');
+  assert.strictEqual(pb2.active_outlets, 0); assert.strictEqual(pb2.inactive_outlets, 1);
+});
+test('B19. PB nmat_outlets/nmat_trx — atribusi via AKTIVASI.upline LANGSUNG (BUKAN "REG outlet milik PB yang NMAT")', () => {
+  // Outlet X terdaftar di REG milik PB1, tapi AKTIVASI-nya justru upline PB2
+  // (mis. re-assign) — NMAT harus ikut AKTIVASI.upline (PB2), bukan REG.upline (PB1).
+  const reg = [{ id_outlet: 'X', upline: 'PB1' }];
+  const akt = [{ id_outlet: 'X', upline: 'PB2', tanggal_aktifasi: '2026-08-02', trx: 7, is_active: true }];
+  const { rows } = buildPbScorecard(reg, akt, [], [], [], [], '2026-08-01', '2026-07-01');
+  const pb1 = rows.find(r => r.pb === 'PB1');
+  const pb2 = rows.find(r => r.pb === 'PB2');
+  assert.strictEqual(pb1.nmat_outlets, 0, 'PB1 (REG.upline) tidak boleh dapat kredit NMAT outlet X');
+  assert.strictEqual(pb2.nmat_outlets, 1, 'PB2 (AKTIVASI.upline) yang dapat kredit NMAT');
+  assert.strictEqual(pb2.nmat_trx, 7);
+});
+test('B20. SUM per-PB nmat_outlets/nmat_trx tidak melebihi total (tidak ada double count)', () => {
+  const reg = [{ id_outlet: 'A', upline: 'PB1' }, { id_outlet: 'B', upline: 'PB2' }];
+  const akt = [
+    { id_outlet: 'A', upline: 'PB1', tanggal_aktifasi: '2026-08-02', trx: 3, is_active: true },
+    { id_outlet: 'B', upline: 'PB2', tanggal_aktifasi: '2026-08-05', trx: 4, is_active: true },
+  ];
+  const totalNmat = computeNmatDetails(akt, '2026-08-01');
+  const { rows } = buildPbScorecard(reg, akt, [], [], [], [], '2026-08-01', '2026-07-01');
+  const sumOutlets = rows.reduce((s, r) => s + r.nmat_outlets, 0);
+  const sumTrx = rows.reduce((s, r) => s + r.nmat_trx, 0);
+  assert.strictEqual(sumOutlets, totalNmat.nmat_outlets);
+  assert.strictEqual(sumTrx, totalNmat.nmat_trx);
+});
+
+console.log('\n-- B21-B24. Data Quality audit (buildPeriodAnalytics.quality) --');
+test('B21. quality.active_matched_outlets/inactive_unmatched_outlets/registrations_total sesuai definisi JOIN', () => {
+  const reg = [{ id_outlet: 'A', upline: 'PB1' }, { id_outlet: 'B', upline: 'PB1' }];
+  const akt = [{ id_outlet: 'A', upline: 'PB1', is_active: true }];
+  const result = buildPeriodAnalytics({
+    registrasi: reg, aktivasi: akt, detail: [],
+    previousRegistrasi: [], previousAktivasi: [], previousDetail: [],
+  }, {});
+  assert.strictEqual(result.quality.registrations_total, 2);
+  assert.strictEqual(result.quality.active_matched_outlets, 1);
+  assert.strictEqual(result.quality.inactive_unmatched_outlets, 1);
+});
+test('B22. quality.active_inactive_partition_consistent = true untuk data normal (invariant partisi)', () => {
+  const result = buildPeriodAnalytics({
+    registrasi: augReg, aktivasi: augAkt, detail: augDet,
+    previousRegistrasi: [], previousAktivasi: [], previousDetail: [],
+  }, {});
+  assert.strictEqual(result.quality.active_inactive_partition_consistent, true);
+});
+test('B23. quality.registration_activation_upline_mismatch & activation_without_registration terhitung benar', () => {
+  const reg = [{ id_outlet: 'A', upline: 'PB1' }];
+  const akt = [
+    { id_outlet: 'A', upline: 'PBX', is_active: true }, // upline mismatch (aktif)
+    { id_outlet: 'ORPHAN', upline: 'PB9', is_active: true }, // aktivasi tanpa REG
+  ];
+  const result = buildPeriodAnalytics({
+    registrasi: reg, aktivasi: akt, detail: [],
+    previousRegistrasi: [], previousAktivasi: [], previousDetail: [],
+  }, {});
+  assert.strictEqual(result.quality.registration_activation_upline_mismatch, 1);
+  assert.strictEqual(result.quality.activation_without_registration, 1);
+});
+test('B24. Tidak ada NaN/Infinity pada quality/summary utk data kosong sama sekali', () => {
+  const result = buildPeriodAnalytics({
+    registrasi: [], aktivasi: [], detail: [],
+    previousRegistrasi: [], previousAktivasi: [], previousDetail: [],
+  }, { currentPeriod: '2026-08-01' });
+  const flat = JSON.stringify(result);
+  assert.ok(!/NaN/.test(flat), 'tidak boleh ada NaN di hasil buildPeriodAnalytics utk dataset kosong');
+  assert.ok(!/Infinity/.test(flat), 'tidak boleh ada Infinity di hasil buildPeriodAnalytics utk dataset kosong');
+  assert.strictEqual(result.summary.current.active_outlets, 0);
+  assert.strictEqual(result.summary.current.inactive_outlets, 0);
+  assert.strictEqual(result.summary.current.activation_conversion_pct, null);
+  assert.strictEqual(result.summary.current.nmat_trx, 0);
+});
+
 console.log('\n-- 21-22. Cutoff current period TIDAK memotong data; previous tetap same-day --');
 const routePath = path.join(__dirname, '../src/routes/warroom-mgm.js');
 const routeSrc = fs.readFileSync(routePath, 'utf8');
@@ -750,36 +971,36 @@ test('economics.formula_mismatch melaporkan selisih, activation_revenue tetap pa
 console.log('\n-- PB segmentation cascade (5 status baru: Growth Engine/Closer/Hunter Only/High Backlog/Low Activity) --');
 test('Growth Engine — registrations >= P50 dan conversion >= P50', () => {
   const pbRows = [
-    { registrations: 10, activation_conversion_pct: 40, inactive_registrations: 1 },
-    { registrations: 20, activation_conversion_pct: 60, inactive_registrations: 1 },
+    { registrations: 10, activation_conversion_pct: 40, inactive_outlets: 1 },
+    { registrations: 20, activation_conversion_pct: 60, inactive_outlets: 1 },
   ];
   const thresholds = computeSegmentationThresholds(pbRows);
   assert.strictEqual(classifyPb(pbRows[1], thresholds), 'Growth Engine');
 });
 test('Closer — registrations < P50 dan conversion >= P75', () => {
   const pbRows = [
-    { registrations: 5, activation_conversion_pct: 90, inactive_registrations: 0 },
-    { registrations: 50, activation_conversion_pct: 10, inactive_registrations: 0 },
-    { registrations: 50, activation_conversion_pct: 20, inactive_registrations: 0 },
+    { registrations: 5, activation_conversion_pct: 90, inactive_outlets: 0 },
+    { registrations: 50, activation_conversion_pct: 10, inactive_outlets: 0 },
+    { registrations: 50, activation_conversion_pct: 20, inactive_outlets: 0 },
   ];
   const thresholds = computeSegmentationThresholds(pbRows);
   assert.strictEqual(classifyPb(pbRows[0], thresholds), 'Closer');
 });
-test('High Backlog — inactive_registrations >= P75, tidak masuk kategori lain', () => {
+test('High Backlog — inactive_outlets >= P75, tidak masuk kategori lain', () => {
   const pbRows = [
-    { registrations: 5, activation_conversion_pct: 50, inactive_registrations: 1 },   // Growth Engine candidate (sets thresholds)
-    { registrations: 20, activation_conversion_pct: 80, inactive_registrations: 1 },  // Growth Engine candidate (sets thresholds)
-    { registrations: 3, activation_conversion_pct: 10, inactive_registrations: 100 }, // target: reg & conversion rendah, backlog tinggi
-    { registrations: 3, activation_conversion_pct: 10, inactive_registrations: 1 },
+    { registrations: 5, activation_conversion_pct: 50, inactive_outlets: 1 },   // Growth Engine candidate (sets thresholds)
+    { registrations: 20, activation_conversion_pct: 80, inactive_outlets: 1 },  // Growth Engine candidate (sets thresholds)
+    { registrations: 3, activation_conversion_pct: 10, inactive_outlets: 100 }, // target: reg & conversion rendah, backlog tinggi
+    { registrations: 3, activation_conversion_pct: 10, inactive_outlets: 1 },
   ];
   const thresholds = computeSegmentationThresholds(pbRows);
   assert.strictEqual(classifyPb(pbRows[2], thresholds), 'High Backlog');
 });
 test('Low Activity — di bawah semua threshold', () => {
   const pbRows = [
-    { registrations: 100, activation_conversion_pct: 80, inactive_registrations: 5 },
-    { registrations: 90, activation_conversion_pct: 70, inactive_registrations: 5 },
-    { registrations: 1, activation_conversion_pct: 1, inactive_registrations: 0 },
+    { registrations: 100, activation_conversion_pct: 80, inactive_outlets: 5 },
+    { registrations: 90, activation_conversion_pct: 70, inactive_outlets: 5 },
+    { registrations: 1, activation_conversion_pct: 1, inactive_outlets: 0 },
   ];
   const thresholds = computeSegmentationThresholds(pbRows);
   assert.strictEqual(classifyPb(pbRows[2], thresholds), 'Low Activity');

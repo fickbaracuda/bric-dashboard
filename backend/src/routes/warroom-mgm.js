@@ -421,22 +421,39 @@ async function analyticsHandler(req, res) {
 
     // monthly_trend — agregat per periode langsung dari SQL (semua bulan
     // tersedia, TIDAK dipotong cutoff — sama seperti current period).
+    // Sudah Aktif/Belum Aktif per periode dihitung via JOIN ke AKTIVASI
+    // (is_active=true) — SAMA seperti computeActiveOutletMatch, BUKAN
+    // REG.is_active (definisi lama TERBUKTI SALAH, lihat catatan modul
+    // mgm-utils.js). NMAT per periode juga dihitung via JOIN tanggal
+    // aktifasi ke periode itu sendiri + trx>0, konsisten dgn computeNmatDetails.
     const trendRes = await pool.query(`
       WITH reg AS (
         SELECT periode,
           COUNT(DISTINCT id_outlet) AS registrations,
-          COUNT(DISTINCT id_outlet) FILTER (WHERE is_active = true) AS active_registrations,
-          COUNT(DISTINCT id_outlet) FILTER (WHERE is_active = false) AS inactive_registrations,
-          COUNT(DISTINCT id_outlet) FILTER (WHERE is_active IS NULL) AS unknown_active_status,
           COUNT(DISTINCT upline) FILTER (WHERE upline IS NOT NULL AND TRIM(upline) <> '') AS active_recruiting_pb,
           MAX(tanggal_registrasi) AS reg_cutoff
         FROM mgm_pa_registrasi GROUP BY periode
+      ), active_match AS (
+        SELECT r.periode, COUNT(DISTINCT r.id_outlet) AS active_outlets
+        FROM mgm_pa_registrasi r
+        JOIN mgm_pa_aktivasi a
+          ON a.periode = r.periode AND a.id_outlet = r.id_outlet AND a.is_active = true
+        GROUP BY r.periode
       ), akt AS (
         SELECT periode, COUNT(DISTINCT id_outlet) AS activated_outlets,
           COUNT(DISTINCT id_outlet) FILTER (WHERE trx>0) AS transacting_outlets,
           COALESCE(SUM(trx),0) AS total_trx, COALESCE(SUM(rev),0) AS transaction_revenue,
           MAX(tanggal_aktifasi) AS akt_cutoff
         FROM mgm_pa_aktivasi GROUP BY periode
+      ), nmat AS (
+        SELECT periode,
+          COUNT(DISTINCT id_outlet) AS nmat_outlets,
+          COALESCE(SUM(trx),0) AS nmat_trx
+        FROM mgm_pa_aktivasi
+        WHERE trx > 0
+          AND tanggal_aktifasi >= periode
+          AND tanggal_aktifasi < (periode + INTERVAL '1 month')
+        GROUP BY periode
       ), det AS (
         SELECT periode, COUNT(DISTINCT id_aktifasi) AS paid_activation_events,
           COALESCE(SUM(fee_upline),0) AS fee_upline, COALESCE(SUM(komisi_aktifasi),0) AS activation_revenue,
@@ -445,10 +462,11 @@ async function analyticsHandler(req, res) {
       )
       SELECT periods.periode::text,
         COALESCE(reg.registrations,0)::int AS registrations,
-        COALESCE(reg.active_registrations,0)::int AS active_registrations,
-        COALESCE(reg.inactive_registrations,0)::int AS inactive_registrations,
-        COALESCE(reg.unknown_active_status,0)::int AS unknown_active_status,
+        COALESCE(active_match.active_outlets,0)::int AS active_outlets,
+        (COALESCE(reg.registrations,0) - COALESCE(active_match.active_outlets,0))::int AS inactive_outlets,
         COALESCE(reg.active_recruiting_pb,0)::int AS active_recruiting_pb,
+        COALESCE(nmat.nmat_outlets,0)::int AS nmat_outlets,
+        COALESCE(nmat.nmat_trx,0)::bigint AS nmat_trx,
         COALESCE(det.paid_activation_events,0)::int AS paid_activation_events,
         COALESCE(akt.activated_outlets,0)::int AS activated_outlets,
         COALESCE(akt.transacting_outlets,0)::int AS transacting_outlets,
@@ -459,15 +477,17 @@ async function analyticsHandler(req, res) {
         COALESCE(det.negative_activation_count,0)::int AS negative_activation_count,
         GREATEST(reg.reg_cutoff, akt.akt_cutoff)::text AS cutoff_day_date
       FROM (SELECT DISTINCT periode FROM mgm_pa_registrasi UNION SELECT DISTINCT periode FROM mgm_pa_aktivasi) periods
-      LEFT JOIN reg  ON reg.periode = periods.periode
-      LEFT JOIN akt  ON akt.periode = periods.periode
-      LEFT JOIN det  ON det.periode = periods.periode
+      LEFT JOIN reg          ON reg.periode = periods.periode
+      LEFT JOIN active_match ON active_match.periode = periods.periode
+      LEFT JOIN akt          ON akt.periode = periods.periode
+      LEFT JOIN nmat         ON nmat.periode = periods.periode
+      LEFT JOIN det          ON det.periode = periods.periode
       ORDER BY periods.periode ASC
     `);
     const monthly_trend = trendRes.rows.map(r => ({
       ...r,
       mgm_revenue: Number(r.transaction_revenue) + Number(r.activation_revenue),
-      activation_conversion_pct: safePct(r.active_registrations, r.registrations),
+      activation_conversion_pct: safePct(r.active_outlets, r.registrations),
       avg_registration_per_pb: r.active_recruiting_pb > 0 ? r.registrations / r.active_recruiting_pb : null,
       cutoff_day: r.cutoff_day_date ? Number(r.cutoff_day_date.slice(8, 10)) : null,
     }));

@@ -7,29 +7,42 @@
  * backend/scripts/test-mgm-warroom.js.
  *
  * MODEL BISNIS (jangan diubah tanpa sadar):
- *   - Sumber funnel registrasi/aktif/tidak-aktif/PB Aktif Merekrut:
- *     mgm_pa_registrasi (REG). is_active DI SINI adalah status resmi
- *     aktif/tidak-aktif agen — BUKAN status dari tabel AKTIVASI.
+ *   - Total Registrasi = COUNT DISTINCT mgm_pa_registrasi.id_outlet.
+ *   - Sudah Aktif (active_outlets) BUKAN dari REG.is_active (angka lama 718
+ *     TERBUKTI SALAH — insiden nyata). Definisi resmi: REG.id_outlet yang
+ *     MATCH ke mgm_pa_aktivasi.id_outlet DENGAN AKTIVASI.is_active = true.
+ *     TIDAK PERNAH pakai REG.is_active atau MGM AKTIV(DETAIL).is_active.
+ *   - Belum Aktif (inactive_outlets) = registrations - active_outlets (REG
+ *     outlet yang BELUM match ke outlet aktif valid di AKTIVASI). Invariant
+ *     wajib: active_outlets + inactive_outlets = registrations SELALU
+ *     (partisi biner, tidak ada bucket "unknown" lagi).
+ *   - Conversion Aktivasi = active_outlets / registrations x 100 — TIDAK
+ *     lagi jadi kartu sendiri di Command Center, ditampilkan di dalam
+ *     kartu Sudah Aktif.
+ *   - NMAT (New Member Aktif Transaksi) = COUNT DISTINCT mgm_pa_aktivasi.
+ *     id_outlet WHERE tanggal_aktifasi jatuh DI DALAM bulan terpilih DAN
+ *     trx > 0. Transaksi NMAT (nmat_trx) = SUM trx HANYA utk outlet yang
+ *     memenuhi syarat NMAT tsb (bukan SUM seluruh AKTIVASI.trx — itu
+ *     total_trx/transacting_outlets, konsep berbeda). TIDAK PERNAH pakai
+ *     tanggal_registrasi/REG.is_active/id_aktifasi/MGM AKTIV.is_active.
  *   - Revenue MGM adalah GABUNGAN DUA SUMBER (jangan disatukan jadi satu
- *     angka komisi saja):
+ *     angka komisi saja) — TIDAK BOLEH diubah oleh koreksi Sudah Aktif/NMAT
+ *     di atas:
  *       transaction_revenue = SUM(mgm_pa_aktivasi.rev)             — AKTIVASI
  *       activation_revenue  = SUM(mgm_pa_aktivasi_detail.komisi_aktifasi) — DETAIL
  *       mgm_revenue          = transaction_revenue + activation_revenue
  *     mgm_revenue SELALU dihitung sebagai penjumlahan kedua komponen di
- *     atas (bukan disimpan terpisah) — ini strukturnya sendiri yang
- *     menjamin formula tidak bisa diam-diam berubah tanpa terdeteksi.
- *     Nilai komisi_aktifasi & rev dipakai APA ADANYA dari source sheet —
- *     TIDAK PERNAH dihitung ulang dan menimpa nilai sumber.
- *   - mgm_pa_aktivasi (AKTIVASI) dipakai untuk transacting outlets, total
- *     trx, DAN transaction_revenue — bukan lagi "informasi pendukung
- *     semata", tapi tetap BUKAN sumber status aktif funnel registrasi
- *     (itu murni dari REG.is_active).
+ *     atas (bukan disimpan terpisah). Nilai komisi_aktifasi & rev dipakai
+ *     APA ADANYA dari source sheet — TIDAK PERNAH dihitung ulang.
  *   - upline = ID PB (perekrut). id_outlet = agen/outlet yang direkrut.
- *     Jumlah PB Aktif Merekrut (top-level KPI) = COUNT DISTINCT REG.upline
- *     (non-blank), BUKAN jumlah id_outlet. Definisi ini TIDAK BOLEH diubah.
- *     PB Scorecard (per-PB table) memakai universe upline yang LEBIH LUAS
- *     — union REG ∪ AKTIVASI ∪ DETAIL — supaya PB yang cuma muncul di
- *     salah satu sumber tetap kelihatan revenue-nya (lihat buildPbScorecard).
+ *     PB Aktif Merekrut (top-level KPI) = COUNT DISTINCT REG.upline
+ *     (non-blank), BUKAN jumlah id_outlet. PB Scorecard (per-PB table)
+ *     memakai universe upline LEBIH LUAS — union REG ∪ AKTIVASI ∪ DETAIL —
+ *     supaya PB yang cuma muncul di satu sumber tetap kelihatan revenue/
+ *     NMAT-nya (lihat buildPbScorecard). NMAT per PB diatribusikan lewat
+ *     AKTIVASI.upline langsung (BUKAN "REG outlet milik PB yang NMAT") —
+ *     konsisten dgn cara transaction_revenue/activation_revenue per PB
+ *     sudah diatribusikan sebelumnya.
  */
 
 // ─────────────────────────────────────────────────────────────────
@@ -237,10 +250,10 @@ function buildCanonicalOutletIndex(regRows, actRows, detailRows) {
 }
 
 // ─────────────────────────────────────────────────────────────────
-// Registration funnel — sumber TUNGGAL: mgm_pa_registrasi (REG).
-// registrations/active/inactive/unknown SELALU mempartisi id_outlet unik
-// (registrations = active + inactive + unknown, dijamin secara struktural
-// karena setiap outlet masuk tepat satu bucket).
+// Registration funnel — sumber TUNGGAL: mgm_pa_registrasi (REG). HANYA
+// fakta murni REG (registrations, PB Aktif Merekrut, rata-rata rekrut/PB)
+// — TIDAK LAGI mengandung active/inactive (lihat computeActiveOutletMatch
+// utk definisi resmi Sudah Aktif/Belum Aktif yang butuh JOIN ke AKTIVASI).
 // ─────────────────────────────────────────────────────────────────
 
 function computeRegistrationFunnel(regRows) {
@@ -250,12 +263,8 @@ function computeRegistrationFunnel(regRows) {
     byOutlet.set(r.id_outlet, r); // last-wins kalau ada duplikat id_outlet di array
   }
 
-  let active = 0, inactive = 0, unknown = 0;
   const uplineSet = new Set();
   for (const r of byOutlet.values()) {
-    if (r.is_active === true) active++;
-    else if (r.is_active === false) inactive++;
-    else unknown++;
     const up = r.upline && String(r.upline).trim();
     if (up) uplineSet.add(up);
   }
@@ -265,12 +274,71 @@ function computeRegistrationFunnel(regRows) {
 
   return {
     registrations,
-    active_registrations: active,
-    inactive_registrations: inactive,
-    unknown_active_status: unknown,
-    activation_conversion_pct: safePct(active, registrations),
     active_recruiting_pb,
     avg_registration_per_pb: active_recruiting_pb > 0 ? registrations / active_recruiting_pb : null,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Sudah Aktif / Belum Aktif — definisi RESMI (koreksi insiden angka 718).
+// REG.id_outlet di-MATCH ke AKTIVASI.id_outlet DENGAN AKTIVASI.is_active
+// = true. TIDAK PERNAH pakai REG.is_active atau DETAIL.is_active.
+// activeMatchedIds/inactiveIds di-expose supaya caller (derived_queues,
+// PB scorecard) bisa reuse tanpa menghitung ulang / berisiko divergen.
+// ─────────────────────────────────────────────────────────────────
+
+function computeActiveOutletMatchDetailed(regRows, actRows) {
+  const regIds = new Set((regRows || []).map(r => r.id_outlet).filter(Boolean));
+
+  // AKTIVASI aktif (is_active === true strict), last-wins per outlet kalau
+  // ada duplikat baris — konsisten dgn pola dedup di computeTransactionInfo.
+  const activeAktByOutlet = new Map();
+  const allAktIds = new Set();
+  for (const a of actRows || []) {
+    if (!a.id_outlet) continue;
+    allAktIds.add(a.id_outlet);
+    if (a.is_active === true) activeAktByOutlet.set(a.id_outlet, a);
+  }
+
+  const activeMatchedIds = new Set([...regIds].filter(id => activeAktByOutlet.has(id)));
+  const inactiveIds = new Set([...regIds].filter(id => !activeMatchedIds.has(id)));
+
+  return { regIds, activeAktByOutlet, allAktIds, activeMatchedIds, inactiveIds };
+}
+
+function computeActiveOutletMatch(regRows, actRows) {
+  const { regIds, activeMatchedIds } = computeActiveOutletMatchDetailed(regRows, actRows);
+  const registrations = regIds.size;
+  const active_outlets = activeMatchedIds.size;
+  const inactive_outlets = registrations - active_outlets;
+  return {
+    registrations,
+    active_outlets,
+    inactive_outlets,
+    activation_conversion_pct: safePct(active_outlets, registrations),
+  };
+}
+
+// Audit: upline REG vs upline AKTIVASI utk outlet yang match aktif, DAN
+// outlet AKTIVASI yang sama sekali tidak punya baris REG. Dipakai quality
+// object (§10 spesifikasi bisnis) — bukan bagian nilai KPI.
+function computeActivationMatchQuality(regRows, actRows) {
+  const regRowsArr = regRows || [];
+  const { regIds, activeAktByOutlet, allAktIds } = computeActiveOutletMatchDetailed(regRowsArr, actRows);
+  const regByOutlet = new Map(regRowsArr.filter(r => r.id_outlet).map(r => [r.id_outlet, r]));
+
+  let uplineMismatch = 0;
+  activeAktByOutlet.forEach((aktRow, id) => {
+    if (!regIds.has(id)) return;
+    const regRow = regByOutlet.get(id);
+    if (regRow?.upline && aktRow?.upline && regRow.upline !== aktRow.upline) uplineMismatch++;
+  });
+
+  const activationWithoutRegistration = [...allAktIds].filter(id => !regIds.has(id)).length;
+
+  return {
+    registration_activation_upline_mismatch: uplineMismatch,
+    activation_without_registration: activationWithoutRegistration,
   };
 }
 
@@ -279,7 +347,7 @@ function computeRegistrationFunnel(regRows) {
 // utk penjumlahan dgn transaction_revenue). Nilai komisi_aktifasi dipakai
 // apa adanya dari source sheet, TIDAK PERNAH dihitung ulang untuk menimpa
 // nilai sumber (lihat formula_mismatch di buildPeriodAnalytics untuk audit
-// selisih formula vs nilai sumber).
+// selisih formula vs nilai sumber). TIDAK diubah oleh koreksi Sudah Aktif/NMAT.
 function computeActivationRevenue(detailRows) {
   const rows = detailRows || [];
   const activation_revenue = rows.reduce((s, d) => s + safeNumber(d.komisi_aktifasi), 0);
@@ -298,7 +366,8 @@ function computeActivationRevenue(detailRows) {
 }
 
 // Info transaksi — sumber mgm_pa_aktivasi (AKTIVASI), INFORMASI PENDUKUNG
-// SAJA. Bukan sumber status aktif/tidak-aktif funnel registrasi.
+// SAJA. Bukan sumber status aktif/tidak-aktif (itu computeActiveOutletMatch).
+// transaction_revenue TIDAK diubah oleh koreksi Sudah Aktif/NMAT.
 function computeTransactionInfo(actRows) {
   const byOutlet = new Map();
   for (const a of actRows || []) {
@@ -323,7 +392,7 @@ function computeTransactionInfo(actRows) {
 }
 
 // dateValue jatuh di [periodStart, periodStart + 1 bulan)? Dipakai NMAT
-// (lihat computeNmatOutlets) — bukan perbandingan string biasa, karena
+// (lihat computeNmatDetails) — bukan perbandingan string biasa, karena
 // harus benar menangani akhir bulan/awal bulan berikutnya.
 function isDateInPeriod(dateValue, periodStart) {
   if (!dateValue || !periodStart) return false;
@@ -345,27 +414,59 @@ function isDateInPeriod(dateValue, periodStart) {
   return date >= start && date < next;
 }
 
-// NMAT (New Member Aktif Transaksi) — sumber TUNGGAL mgm_pa_aktivasi.
-// Outlet dihitung NMAT bulan M hanya jika: id_outlet ada, tanggal_aktifasi
-// jatuh DI DALAM bulan M (bukan bulan lain meski row-nya kebetulan
-// tersinkron di periode M), DAN trx > 0. BEDA dari transacting_outlets
-// (yang tidak peduli kapan outlet itu diaktivasi) — lihat §2 spesifikasi
-// bisnis. TIDAK PERNAH pakai tanggal_registrasi/REG.is_active/id_aktifasi.
-function computeNmatOutlets(actRows, periodStart) {
-  if (!periodStart) return 0;
-  const seen = new Set();
+// NMAT (New Member Aktif Transaksi) + Transaksi NMAT — sumber TUNGGAL
+// mgm_pa_aktivasi. Outlet dihitung NMAT bulan M hanya jika: id_outlet ada,
+// tanggal_aktifasi jatuh DI DALAM bulan M (bukan bulan lain meski row-nya
+// kebetulan tersinkron di periode M), DAN trx > 0. nmat_trx = SUM trx
+// HANYA utk outlet yang lolos syarat itu (bukan SUM seluruh AKTIVASI.trx).
+// Duplikat baris utk id_outlet yang sama TIDAK double-count (last-wins,
+// konsisten dgn computeTransactionInfo). TIDAK PERNAH pakai
+// tanggal_registrasi/REG.is_active/id_aktifasi/DETAIL.is_active.
+function computeNmatDetails(actRows, periodStart) {
+  const byOutlet = new Map();
   for (const a of actRows || []) {
     if (!a.id_outlet) continue;
     if (!isDateInPeriod(a.tanggal_aktifasi, periodStart)) continue;
     if (safeNumber(a.trx) <= 0) continue;
-    seen.add(a.id_outlet);
+    byOutlet.set(a.id_outlet, a); // last-wins per outlet
   }
-  return seen.size;
+  let nmat_trx = 0;
+  for (const row of byOutlet.values()) nmat_trx += safeNumber(row.trx);
+  return { nmat_outlets: byOutlet.size, nmat_trx };
 }
 
-// Gabungan satu periode: funnel registrasi + revenue (transaksi + aktivasi)
-// + info transaksi pendukung + irisan "sudah registrasi DAN sudah
-// transaksi" (dipakai funnel tahap 3 — lihat §10 spesifikasi bisnis).
+// Alias ringkas (kompatibilitas) — hanya jumlah outlet NMAT.
+function computeNmatOutlets(actRows, periodStart) {
+  if (!periodStart) return 0;
+  return computeNmatDetails(actRows, periodStart).nmat_outlets;
+}
+
+// Audit row-level KENAPA suatu baris AKTIVASI tidak lolos NMAT — dipakai
+// utk quality object (current period saja, lihat buildPeriodAnalytics),
+// BUKAN bagian dari nilai KPI itu sendiri.
+function computeNmatQuality(actRows, periodStart) {
+  let missingDate = 0, invalidDate = 0, excludedOtherMonth = 0, excludedZeroTrx = 0;
+  for (const a of actRows || []) {
+    if (!a.id_outlet) continue;
+    if (!a.tanggal_aktifasi) { missingDate++; continue; }
+    const dateStr = String(a.tanggal_aktifasi).slice(0, 10);
+    const parsed = new Date(`${dateStr}T00:00:00Z`);
+    if (Number.isNaN(parsed.getTime())) { invalidDate++; continue; }
+    if (!periodStart || !isDateInPeriod(a.tanggal_aktifasi, periodStart)) { excludedOtherMonth++; continue; }
+    if (safeNumber(a.trx) <= 0) { excludedZeroTrx++; continue; }
+  }
+  return {
+    nmat_missing_activation_date: missingDate,
+    nmat_invalid_activation_date: invalidDate,
+    nmat_excluded_other_month: excludedOtherMonth,
+    nmat_excluded_zero_trx: excludedZeroTrx,
+  };
+}
+
+// Gabungan satu periode: funnel registrasi + Sudah Aktif/Belum Aktif
+// (JOIN REG<->AKTIVASI) + revenue (transaksi + aktivasi) + NMAT/Transaksi
+// NMAT + info transaksi pendukung + irisan "sudah registrasi DAN sudah
+// transaksi" (dipakai funnel tahap 3 — lihat §10 spesifikasi bisnis lama).
 //
 // mgm_revenue SELALU = transaction_revenue + activation_revenue, dihitung
 // di sini secara struktural (bukan field terpisah yang bisa divergen) —
@@ -373,9 +474,10 @@ function computeNmatOutlets(actRows, periodStart) {
 // audit eksplisit bahwa relasi ini tidak pernah berubah tanpa terdeteksi.
 function computeSummary(regRows, actRows, detailRows, periodStart) {
   const funnel = computeRegistrationFunnel(regRows);
+  const activeMatch = computeActiveOutletMatch(regRows, actRows);
   const activation = computeActivationRevenue(detailRows);
   const txn = computeTransactionInfo(actRows);
-  const nmat_outlets = computeNmatOutlets(actRows, periodStart);
+  const nmatDetails = computeNmatDetails(actRows, periodStart);
   const mgm_revenue = txn.transaction_revenue + activation.activation_revenue;
 
   const regOutletSet = new Set((regRows || []).map(r => r.id_outlet).filter(Boolean));
@@ -386,9 +488,11 @@ function computeSummary(regRows, actRows, detailRows, periodStart) {
 
   return {
     ...funnel,
+    ...activeMatch,
     ...activation,
     ...txn,
-    nmat_outlets,
+    nmat_outlets: nmatDetails.nmat_outlets,
+    nmat_trx: nmatDetails.nmat_trx,
     mgm_revenue,
     registered_and_transacting,
     registered_to_transacting_pct: safePct(registered_and_transacting, funnel.registrations),
@@ -405,18 +509,23 @@ function summaryDeltas(current, previous) {
     if (rateKeys.has(key)) deltas[key] = pointDelta(current[key], previous[key]);
     else deltas[key] = pctDelta(current[key], previous[key]);
   }
-  // Alias eksplisit _pct utk 3 field revenue (sama nilainya dgn deltas.X di
-  // atas — money fields sudah pakai pctDelta — disediakan sebagai nama
-  // field yang eksplisit diminta kontrak API, jangan dihapus).
+  // Alias eksplisit _pct/_pt sesuai kontrak API §7 (sama nilainya dgn
+  // deltas.X generik di atas — disediakan sbg nama field yang eksplisit
+  // diminta spesifikasi, jangan dihapus).
   deltas.transaction_revenue_pct = pctDelta(current.transaction_revenue, previous.transaction_revenue);
   deltas.activation_revenue_pct = pctDelta(current.activation_revenue, previous.activation_revenue);
   deltas.mgm_revenue_pct = pctDelta(current.mgm_revenue, previous.mgm_revenue);
+  deltas.active_outlets_pct = pctDelta(current.active_outlets, previous.active_outlets);
+  deltas.inactive_outlets_pct = pctDelta(current.inactive_outlets, previous.inactive_outlets);
+  deltas.activation_conversion_pt = pointDelta(current.activation_conversion_pct, previous.activation_conversion_pct);
+  deltas.nmat_outlets_pct = pctDelta(current.nmat_outlets, previous.nmat_outlets);
+  deltas.nmat_trx_pct = pctDelta(current.nmat_trx, previous.nmat_trx);
   return deltas;
 }
 
 // ─────────────────────────────────────────────────────────────────
 // PB segmentation — cascade rule berbasis distribusi (P50/P75) aktual dari
-// registrations, activation_conversion_pct, inactive_registrations.
+// registrations, activation_conversion_pct, inactive_outlets.
 // BUKAN target bisnis yang belum ada.
 // ─────────────────────────────────────────────────────────────────
 
@@ -426,10 +535,11 @@ function computeSegmentationThresholds(pbRows) {
     registrations_p50: percentile(pbRows.map(r => r.registrations), 50),
     conversion_p50: percentile(nn(pbRows.map(r => r.activation_conversion_pct)), 50),
     conversion_p75: percentile(nn(pbRows.map(r => r.activation_conversion_pct)), 75),
-    inactive_p75: percentile(pbRows.map(r => r.inactive_registrations), 75),
+    inactive_p75: percentile(pbRows.map(r => r.inactive_outlets), 75),
     mgm_revenue_p50: percentile(pbRows.map(r => r.mgm_revenue), 50),
     transaction_revenue_p50: percentile(pbRows.map(r => r.transaction_revenue), 50),
     activation_revenue_p50: percentile(pbRows.map(r => r.activation_revenue), 50),
+    nmat_outlets_p50: percentile(pbRows.map(r => r.nmat_outlets), 50),
   };
 }
 
@@ -447,7 +557,7 @@ function classifyPb(row, thresholds) {
   if (reg >= thresholds.registrations_p50 && !gte(conv, thresholds.conversion_p50)) {
     return 'Hunter Only';
   }
-  if (safeNumber(row.inactive_registrations) >= thresholds.inactive_p75) {
+  if (safeNumber(row.inactive_outlets) >= thresholds.inactive_p75) {
     return 'High Backlog';
   }
   return 'Low Activity';
@@ -456,20 +566,25 @@ function classifyPb(row, thresholds) {
 // ─────────────────────────────────────────────────────────────────
 // PB scorecard — satu row per upline. Roster PAKAI FULL OUTER UNIVERSE
 // (union upline dari REG ∪ AKTIVASI ∪ DETAIL) supaya PB yang cuma muncul
-// di salah satu sumber (mis. sudah dapat aktivasi tapi datanya belum
-// tersinkron rapi di REG) TIDAK hilang revenue-nya dari scorecard — beda
-// dari "PB Aktif Merekrut" (KPI utama, tetap murni COUNT DISTINCT
+// di salah satu sumber TIDAK hilang revenue/NMAT-nya dari scorecard —
+// beda dari "PB Aktif Merekrut" (KPI utama, tetap murni COUNT DISTINCT
 // REG.upline, lihat computeRegistrationFunnel, TIDAK diubah oleh ini).
 //
-// Atribusi revenue per PB:
+// Atribusi per PB:
+//   registrations/active_outlets/inactive_outlets = REG outlet milik PB
+//     (REG.upline = PB), active_outlets di-match ke AKTIVASI GLOBAL yang
+//     is_active=true (bukan dibatasi AKTIVASI.upline=PB — outlet bisa
+//     match aktif meski upline AKTIVASI-nya beda, itu dicatat sbg
+//     upline-mismatch, bukan alasan untuk tidak dihitung aktif).
+//   nmat_outlets/nmat_trx = AKTIVASI.upline = PB, syarat NMAT (tanggal
+//     bulan terpilih + trx>0) — attribusi langsung dari AKTIVASI, BUKAN
+//     "REG outlet milik PB yang NMAT" (lihat §8 spesifikasi bisnis).
 //   transaction_revenue = SUM AKTIVASI.rev   GROUP BY AKTIVASI.upline
 //   activation_revenue  = SUM DETAIL.komisi_aktifasi GROUP BY DETAIL.upline
 //   mgm_revenue          = transaction_revenue + activation_revenue
-// registrations/active/inactive/unknown tetap dari REG.upline (bisa 0
-// kalau PB itu tidak punya baris REG sama sekali).
 // ─────────────────────────────────────────────────────────────────
 
-function buildPbScorecard(regRows, actRows, detailRows, prevRegRows, prevActRows, prevDetailRows) {
+function buildPbScorecard(regRows, actRows, detailRows, prevRegRows, prevActRows, prevDetailRows, currentPeriod, prevPeriodStart) {
   const reg = regRows || [];
   const act = actRows || [];
   const det = detailRows || [];
@@ -482,31 +597,56 @@ function buildPbScorecard(regRows, actRows, detailRows, prevRegRows, prevActRows
   collectUplines(reg); collectUplines(act); collectUplines(det);
 
   const totalFunnel = computeRegistrationFunnel(reg);
+  const totalActiveMatch = computeActiveOutletMatch(reg, act);
   const totalTransactionRevenue = act.reduce((s, a) => s + safeNumber(a.rev), 0);
   const totalActivationRevenue = det.reduce((s, d) => s + safeNumber(d.komisi_aktifasi), 0);
   const totalMgmRevenue = totalTransactionRevenue + totalActivationRevenue;
+  const totalNmat = computeNmatDetails(act, currentPeriod);
 
-  function pbBlock(pb, regSrc, actSrc, detSrc) {
+  // Set outlet aktif GLOBAL (REG match AKTIVASI is_active=true) — dihitung
+  // SEKALI di sini, dipakai per-PB via filter id_outlet supaya tidak
+  // double-hitung / berisiko divergen dari definisi top-level KPI.
+  const { activeMatchedIds: curActiveIds } = computeActiveOutletMatchDetailed(reg, act);
+  const { activeMatchedIds: prevActiveIds } = computeActiveOutletMatchDetailed(prevReg, prevAct);
+
+  function pbBlock(pb, regSrc, actSrc, detSrc, activeIds, periodStart) {
     const regForPb = regSrc.filter(r => r.upline === pb);
     const actForPb = actSrc.filter(a => a.upline === pb);
     const detForPb = detSrc.filter(d => d.upline === pb);
     const funnel = computeRegistrationFunnel(regForPb);
+
+    let active_outlets = 0;
+    for (const r of regForPb) {
+      if (r.id_outlet && activeIds.has(r.id_outlet)) active_outlets++;
+    }
+    const inactive_outlets = funnel.registrations - active_outlets;
+    const activation_conversion_pct = safePct(active_outlets, funnel.registrations);
+
+    const nmatDetails = computeNmatDetails(actForPb, periodStart);
+
     const transaction_revenue = actForPb.reduce((s, a) => s + safeNumber(a.rev), 0);
     const activation_revenue = detForPb.reduce((s, d) => s + safeNumber(d.komisi_aktifasi), 0);
     const mgm_revenue = transaction_revenue + activation_revenue;
     const dates = new Set(regForPb.map(r => r.tanggal_registrasi).filter(Boolean));
     const avg_registration_per_day = funnel.registrations > 0 && dates.size > 0 ? funnel.registrations / dates.size : null;
-    return { ...funnel, transaction_revenue, activation_revenue, mgm_revenue, avg_registration_per_day };
+
+    return {
+      ...funnel, active_outlets, inactive_outlets, activation_conversion_pct,
+      nmat_outlets: nmatDetails.nmat_outlets, nmat_trx: nmatDetails.nmat_trx,
+      transaction_revenue, activation_revenue, mgm_revenue, avg_registration_per_day,
+    };
   }
 
   const rows = [...uplineSet].map(pb => {
-    const cur = pbBlock(pb, reg, act, det);
-    const prev = pbBlock(pb, prevReg, prevAct, prevDet);
+    const cur = pbBlock(pb, reg, act, det, curActiveIds, currentPeriod);
+    const prev = pbBlock(pb, prevReg, prevAct, prevDet, prevActiveIds, prevPeriodStart);
     const deltas = {
       registrations: pctDelta(cur.registrations, prev.registrations),
-      active_registrations: pctDelta(cur.active_registrations, prev.active_registrations),
-      inactive_registrations: pctDelta(cur.inactive_registrations, prev.inactive_registrations),
+      active_outlets: pctDelta(cur.active_outlets, prev.active_outlets),
+      inactive_outlets: pctDelta(cur.inactive_outlets, prev.inactive_outlets),
       activation_conversion_pct: pointDelta(cur.activation_conversion_pct, prev.activation_conversion_pct),
+      nmat_outlets: pctDelta(cur.nmat_outlets, prev.nmat_outlets),
+      nmat_trx: pctDelta(cur.nmat_trx, prev.nmat_trx),
       avg_registration_per_day: pctDelta(cur.avg_registration_per_day, prev.avg_registration_per_day),
       transaction_revenue: pctDelta(cur.transaction_revenue, prev.transaction_revenue),
       activation_revenue: pctDelta(cur.activation_revenue, prev.activation_revenue),
@@ -515,16 +655,18 @@ function buildPbScorecard(regRows, actRows, detailRows, prevRegRows, prevActRows
     return {
       pb,
       registrations: cur.registrations,
-      active_registrations: cur.active_registrations,
-      inactive_registrations: cur.inactive_registrations,
-      unknown_active_status: cur.unknown_active_status,
+      active_outlets: cur.active_outlets,
+      inactive_outlets: cur.inactive_outlets,
       activation_conversion_pct: cur.activation_conversion_pct,
+      nmat_outlets: cur.nmat_outlets,
+      nmat_trx: cur.nmat_trx,
       avg_registration_per_day: cur.avg_registration_per_day,
       transaction_revenue: cur.transaction_revenue,
       activation_revenue: cur.activation_revenue,
       mgm_revenue: cur.mgm_revenue,
       contribution_registration_pct: safePct(cur.registrations, totalFunnel.registrations),
-      contribution_active_pct: safePct(cur.active_registrations, totalFunnel.active_registrations),
+      contribution_active_pct: safePct(cur.active_outlets, totalActiveMatch.active_outlets),
+      contribution_nmat_pct: safePct(cur.nmat_outlets, totalNmat.nmat_outlets),
       contribution_transaction_revenue_pct: safePct(cur.transaction_revenue, totalTransactionRevenue),
       contribution_activation_revenue_pct: safePct(cur.activation_revenue, totalActivationRevenue),
       contribution_mgm_revenue_pct: safePct(cur.mgm_revenue, totalMgmRevenue),
@@ -585,11 +727,10 @@ function agingBucket(days) {
 //
 // PENTING: `registrasi`/`aktivasi`/`detail` di sini HARUS SUDAH berisi
 // seluruh data periode yang tersinkron (current period TIDAK dipotong
-// oleh cutoff_date — lihat §6 spesifikasi bisnis). cutoffDate di sini
-// hanya dipakai untuk menghitung `aging_days` deskriptif, BUKAN untuk
-// memfilter current period. `currentPeriod` ('YYYY-MM-01') dipakai KHUSUS
-// utk NMAT (computeNmatOutlets) — previous period NMAT otomatis dihitung
-// dari previousPeriod(currentPeriod).
+// oleh cutoff_date). cutoffDate di sini hanya dipakai untuk menghitung
+// `aging_days` deskriptif, BUKAN untuk memfilter current period.
+// `currentPeriod` ('YYYY-MM-01') dipakai KHUSUS utk NMAT (computeNmatDetails)
+// — previous period NMAT otomatis dihitung dari previousPeriod(currentPeriod).
 // ─────────────────────────────────────────────────────────────────
 
 function buildPeriodAnalytics(dataset, options = {}) {
@@ -607,9 +748,8 @@ function buildPeriodAnalytics(dataset, options = {}) {
 
   const cohort_funnel = {
     registrations: current.registrations,
-    active_registrations: current.active_registrations,
-    inactive_registrations: current.inactive_registrations,
-    unknown_active_status: current.unknown_active_status,
+    active_outlets: current.active_outlets,
+    inactive_outlets: current.inactive_outlets,
     registered_and_transacting: current.registered_and_transacting,
     activation_conversion_pct: current.activation_conversion_pct,
     registered_to_transacting_pct: current.registered_to_transacting_pct,
@@ -619,6 +759,7 @@ function buildPeriodAnalytics(dataset, options = {}) {
     activated_outlets: current.activated_outlets,
     transacting_outlets: current.transacting_outlets,
     nmat_outlets: current.nmat_outlets,
+    nmat_trx: current.nmat_trx,
     total_trx: current.total_trx,
     transaction_revenue: current.transaction_revenue,
     activation_to_transaction_pct: current.activation_to_transaction_pct,
@@ -626,7 +767,8 @@ function buildPeriodAnalytics(dataset, options = {}) {
   };
 
   const { rows: pb_scorecard, thresholds } = buildPbScorecard(
-    registrasi, aktivasi, detail, previousRegistrasi, previousAktivasi, previousDetail
+    registrasi, aktivasi, detail, previousRegistrasi, previousAktivasi, previousDetail,
+    currentPeriod, prevPeriod
   );
 
   const pb_matrix = {
@@ -643,6 +785,7 @@ function buildPeriodAnalytics(dataset, options = {}) {
   const concentration = {
     registrations: concentrationRisk(pb_scorecard, 'registrations', current.registrations),
     mgm_revenue: concentrationRisk(pb_scorecard, 'mgm_revenue', current.mgm_revenue),
+    nmat_outlets: concentrationRisk(pb_scorecard, 'nmat_outlets', current.nmat_outlets),
   };
 
   const economics = {
@@ -731,10 +874,6 @@ function buildPeriodAnalytics(dataset, options = {}) {
   }).sort((a, b) => b.count - a.count);
 
   // ── Derived action queues (data-driven, deskriptif — belum ada SLA resmi) ──
-  const p0_unknown_active = registrasi
-    .filter(r => r.id_outlet && r.is_active === null)
-    .map(r => ({ type: 'unknown_active_status', id_outlet: r.id_outlet, upline: r.upline }));
-
   const uplineIndex = buildCanonicalOutletIndex(registrasi, aktivasi, detail);
   const p0_upline_mismatch = [];
   uplineIndex.forEach(e => {
@@ -746,19 +885,23 @@ function buildPeriodAnalytics(dataset, options = {}) {
     }
   });
 
-  const p1_registered_not_active = registrasi
-    .filter(r => r.id_outlet && r.is_active === false)
-    .map(r => ({
-      type: 'registered_not_active', id_outlet: r.id_outlet, upline: r.upline,
-      aging_days: daysBetween(r.tanggal_registrasi, cutoffDate),
-    }))
-    .sort((a, b) => (b.aging_days ?? -1) - (a.aging_days ?? -1));
+  // Belum Aktif (definisi resmi §1) = REG outlet yang BELUM match ke
+  // AKTIVASI aktif — BUKAN lagi REG.is_active === false.
+  const { inactiveIds: curInactiveIds } = computeActiveOutletMatchDetailed(registrasi, aktivasi);
+  const regByOutletMap = new Map(registrasi.filter(r => r.id_outlet).map(r => [r.id_outlet, r]));
+  const p1_registered_not_active = [...curInactiveIds].map(id => {
+    const regRow = regByOutletMap.get(id);
+    return {
+      type: 'registered_not_active', id_outlet: id, upline: regRow?.upline || null,
+      aging_days: daysBetween(regRow?.tanggal_registrasi, cutoffDate),
+    };
+  }).sort((a, b) => (b.aging_days ?? -1) - (a.aging_days ?? -1));
 
   const p1_pb_high_inactive_backlog = [...pb_scorecard]
-    .filter(r => r.inactive_registrations > 0)
-    .sort((a, b) => b.inactive_registrations - a.inactive_registrations)
+    .filter(r => r.inactive_outlets > 0)
+    .sort((a, b) => b.inactive_outlets - a.inactive_outlets)
     .slice(0, 20)
-    .map(r => ({ type: 'pb_high_inactive_backlog', pb: r.pb, inactive_registrations: r.inactive_registrations, registrations: r.registrations }));
+    .map(r => ({ type: 'pb_high_inactive_backlog', pb: r.pb, inactive_outlets: r.inactive_outlets, registrations: r.registrations }));
 
   const p1_pb_high_reg_low_conversion = pb_scorecard
     .filter(r => r.registrations >= thresholds.registrations_p50 &&
@@ -775,8 +918,14 @@ function buildPeriodAnalytics(dataset, options = {}) {
     .slice(0, 20)
     .map(r => ({ type: 'pb_high_revenue', pb: r.pb, mgm_revenue: r.mgm_revenue }));
 
-  // §10 — kandidat aksi berbasis revenue (percentile aktual, bukan threshold
-  // absolut palsu). Bukan "masalah otomatis" — hanya kandidat utk ditinjau.
+  const p2_pb_high_nmat = [...pb_scorecard]
+    .filter(r => r.nmat_outlets > 0)
+    .sort((a, b) => b.nmat_outlets - a.nmat_outlets)
+    .slice(0, 20)
+    .map(r => ({ type: 'pb_high_nmat', pb: r.pb, nmat_outlets: r.nmat_outlets, nmat_trx: r.nmat_trx }));
+
+  // §10 (lama) — kandidat aksi berbasis revenue (percentile aktual, bukan
+  // threshold absolut palsu). Bukan "masalah otomatis" — kandidat ditinjau.
   const p2_pb_high_reg_low_revenue = pb_scorecard
     .filter(r => r.registrations >= thresholds.registrations_p50 &&
       (r.mgm_revenue === null || r.mgm_revenue === undefined || r.mgm_revenue < thresholds.mgm_revenue_p50))
@@ -802,14 +951,14 @@ function buildPeriodAnalytics(dataset, options = {}) {
     : [];
 
   const derived_queues = {
-    p0: [...p0_unknown_active, ...p0_upline_mismatch],
+    p0: [...p0_upline_mismatch],
     p1: [...p1_registered_not_active, ...p1_pb_high_inactive_backlog, ...p1_pb_high_reg_low_conversion],
     p2: [
-      ...p2_pb_scale_candidate, ...p2_pb_high_revenue,
+      ...p2_pb_scale_candidate, ...p2_pb_high_revenue, ...p2_pb_high_nmat,
       ...p2_pb_high_reg_low_revenue, ...p2_pb_high_conversion_low_transaction_revenue,
       ...p2_pb_high_activation_revenue_low_transacting, ...p2_pb_concentration_risk,
     ],
-    p3: [{ type: 'monitoring_normal', count: current.active_registrations }],
+    p3: [{ type: 'monitoring_normal', count: current.active_outlets }],
   };
 
   // ── Data quality ──
@@ -828,11 +977,28 @@ function buildPeriodAnalytics(dataset, options = {}) {
   });
 
   const revenueFormulaDiff = Math.abs(current.mgm_revenue - (current.transaction_revenue + current.activation_revenue));
+  const activationMatchQuality = computeActivationMatchQuality(registrasi, aktivasi);
+  const nmatQuality = computeNmatQuality(aktivasi, currentPeriod);
 
   const quality = {
     rows: { registrasi: registrasi.length, aktivasi: aktivasi.length, aktivasi_detail: detail.length },
     duplicate_removed: { registrasi: dupReg, aktivasi: dupAkt, aktivasi_detail_id: dupDetailId },
-    unknown_active_status: current.unknown_active_status,
+    // §10 — audit Sudah Aktif/Belum Aktif (definisi resmi baru).
+    registrations_total: current.registrations,
+    active_matched_outlets: current.active_outlets,
+    inactive_unmatched_outlets: current.inactive_outlets,
+    registration_activation_upline_mismatch: activationMatchQuality.registration_activation_upline_mismatch,
+    activation_without_registration: activationMatchQuality.activation_without_registration,
+    registration_without_active_activation: current.inactive_outlets,
+    active_inactive_partition_consistent: (current.active_outlets + current.inactive_outlets) === current.registrations,
+    // §10 — audit NMAT.
+    nmat_outlets: current.nmat_outlets,
+    nmat_trx: current.nmat_trx,
+    nmat_missing_activation_date: nmatQuality.nmat_missing_activation_date,
+    nmat_invalid_activation_date: nmatQuality.nmat_invalid_activation_date,
+    nmat_excluded_other_month: nmatQuality.nmat_excluded_other_month,
+    nmat_excluded_zero_trx: nmatQuality.nmat_excluded_zero_trx,
+    // Audit lama (DETAIL/AKTIVASI cross-check) — tidak berubah, konsern berbeda.
     registration_without_activation_or_detail: registrasi.filter(r => r.id_outlet && !detailByOutlet.has(r.id_outlet)).length,
     activation_without_detail: aktivasi.filter(a => a.id_outlet && !detailByOutlet.has(a.id_outlet)).length,
     detail_without_activation: detail.filter(d => d.id_outlet && !actByOutlet.has(d.id_outlet)).length,
@@ -840,8 +1006,7 @@ function buildPeriodAnalytics(dataset, options = {}) {
     upline_mismatch_reg_vs_detail: uplineMismatchRegDetail,
     upline_mismatch_activation_vs_detail: uplineMismatchAktDetail,
     economics_formula_mismatch: economics.formula_mismatch.length,
-    // Audit pemisahan revenue (§11 spesifikasi bisnis) — toleransi floating
-    // point maksimal Rp0,01, bukan exact-equality yang rapuh.
+    // Audit pemisahan revenue — toleransi floating point maksimal Rp0,01.
     transaction_revenue_source_rows: aktivasi.length,
     activation_revenue_source_rows: detail.length,
     transaction_revenue_total: current.transaction_revenue,
@@ -897,10 +1062,15 @@ module.exports = {
   dedupeLastWins,
   buildCanonicalOutletIndex,
   computeRegistrationFunnel,
+  computeActiveOutletMatchDetailed,
+  computeActiveOutletMatch,
+  computeActivationMatchQuality,
   computeActivationRevenue,
   computeTransactionInfo,
   isDateInPeriod,
+  computeNmatDetails,
   computeNmatOutlets,
+  computeNmatQuality,
   computeSummary,
   summaryDeltas,
   computeSegmentationThresholds,
