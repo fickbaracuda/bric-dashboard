@@ -450,6 +450,15 @@ memilih korban — dan proses Node backend (RSS terbesar di server) adalah
 kandidat paling mungkin. Ini menjelaskan kenapa deploy bisa membuat
 production tidak dapat diakses, bukan cuma "lambat".
 
+**UPDATE (2026-08-07)**: setelah insiden nyata "server stuck" saat deploy
+(baik dari owner maupun Febri), ditambahkan **swap file 2GB permanen**
+(`/swapfile`, terdaftar di `/etc/fstab`, aktif otomatis walau server
+reboot) sebagai bantalan. Baseline RAM available di server ini SELALU
+mepet (~210-230MB) karena Node backend idle sudah pakai ~850MB RSS — itu
+kondisi normal steady-state, bukan tanda insiden. Threshold di 14.2
+diturunkan sesuai supaya gate tidak menolak SETIAP percobaan deploy dalam
+kondisi normal.
+
 Ditemukan juga bug laten: `deploy_common.run_remote()` memakai
 `paramiko Channel.exec_command(timeout=N)` — timeout itu **hanya
 menghentikan pembacaan lokal**, TIDAK PERNAH mengirim sinyal ke proses di
@@ -465,8 +474,8 @@ Modul baru `scripts/deploy_resource_guard.py` — dicek SEBELUM build mulai
 | Kondisi | Ambang batas | Alasan |
 |---|---|---|
 | Load average 1 menit | >= 0.7 × jumlah CPU (1.4 di server 2-core) | Headroom nyata sebelum build menambah beban lagi |
-| RAM available | < 250 MB | Baseline idle server cuma ~324MB — build butuh ruang tumbuh |
-| Swap terpakai | > 50 MB | Tanpa swap, mulai swapping = tanda RAM sudah kritis |
+| RAM available | < 150 MB | Diturunkan dari 250MB (2026-08-07) — baseline idle server ~210-230MB, swap 2GB sekarang jadi bantalan sungguhan |
+| Swap terpakai | > 300 MB | Dinaikkan dari 50MB — swap SEKARANG memang diharapkan terpakai sedikit saat build (itu tujuannya) |
 | Disk tersisa | < 3 GB | Backup/release/pg_dump butuh ruang; disk penuh = kegagalan membingungkan |
 | Backend `/health` | harus 200 | Jangan tambah beban ke server yang sudah bermasalah |
 | Query PostgreSQL aktif >30 detik | > 3 | Proxy aktivitas berat (termasuk kemungkinan sync/import besar) |
