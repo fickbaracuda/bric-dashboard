@@ -421,11 +421,13 @@ async function analyticsHandler(req, res) {
 
     // monthly_trend — agregat per periode langsung dari SQL (semua bulan
     // tersedia, TIDAK dipotong cutoff — sama seperti current period).
-    // Sudah Aktif/Belum Aktif per periode dihitung via JOIN ke AKTIVASI
-    // (is_active=true) — SAMA seperti computeActiveOutletMatch, BUKAN
-    // REG.is_active (definisi lama TERBUKTI SALAH, lihat catatan modul
-    // mgm-utils.js). NMAT per periode juga dihitung via JOIN tanggal
-    // aktifasi ke periode itu sendiri + trx>0, konsisten dgn computeNmatDetails.
+    // Sudah Aktif per periode = PURE COUNT DISTINCT AKTIVASI.id_outlet
+    // WHERE is_active=true — TIDAK JOIN ke REG sama sekali (definisi lama
+    // via JOIN REG<->AKTIVASI JUGA TERBUKTI SALAH, lihat catatan modul
+    // mgm-utils.js computeActiveOutletsFromAktivasi). Belum Aktif =
+    // registrations - active_outlets (aritmatika, bisa negatif kalau
+    // active > registrations — TIDAK di-cap, lihat active_exceeds_registrations
+    // di endpoint utama). NMAT per periode via tanggal aktifasi + trx>0.
     const trendRes = await pool.query(`
       WITH reg AS (
         SELECT periode,
@@ -434,11 +436,10 @@ async function analyticsHandler(req, res) {
           MAX(tanggal_registrasi) AS reg_cutoff
         FROM mgm_pa_registrasi GROUP BY periode
       ), active_match AS (
-        SELECT r.periode, COUNT(DISTINCT r.id_outlet) AS active_outlets
-        FROM mgm_pa_registrasi r
-        JOIN mgm_pa_aktivasi a
-          ON a.periode = r.periode AND a.id_outlet = r.id_outlet AND a.is_active = true
-        GROUP BY r.periode
+        SELECT periode, COUNT(DISTINCT id_outlet) AS active_outlets
+        FROM mgm_pa_aktivasi
+        WHERE is_active = true
+        GROUP BY periode
       ), akt AS (
         SELECT periode, COUNT(DISTINCT id_outlet) AS activated_outlets,
           COUNT(DISTINCT id_outlet) FILTER (WHERE trx>0) AS transacting_outlets,
@@ -516,6 +517,8 @@ async function analyticsHandler(req, res) {
       monthly_trend,
       pb_scorecard: analytics.pb_scorecard,
       pb_matrix: analytics.pb_matrix,
+      segment_summary: analytics.segment_summary,
+      opportunity_lists: analytics.opportunity_lists,
       economics: analytics.economics,
       territories: analytics.territories,
       outlet_types: analytics.outlet_types,

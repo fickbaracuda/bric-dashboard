@@ -54,15 +54,17 @@ class MgmErrorBoundary extends Component {
 const COLOR_PRIMARY = '#10B981';
 const COLOR_ACCENT  = '#059669';
 
-// Segmentasi PB — 5 status, cascade rule berbasis percentile aktual
-// (registrations P50, conversion P50/P75, inactive_outlets P75).
-// Lihat backend/src/lib/mgm-utils.js classifyPb().
+// Segmentasi PB — 5 status business-friendly + 1 status audit, cascade
+// rule berbasis percentile aktual (registrations P75, conversion P50/P75,
+// inactive_outlets P75) + sample-size guard. Lihat
+// backend/src/lib/mgm-utils.js classifyOpportunitySegment().
 const STATUS_COLORS = {
-  'Growth Engine': '#059669',
-  'Closer':        '#3B82F6',
-  'Hunter Only':   '#F59E0B',
-  'High Backlog':  '#DC2626',
-  'Low Activity':  '#9CA3AF',
+  'SCALE UP':          '#059669',
+  'FIX CONVERSION':    '#3B82F6',
+  'PUSH RECRUITMENT':  '#F59E0B',
+  'HIGH BACKLOG':      '#DC2626',
+  'LOW PRODUCTIVITY':  '#9CA3AF',
+  'CHECK DATA':        '#7C3AED',
 };
 
 const MIN_VOLUME_FOR_BEST_CONVERSION = 5;
@@ -169,10 +171,10 @@ function CommandKpiGrid({ s }) {
       <KPICard label="TOTAL REGISTRASI" value={fmt(s.current.registrations)} deltaVal={s.deltas.registrations} deltaKind="pct" color="#3B82F6"
         tip="Jumlah agen/outlet unik pada data REGISTRASI (REG) periode terpilih. Dihitung dari COUNT DISTINCT id_outlet." />
       <KPICard label="SUDAH AKTIF" value={fmt(s.current.active_outlets)} deltaVal={s.deltas.active_outlets} deltaKind="pct" color={COLOR_ACCENT}
-        sub={`Conversion ${nfPct(s.current.activation_conversion_pct)}`}
-        tip="Outlet REGISTRASI yang berhasil dicocokkan (JOIN) ke data AKTIVASI dengan status is_active = true. BUKAN dari kolom is_active pada data REGISTRASI (sumber lama, sudah terbukti salah). Conversion Aktivasi = Sudah Aktif dibagi Total Registrasi, ditampilkan sbg sub-metrik pada kartu ini." />
+        sub={`Conversion ${nfPct(s.current.activation_conversion_pct)}${s.current.active_exceeds_registrations ? ' • CHECK DATA' : ''}`}
+        tip="Jumlah outlet unik langsung dari data AKTIVASI dengan status is_active = 1 (true). Dihitung sebagai COUNT DISTINCT id_outlet pada tabel AKTIVASI SAJA — TIDAK di-join/dicocokkan ke data REGISTRASI. Conversion Aktivasi = Sudah Aktif dibagi Total Registrasi, ditampilkan sbg sub-metrik pada kartu ini." />
       <KPICard label="BELUM AKTIF" value={fmt(s.current.inactive_outlets)} deltaVal={s.deltas.inactive_outlets} deltaKind="pct" color="#F59E0B"
-        tip="Outlet REGISTRASI yang belum ditemukan sebagai aktif di data AKTIVASI. Dihitung sebagai Total Registrasi dikurangi Sudah Aktif — bukan dari kolom is_active pada data REGISTRASI." />
+        tip="Total Registrasi dikurangi Sudah Aktif (selisih aritmatika dari dua angka independen — bukan pencocokan outlet per outlet)." />
       <KPICard label="PB AKTIF MEREKRUT" value={fmt(s.current.active_recruiting_pb)} deltaVal={s.deltas.active_recruiting_pb} deltaKind="pct" color="#8B5CF6"
         tip="Jumlah upline/PB unik yang memiliki registrasi agen." />
       <KPICard label="RATA-RATA REKRUT / PB" value={fmt2(s.current.avg_registration_per_pb)} deltaVal={s.deltas.avg_registration_per_pb} deltaKind="pct" color="#F97316"
@@ -244,11 +246,23 @@ function DonutChart({ labels, values, colors, height = 200 }) {
   return <div style={{ height }}><canvas ref={ref} /></div>;
 }
 
-function BubbleMatrix({ rows, thresholds }) {
+// PB Opportunity Matrix — X: Registrasi PB, Y: Conversion Aktivasi PB,
+// bubble size: Revenue MGM (bounded/scaled, bukan linear, supaya satu PB
+// besar tidak memenuhi seluruh chart), bubble color: Opportunity Segment.
+// Garis putus-putus (registrations_p75/conversion_p50) HANYA "batas
+// distribusi aktual" — subtle, bukan target bisnis (§V). Label kuadran
+// ringan (SCALE UP/FIX CONVERSION/PUSH RECRUITMENT/LOW PRODUCTIVITY) —
+// HIGH BACKLOG sengaja TIDAK dapat kuadran sendiri karena priority
+// override (bisa muncul di kuadran mana pun berdasarkan warna/status).
+function OpportunityMatrixChart({ rows, thresholds }) {
   const ref = useRef(null);
   useEffect(() => {
     if (!ref.current || !rows?.length) return;
-    const maxRev = Math.max(...rows.map(r => r.bubble_revenue || 0), 1);
+    const revenues = rows.map(r => Math.max(r.bubble_revenue || 0, 0));
+    const maxRev = Math.max(...revenues, 1);
+    const minR = 7, maxR = 26;
+    const radiusFor = rev => minR + Math.sqrt(rev / maxRev) * (maxR - minR);
+
     const chart = new Chart(ref.current.getContext('2d'), {
       type: 'bubble',
       data: {
@@ -256,42 +270,78 @@ function BubbleMatrix({ rows, thresholds }) {
           label: 'PB',
           data: rows.map(r => ({
             x: r.x_registrations || 0, y: r.y_conversion_pct || 0,
-            r: 6 + ((r.bubble_revenue || 0) / maxRev) * 24,
+            r: radiusFor(r.bubble_revenue || 0),
             pb: r.pb, status: r.status,
+            active_outlets: r.active_outlets, inactive_outlets: r.inactive_outlets,
+            nmat_outlets: r.nmat_outlets, nmat_trx: r.nmat_trx,
+            transaction_revenue: r.transaction_revenue, activation_revenue: r.activation_revenue,
+            mgm_revenue: r.bubble_revenue, recommended_action: r.recommended_action,
+            sample_size_low: r.sample_size_low,
           })),
           backgroundColor: rows.map(r => (STATUS_COLORS[r.status] || '#9CA3AF') + 'AA'),
           borderColor: rows.map(r => STATUS_COLORS[r.status] || '#9CA3AF'),
+          borderWidth: 1.5,
         }],
       },
       options: {
         responsive: true, maintainAspectRatio: false,
+        layout: { padding: 8 },
         plugins: {
           legend: { display: false },
           tooltip: {
+            backgroundColor: 'rgba(17,24,39,0.94)',
+            padding: 10,
+            titleFont: { weight: 700 },
+            bodyFont: { size: 11 },
             callbacks: {
-              label: ctx => `${ctx.raw.pb}: ${nf.format(ctx.raw.x)} reg, ${ctx.raw.y.toFixed(1)}% konversi (${ctx.raw.status})`,
+              title: items => `PB ${items[0]?.raw?.pb || ''}`,
+              label: ctx => {
+                const d = ctx.raw;
+                const lines = [
+                  `Registrasi: ${nf.format(d.x)}`,
+                  `Sudah Aktif: ${nf.format(d.active_outlets ?? 0)}`,
+                  `Belum Aktif: ${nf.format(d.inactive_outlets ?? 0)}`,
+                  `Conversion Aktivasi: ${nfPct(d.y)}`,
+                  `NMAT: ${nf.format(d.nmat_outlets ?? 0)}`,
+                  `Transaksi NMAT: ${nf.format(d.nmat_trx ?? 0)}`,
+                  `Revenue Transaksi: ${fmtRp(d.transaction_revenue)}`,
+                  `Revenue Aktivasi: ${fmtRp(d.activation_revenue)}`,
+                  `Revenue MGM: ${fmtRp(d.mgm_revenue)}`,
+                  `Segment: ${d.status}${d.sample_size_low ? ' (sample kecil)' : ''}`,
+                  `Aksi: ${d.recommended_action || '-'}`,
+                ];
+                return lines;
+              },
             },
           },
         },
         scales: {
-          x: { title: { display: true, text: 'Registrasi' } },
-          y: { title: { display: true, text: 'Conversion Aktivasi (%)' } },
+          x: { title: { display: true, text: 'Registrasi PB' }, beginAtZero: true },
+          y: { title: { display: true, text: 'Conversion Aktivasi PB (%)' }, beginAtZero: true },
         },
       },
       plugins: [{
-        id: 'thresholdLines',
-        afterDraw(c) {
+        id: 'opportunityQuadrants',
+        beforeDraw(c) {
           if (!thresholds) return;
           const { ctx, chartArea, scales } = c;
+          const xT = thresholds.registrations_p75 ?? thresholds.registrations_p50;
+          const yT = thresholds.conversion_p50;
           ctx.save();
-          ctx.strokeStyle = '#9CA3AF80';
-          ctx.setLineDash([4, 4]);
-          if (thresholds.registrations_p50 != null) {
-            const x = scales.x.getPixelForValue(thresholds.registrations_p50);
+          ctx.font = '11px sans-serif';
+          ctx.fillStyle = 'rgba(107,114,128,0.55)';
+          if (xT != null && yT != null) {
+            const x = Math.min(Math.max(scales.x.getPixelForValue(xT), chartArea.left), chartArea.right);
+            const y = Math.min(Math.max(scales.y.getPixelForValue(yT), chartArea.top), chartArea.bottom);
+            ctx.textAlign = 'right';
+            ctx.fillText('SCALE UP', chartArea.right - 6, chartArea.top + 14);
+            ctx.fillText('FIX CONVERSION', chartArea.right - 6, chartArea.bottom - 8);
+            ctx.textAlign = 'left';
+            ctx.fillText('PUSH RECRUITMENT', chartArea.left + 6, chartArea.top + 14);
+            ctx.fillText('LOW PRODUCTIVITY', chartArea.left + 6, chartArea.bottom - 8);
+            ctx.setLineDash([4, 4]);
+            ctx.strokeStyle = 'rgba(156,163,175,0.5)';
             ctx.beginPath(); ctx.moveTo(x, chartArea.top); ctx.lineTo(x, chartArea.bottom); ctx.stroke();
-          }
-          if (thresholds.conversion_p50 != null) {
-            const y = scales.y.getPixelForValue(thresholds.conversion_p50);
             ctx.beginPath(); ctx.moveTo(chartArea.left, y); ctx.lineTo(chartArea.right, y); ctx.stroke();
           }
           ctx.restore();
@@ -300,7 +350,7 @@ function BubbleMatrix({ rows, thresholds }) {
     });
     return () => chart.destroy();
   }, [rows, thresholds]);
-  return <div style={{ height: 340 }}><canvas ref={ref} /></div>;
+  return <div style={{ height: 360 }}><canvas ref={ref} /></div>;
 }
 
 // ─── Data table helper ──────────────────────────────────────────
@@ -374,15 +424,17 @@ function buildExecutiveInsight(data) {
     });
   }
 
-  const eligible = pbScorecard.filter(r => (r.registrations || 0) >= MIN_VOLUME_FOR_BEST_CONVERSION && r.activation_conversion_pct != null);
+  // Sample-size guard (§N): PB berlabel CHECK DATA atau sample_size_low
+  // TIDAK PERNAH otomatis dianggap top converter walau conversion 100%.
+  const eligible = pbScorecard.filter(r => !r.sample_size_low && r.status !== 'CHECK DATA' && r.activation_conversion_pct != null);
   const topByConv = [...eligible].sort((a, b) => b.activation_conversion_pct - a.activation_conversion_pct)[0];
   if (topByConv) {
     insights.push({
       icon: '🎯',
-      text: `PB dengan conversion terbaik (minimum ${MIN_VOLUME_FOR_BEST_CONVERSION} registrasi): ${topByConv.pb} — ${nfPct(topByConv.activation_conversion_pct)}.`,
+      text: `PB dengan conversion terbaik (lolos sample-size guard): ${topByConv.pb} — ${nfPct(topByConv.activation_conversion_pct)}.`,
     });
   } else {
-    insights.push({ icon: 'ℹ️', text: `Belum ada PB dengan minimum ${MIN_VOLUME_FOR_BEST_CONVERSION} registrasi untuk dibandingkan conversion-nya.` });
+    insights.push({ icon: 'ℹ️', text: `Belum ada PB yang lolos sample-size guard untuk dibandingkan conversion-nya.` });
   }
 
   const highVolLowConv = pbScorecard.filter(r => (r.registrations || 0) >= MIN_VOLUME_FOR_BEST_CONVERSION &&
@@ -549,13 +601,75 @@ function CommandCenterTab({ data }) {
 // ═══════════════════════════════════════════════════════════════
 // TAB 2 — PB Scorecard
 // ═══════════════════════════════════════════════════════════════
+// Panel "Ringkasan Segmen PB" — menggantikan panel teknis Threshold
+// Segmentasi. Angka SELALU dari API (segment_summary), tidak ada contoh
+// hardcoded.
+function SegmentSummaryPanel({ segments }) {
+  return (
+    <div className="mgm-segment-summary">
+      {segments.map(s => (
+        <div key={s.segment} className="mgm-segment-card" style={{ borderTop: `3px solid ${STATUS_COLORS[s.segment] || '#9CA3AF'}` }}>
+          <div className="mgm-segment-card-head">
+            <StatusPill status={s.segment} />
+            <span className="mgm-segment-card-count">{fmt(s.pb_count)} PB</span>
+          </div>
+          <div className="mgm-segment-card-rows">
+            <span>Registrasi <strong>{fmt(s.registrations)}</strong></span>
+            <span>Sudah Aktif <strong>{fmt(s.active_outlets)}</strong></span>
+            <span>Belum Aktif <strong>{fmt(s.inactive_outlets)}</strong></span>
+            <span>Conversion <strong>{nfPct(s.activation_conversion_pct)}</strong></span>
+            <span>NMAT <strong>{fmt(s.nmat_outlets)}</strong></span>
+            <span>Revenue MGM <strong>{fmtRp(s.mgm_revenue)}</strong></span>
+          </div>
+          <div className="mgm-segment-card-action">{s.action_text}</div>
+        </div>
+      ))}
+      {!segments.length && <div style={{ color: 'var(--text-4)', fontSize: 13, padding: 12 }}>Belum ada data segmentasi.</div>}
+    </div>
+  );
+}
+
+// Top Opportunity lists (§S) — maks 5 baris per kelompok.
+function OpportunityListsPanel({ lists }) {
+  const groups = [
+    { key: 'prioritas_aktivasi', title: 'Prioritas Aktivasi', cols: [
+      { key: 'pb', label: 'PB' }, { key: 'registrations', label: 'Reg', right: true },
+      { key: 'active_outlets', label: 'Aktif', right: true }, { key: 'inactive_outlets', label: 'Belum Aktif', right: true },
+      { key: 'activation_conversion_pct', label: 'Conversion', right: true, render: r => nfPct(r.activation_conversion_pct) },
+    ] },
+    { key: 'kandidat_scale_up', title: 'Kandidat Scale Up', cols: [
+      { key: 'pb', label: 'PB' }, { key: 'registrations', label: 'Reg', right: true },
+      { key: 'activation_conversion_pct', label: 'Conversion', right: true, render: r => nfPct(r.activation_conversion_pct) },
+      { key: 'nmat_outlets', label: 'NMAT', right: true },
+      { key: 'mgm_revenue', label: 'Revenue MGM', right: true, render: r => fmtRp(r.mgm_revenue) },
+    ] },
+    { key: 'push_recruitment', title: 'Push Recruitment', cols: [
+      { key: 'pb', label: 'PB' }, { key: 'registrations', label: 'Reg', right: true },
+      { key: 'activation_conversion_pct', label: 'Conversion', right: true, render: r => nfPct(r.activation_conversion_pct) },
+      { key: 'mgm_revenue', label: 'Revenue MGM', right: true, render: r => fmtRp(r.mgm_revenue) },
+    ] },
+  ];
+  return (
+    <div className="wrd-charts-row-3 mgm-opportunity-lists">
+      {groups.map(g => (
+        <ChartCard key={g.key} title={g.title}>
+          <DataTable columns={g.cols} rows={safeArr(lists[g.key])} emptyLabel="Belum ada PB pada kelompok ini" />
+        </ChartCard>
+      ))}
+    </div>
+  );
+}
+
 function PbScorecardTab({ data, onSelectPb }) {
   const [q, setQ] = useState('');
   const [sortF, setSortF] = useState('registrations');
   const [sortD, setSortD] = useState('desc');
+  const [showMethodology, setShowMethodology] = useState(false);
   const pbMatrix = safeObj(data.pb_matrix);
   pbMatrix.rows = safeArr(pbMatrix.rows);
   pbMatrix.thresholds = safeObj(pbMatrix.thresholds);
+  const segmentSummary = safeArr(data.segment_summary);
+  const opportunityLists = safeObj(data.opportunity_lists);
 
   const rows = useMemo(() => {
     let d = safeArr(data.pb_scorecard);
@@ -592,21 +706,38 @@ function PbScorecardTab({ data, onSelectPb }) {
   return (
     <div className="wrd-tab-content">
       <div className="wrd-charts-row">
-        <ChartCard title="PB Performance Matrix — Registrasi vs Conversion Aktivasi (bubble = Revenue MGM)">
-          <BubbleMatrix rows={pbMatrix.rows} thresholds={pbMatrix.thresholds} />
+        <ChartCard title="PB OPPORTUNITY MATRIX" right={<span className="mgm-matrix-subtitle">Volume Rekrutmen vs Conversion Aktivasi · Bubble = Revenue MGM</span>}>
+          <OpportunityMatrixChart rows={pbMatrix.rows} thresholds={pbMatrix.thresholds} />
           <div className="mgm-matrix-legend">
             {Object.entries(STATUS_COLORS).map(([label, color]) => (
               <span key={label} className="mgm-matrix-legend-item"><i style={{ background: color }} />{label}</span>
             ))}
           </div>
+          <div className="mgm-matrix-caption">Garis putus-putus: batas distribusi aktual (P75 registrasi &amp; P50 conversion) — bukan target.</div>
         </ChartCard>
-        <ChartCard title="Threshold Segmentasi (P50/P75 aktual, bukan target)">
-          <DataTable
-            columns={[{ key: 'k', label: 'Metrik' }, { key: 'v', label: 'Nilai', right: true }]}
-            rows={Object.entries(pbMatrix.thresholds).map(([k, v]) => ({ k, v: typeof v === 'number' ? v.toFixed(1) : v }))}
-          />
+        <ChartCard title="RINGKASAN SEGMEN PB">
+          <SegmentSummaryPanel segments={segmentSummary} />
         </ChartCard>
       </div>
+
+      <div className="mgm-methodology-toggle">
+        <button className="mgm-mini-btn" onClick={() => setShowMethodology(v => !v)}>
+          <i className={`ti ${showMethodology ? 'ti-chevron-up' : 'ti-chevron-down'}`} /> ⓘ Metodologi Segmentasi
+        </button>
+        {showMethodology && (
+          <div className="mgm-methodology-panel">
+            <p style={{ fontSize: 12, color: 'var(--text-3)', margin: '6px 0 10px' }}>
+              Segmentasi memakai percentile aktual dari populasi PB periode ini (bukan target bisnis). Sample-size guard mencegah PB dengan registrasi sangat kecil otomatis dianggap top converter.
+            </p>
+            <DataTable
+              columns={[{ key: 'k', label: 'Metrik' }, { key: 'v', label: 'Nilai', right: true }]}
+              rows={Object.entries(pbMatrix.thresholds).map(([k, v]) => ({ k, v: typeof v === 'number' ? v.toFixed(1) : v }))}
+            />
+          </div>
+        )}
+      </div>
+
+      <OpportunityListsPanel lists={opportunityLists} />
 
       <ChartCard title="PB Scorecard" right={
         <div style={{ display: 'flex', gap: 8 }}>
@@ -644,7 +775,10 @@ function PbScorecardTab({ data, onSelectPb }) {
                   <td style={{ textAlign: 'right' }}>{fmtRp(r.activation_revenue)}</td>
                   <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmtRp(r.mgm_revenue)}</td>
                   <td style={{ textAlign: 'right' }}>{nfPct(r.contribution_mgm_revenue_pct)}</td>
-                  <td><StatusPill status={r.status} /></td>
+                  <td>
+                    <StatusPill status={r.status} />
+                    {r.sample_size_low && <span className="mgm-sample-low-badge" title="Registrasi di bawah ambang sample-size — conversion tetap ditampilkan tapi tidak eligible top converter">sample kecil</span>}
+                  </td>
                 </tr>
               ))}
               {!rows.length && <tr><td colSpan={12} style={{ textAlign: 'center', padding: 20, color: 'var(--text-4)' }}>Belum ada data</td></tr>}
@@ -735,6 +869,7 @@ function FunnelAgingTab({ data, periode }) {
   const regNotActive = p1Queue.filter(q => q.type === 'registered_not_active');
   const pbHighBacklog = p1Queue.filter(q => q.type === 'pb_high_inactive_backlog');
   const uplineMismatch = p0Queue.filter(q => q.type === 'upline_mismatch');
+  const pbActiveExceedsReg = p0Queue.filter(q => q.type === 'pb_active_exceeds_registrations');
   const cohortFunnel = safeObj(data.cohort_funnel);
   const operationalVolume = safeObj(data.operational_volume);
 
@@ -768,6 +903,9 @@ function FunnelAgingTab({ data, periode }) {
       </div>
 
       <ChartCard title={`Queue — Registrasi Belum Aktif (${regNotActive.length})`}>
+        <div style={{ fontSize: 12, color: 'var(--text-4)', marginBottom: 8 }}>
+          Daftar ini informasional untuk follow-up (outlet REG yang id_outlet-nya belum tercatat aktif di AKTIVASI) — jumlahnya bisa berbeda dari angka KPI Belum Aktif (yang murni aritmatika Total Registrasi − Sudah Aktif).
+        </div>
         <DataTable
           columns={[
             { key: 'id_outlet', label: 'ID Outlet' }, { key: 'upline', label: 'PB' },
@@ -797,6 +935,20 @@ function FunnelAgingTab({ data, periode }) {
             { key: 'upline_detail', label: 'Upline (DETAIL)' },
           ]}
           rows={uplineMismatch.slice(0, 100)}
+        />
+      </ChartCard>
+
+      <ChartCard title={`CHECK DATA — PB dengan Sudah Aktif > Registrasi (${pbActiveExceedsReg.length})`}>
+        <div style={{ fontSize: 12, color: 'var(--text-4)', marginBottom: 8 }}>
+          PB pada daftar ini dikeluarkan dari ranking conversion sampai mismatch data diperiksa — angka TIDAK di-cap/dipalsukan.
+        </div>
+        <DataTable
+          columns={[
+            { key: 'pb', label: 'PB' },
+            { key: 'registrations', label: 'Registrasi', right: true },
+            { key: 'active_outlets', label: 'Sudah Aktif', right: true },
+          ]}
+          rows={pbActiveExceedsReg}
         />
       </ChartCard>
 

@@ -49,8 +49,9 @@ const {
 
 const {
   safeNumber, safeBoolean, safePct, pctDelta, pointDelta, dedupeLastWins,
-  classifyPb, computeSegmentationThresholds,
-  computeRegistrationFunnel, computeActiveOutletMatch, computeActiveOutletMatchDetailed,
+  classifyOpportunitySegment, computeOpportunitySegmentThresholds, computeQualifiedConversionMinReg,
+  SEGMENT_ACTION, buildSegmentSummary, buildOpportunityLists,
+  computeRegistrationFunnel, computeActiveOutletsFromAktivasi, computeSudahAktif,
   computeActivationMatchQuality, computeActivationRevenue, computeTransactionInfo,
   computeSummary, summaryDeltas, isDateInPeriod, computeNmatOutlets, computeNmatDetails,
   buildPbScorecard, buildPeriodAnalytics,
@@ -151,101 +152,118 @@ test('9b. pointDelta null jika salah satu rate null', () => {
 // KOREKSI MODEL BISNIS — test wajib §15 (item 1-24)
 // ═══════════════════════════════════════════════════════════════
 
-console.log('\n-- B1-B24. KOREKSI Sudah Aktif/Belum Aktif — JOIN REG<->AKTIVASI (angka 718 lama TERBUKTI SALAH) --');
-test('B1. REG.is_active TIDAK PERNAH dipakai — mengubahnya tidak mengubah active_outlets sama sekali', () => {
-  const akt = [{ id_outlet: 'A', is_active: true, trx: 0 }];
-  const regTrueIsActive  = [{ id_outlet: 'A', upline: 'PB1', is_active: true }];
-  const regFalseIsActive = [{ id_outlet: 'A', upline: 'PB1', is_active: false }];
-  const regNullIsActive  = [{ id_outlet: 'A', upline: 'PB1', is_active: null }];
-  const a1 = computeActiveOutletMatch(regTrueIsActive, akt).active_outlets;
-  const a2 = computeActiveOutletMatch(regFalseIsActive, akt).active_outlets;
-  const a3 = computeActiveOutletMatch(regNullIsActive, akt).active_outlets;
-  assert.strictEqual(a1, 1); assert.strictEqual(a2, 1); assert.strictEqual(a3, 1);
+console.log('\n-- B1-B13. KOREKSI FINAL Sudah Aktif — PURE COUNT dari AKTIVASI, TANPA join REG (angka 690 hasil join JUGA TERBUKTI SALAH) --');
+test('B1. active_outlets DIHITUNG LANGSUNG dari AKTIVASI.is_active=1 — TIDAK JOIN/intersection ke REG sama sekali', () => {
+  // REG kosong total (0 baris) — active_outlets TETAP terhitung dari AKTIVASI
+  // sendirian, membuktikan TIDAK ADA join/intersection ke REG.
+  const akt = [{ id_outlet: 'A', is_active: true }, { id_outlet: 'B', is_active: true }];
+  assert.strictEqual(computeActiveOutletsFromAktivasi(akt).active_outlets, 2, 'active_outlets tidak boleh 0 walau REG kosong — bukti tidak ada join ke REG');
 });
-test('B2. MGM AKTIV(DETAIL).is_active TIDAK PERNAH dipakai — computeActiveOutletMatch tidak menyentuh tabel detail sama sekali', () => {
-  const reg = [{ id_outlet: 'A', upline: 'PB1' }];
+test('B2. REG.is_active TIDAK PERNAH dipakai — mengubahnya tidak mengubah active_outlets/inactive_outlets sama sekali', () => {
   const akt = [{ id_outlet: 'A', is_active: true }];
-  // fungsi hanya menerima (regRows, actRows) — DETAIL tidak pernah jadi parameter,
-  // secara struktural tidak mungkin terpengaruh field is_active pada DETAIL.
-  assert.strictEqual(computeActiveOutletMatch.length, 2, 'computeActiveOutletMatch hanya menerima regRows & actRows');
-  assert.strictEqual(computeActiveOutletMatch(reg, akt).active_outlets, 1);
+  const regTrue  = [{ id_outlet: 'A', upline: 'PB1', is_active: true }];
+  const regFalse = [{ id_outlet: 'A', upline: 'PB1', is_active: false }];
+  const regNull  = [{ id_outlet: 'A', upline: 'PB1', is_active: null }];
+  const a1 = computeSudahAktif(regTrue, akt);
+  const a2 = computeSudahAktif(regFalse, akt);
+  const a3 = computeSudahAktif(regNull, akt);
+  assert.strictEqual(a1.active_outlets, 1); assert.strictEqual(a2.active_outlets, 1); assert.strictEqual(a3.active_outlets, 1);
+  assert.strictEqual(a1.inactive_outlets, a2.inactive_outlets);
+  assert.strictEqual(a2.inactive_outlets, a3.inactive_outlets);
 });
-test('B3. AKTIVASI.is_active = true WAJIB — outlet dgn AKTIVASI.is_active=false/null TIDAK dihitung aktif walau ada di REG', () => {
-  const reg = [
-    { id_outlet: 'A', upline: 'PB1' }, { id_outlet: 'B', upline: 'PB1' }, { id_outlet: 'C', upline: 'PB1' },
-  ];
+test('B3. MGM AKTIV(DETAIL).is_active/id_aktifasi TIDAK PERNAH dipakai — computeActiveOutletsFromAktivasi hanya menerima 1 parameter (actRows)', () => {
+  assert.strictEqual(computeActiveOutletsFromAktivasi.length, 1, 'computeActiveOutletsFromAktivasi hanya menerima actRows — DETAIL tidak pernah jadi parameter, secara struktural tidak mungkin terpengaruh field DETAIL');
+});
+test('B4. Normalisasi is_active menerima representasi valid: 1, "1", boolean true', () => {
   const akt = [
-    { id_outlet: 'A', is_active: true },
-    { id_outlet: 'B', is_active: false },
-    { id_outlet: 'C', is_active: null },
+    { id_outlet: 'A', is_active: 1 },
+    { id_outlet: 'B', is_active: '1' },
+    { id_outlet: 'C', is_active: true },
   ];
-  assert.strictEqual(computeActiveOutletMatch(reg, akt).active_outlets, 1, 'hanya A yang AKTIVASI.is_active=true');
+  assert.strictEqual(computeActiveOutletsFromAktivasi(akt).active_outlets, 3);
 });
-test('B4. Definisi resmi: REG.id_outlet DIMATCH ke AKTIVASI.id_outlet (JOIN), bukan union/independen', () => {
+test('B5. Blank/null/false/unknown TIDAK dihitung aktif', () => {
+  const akt = [
+    { id_outlet: 'A', is_active: false },
+    { id_outlet: 'B', is_active: null },
+    { id_outlet: 'C', is_active: '' },
+    { id_outlet: 'D', is_active: undefined },
+    { id_outlet: 'E', is_active: 'unknown-value' },
+  ];
+  assert.strictEqual(computeActiveOutletsFromAktivasi(akt).active_outlets, 0);
+});
+test('B6. active_outlets DISTINCT per id_outlet — duplikat baris tidak double-count', () => {
+  const akt = [
+    { id_outlet: 'A', is_active: true }, { id_outlet: 'A', is_active: true },
+    { id_outlet: 'A', is_active: 1 },
+  ];
+  assert.strictEqual(computeActiveOutletsFromAktivasi(akt).active_outlets, 1);
+});
+test('B7. Belum Aktif = Total Registrasi - Sudah Aktif (ARITMATIKA, bukan set-difference outlet)', () => {
+  const reg = [{ id_outlet: 'X', upline: 'PB1' }, { id_outlet: 'Y', upline: 'PB1' }, { id_outlet: 'Z', upline: 'PB1' }];
+  // AKTIVASI sengaja pakai id_outlet YANG BEDA SAMA SEKALI dari REG (W bukan
+  // X/Y/Z) — inactive_outlets tetap murni aritmatika (3 - 1 = 2), TIDAK
+  // butuh W match ke outlet REG manapun.
+  const akt = [{ id_outlet: 'W', is_active: true }];
+  const s = computeSudahAktif(reg, akt);
+  assert.strictEqual(s.registrations, 3);
+  assert.strictEqual(s.active_outlets, 1);
+  assert.strictEqual(s.inactive_outlets, 2, '3 - 1 = 2, aritmatika murni walau W tidak ada di REG');
+});
+test('B8. active_outlets > registrations TIDAK di-cap — flag active_exceeds_registrations, TIDAK silent negative yang terlihat valid', () => {
+  const reg = [{ id_outlet: 'A', upline: 'PB1' }];
+  const akt = [{ id_outlet: 'A', is_active: true }, { id_outlet: 'B', is_active: true }, { id_outlet: 'C', is_active: true }];
+  const s = computeSudahAktif(reg, akt);
+  assert.strictEqual(s.registrations, 1);
+  assert.strictEqual(s.active_outlets, 3);
+  assert.strictEqual(s.inactive_outlets, -2, 'TIDAK di-cap ke 0 — nilai aritmatika jujur, anomaly harus diflag terpisah');
+  assert.strictEqual(s.active_exceeds_registrations, true);
+});
+test('B9. Kondisi normal (active <= registrations): active_exceeds_registrations = false, partisi tetap konsisten', () => {
   const reg = [{ id_outlet: 'A', upline: 'PB1' }, { id_outlet: 'B', upline: 'PB1' }];
-  const akt = [{ id_outlet: 'A', is_active: true }, { id_outlet: 'Z', is_active: true }]; // Z tidak ada di REG
-  const m = computeActiveOutletMatch(reg, akt);
-  assert.strictEqual(m.active_outlets, 1, 'hanya A (match REG & AKTIVASI aktif) — Z (AKTIVASI only) tidak dihitung dari sisi REG');
-  assert.strictEqual(m.inactive_outlets, 1, 'B ada di REG tapi tidak match AKTIVASI aktif manapun');
-});
-test('B5. inactive_outlets = registrations MINUS active-matched (bukan REG.is_active=false)', () => {
-  const reg = [
-    { id_outlet: 'A', upline: 'PB1', is_active: false }, // is_active REG sengaja false tapi AKTIVASI aktif -> tetap dihitung AKTIF
-    { id_outlet: 'B', upline: 'PB1', is_active: true },  // is_active REG sengaja true tapi tidak match AKTIVASI aktif -> BELUM AKTIF
-  ];
   const akt = [{ id_outlet: 'A', is_active: true }];
-  const m = computeActiveOutletMatch(reg, akt);
-  assert.strictEqual(m.active_outlets, 1, 'A aktif krn AKTIVASI match, walau REG.is_active=false');
-  assert.strictEqual(m.inactive_outlets, 1, 'B belum aktif krn tidak match AKTIVASI aktif, walau REG.is_active=true');
+  const s = computeSudahAktif(reg, akt);
+  assert.strictEqual(s.active_exceeds_registrations, false);
+  assert.strictEqual(s.active_outlets + s.inactive_outlets, s.registrations);
 });
-test('B6. active_outlets + inactive_outlets = registrations SELALU (invariant partisi biner, tanpa bucket unknown)', () => {
-  const reg = [
-    { id_outlet: 'A', upline: 'PB1' }, { id_outlet: 'B', upline: 'PB1' },
-    { id_outlet: 'C', upline: 'PB1' }, { id_outlet: 'D', upline: 'PB2' },
-  ];
-  const akt = [{ id_outlet: 'A', is_active: true }, { id_outlet: 'D', is_active: true }];
-  const m = computeActiveOutletMatch(reg, akt);
-  assert.strictEqual(m.registrations, 4);
-  assert.strictEqual(m.active_outlets + m.inactive_outlets, m.registrations);
-  assert.strictEqual(m.active_outlets, 2);
-  assert.strictEqual(m.inactive_outlets, 2);
-});
-test('B7. Conversion Aktivasi = active_outlets / registrations x 100', () => {
+test('B10. Conversion Aktivasi = active_outlets / registrations x 100', () => {
   const reg = [{ id_outlet: 'A', upline: 'PB1' }, { id_outlet: 'B', upline: 'PB1' }, { id_outlet: 'C', upline: 'PB1' }, { id_outlet: 'D', upline: 'PB1' }];
   const akt = [{ id_outlet: 'A', is_active: true }];
-  assert.strictEqual(computeActiveOutletMatch(reg, akt).activation_conversion_pct, 25);
+  assert.strictEqual(computeSudahAktif(reg, akt).activation_conversion_pct, 25);
 });
-test('B8. registrations = 0 -> Conversion Aktivasi null (bukan NaN/Infinity)', () => {
-  const m = computeActiveOutletMatch([], []);
-  assert.strictEqual(m.activation_conversion_pct, null);
-  assert.strictEqual(m.active_outlets, 0);
-  assert.strictEqual(m.inactive_outlets, 0);
+test('B11. registrations = 0 -> Conversion Aktivasi null (bukan NaN/Infinity)', () => {
+  const s = computeSudahAktif([], []);
+  assert.strictEqual(s.activation_conversion_pct, null);
 });
-test('B9. Duplikat id_outlet pada REG tidak double-count active_outlets', () => {
-  const reg = [{ id_outlet: 'A', upline: 'PB1' }, { id_outlet: 'A', upline: 'PB1' }];
-  const akt = [{ id_outlet: 'A', is_active: true }];
-  const m = computeActiveOutletMatch(reg, akt);
-  assert.strictEqual(m.registrations, 1);
-  assert.strictEqual(m.active_outlets, 1);
+test('B12. Baseline Agustus tervalidasi read-only: 1002 outlet AKTIVASI is_active=true, 1 false, 1 null -> distinct TOTAL (semua status) 1004, active_outlets (formula resmi) = 1002 (BUKAN 1004 — 1004 adalah total outlet TANPA filter is_active)', () => {
+  const akt = [];
+  for (let i = 0; i < 1002; i++) akt.push({ id_outlet: `T${i}`, is_active: true });
+  akt.push({ id_outlet: 'F1', is_active: false });
+  akt.push({ id_outlet: 'N1', is_active: null });
+  const { active_outlets } = computeActiveOutletsFromAktivasi(akt);
+  assert.strictEqual(active_outlets, 1002, 'formula resmi (is_active normalisasi true) menghasilkan 1002 pada baseline read-only Agustus, bukan 1004');
+  const distinctAll = new Set(akt.map(a => a.id_outlet)).size;
+  assert.strictEqual(distinctAll, 1004, '1004 adalah TOTAL distinct outlet TANPA filter is_active — bukan definisi Sudah Aktif');
 });
-test('B10. Duplikat baris AKTIVASI utk outlet sama tidak mengubah hasil (last-wins per outlet)', () => {
-  const reg = [{ id_outlet: 'A', upline: 'PB1' }];
-  const akt = [{ id_outlet: 'A', is_active: true }, { id_outlet: 'A', is_active: true }];
-  assert.strictEqual(computeActiveOutletMatch(reg, akt).active_outlets, 1);
-});
-test('B11. computeActivationMatchQuality — upline mismatch antara REG & AKTIVASI pada outlet aktif', () => {
+test('B13. computeActivationMatchQuality tidak lagi jadi sumber Sudah Aktif — hanya audit upline mismatch & activation/registration orphan', () => {
   const reg = [{ id_outlet: 'A', upline: 'PB1' }, { id_outlet: 'B', upline: 'PB2' }];
   const akt = [{ id_outlet: 'A', upline: 'PBX', is_active: true }, { id_outlet: 'B', upline: 'PB2', is_active: true }];
   const q = computeActivationMatchQuality(reg, akt);
   assert.strictEqual(q.registration_activation_upline_mismatch, 1, 'A: PB1(REG) vs PBX(AKTIVASI) = mismatch; B: cocok');
 });
-test('B12. computeActivationMatchQuality — activation_without_registration menghitung outlet AKTIVASI tanpa baris REG sama sekali', () => {
+test('B14. computeActivationMatchQuality — activation_without_registration menghitung outlet AKTIVASI tanpa baris REG sama sekali', () => {
   const reg = [{ id_outlet: 'A', upline: 'PB1' }];
   const akt = [{ id_outlet: 'A', is_active: true }, { id_outlet: 'ORPHAN', is_active: true }];
   const q = computeActivationMatchQuality(reg, akt);
   assert.strictEqual(q.activation_without_registration, 1);
 });
-test('B13. active_recruiting_pb TETAP murni REG.upline (TIDAK berubah oleh koreksi Sudah Aktif)', () => {
+test('B15. computeActivationMatchQuality — registration_without_activation menghitung REG outlet tanpa baris AKTIVASI sama sekali', () => {
+  const reg = [{ id_outlet: 'A', upline: 'PB1' }, { id_outlet: 'B', upline: 'PB1' }];
+  const akt = [{ id_outlet: 'A', is_active: true }];
+  const q = computeActivationMatchQuality(reg, akt);
+  assert.strictEqual(q.registration_without_activation, 1, 'B tidak punya baris AKTIVASI sama sekali');
+});
+test('B16. active_recruiting_pb TETAP murni REG.upline (TIDAK berubah oleh koreksi Sudah Aktif)', () => {
   const reg = [{ id_outlet: 'A', upline: 'PB1' }, { id_outlet: 'B', upline: 'PB2' }];
   assert.strictEqual(computeRegistrationFunnel(reg).active_recruiting_pb, 2);
 });
@@ -274,7 +292,7 @@ test('7. Jumlah id_outlet TIDAK dipakai sebagai jumlah PB (3 outlet, 2 PB unik -
 });
 
 console.log('\n-- 8-9. PB conversion & rata-rata rekrut per PB --');
-test('8. PB conversion per PB = active_outlets / registrations x 100 (JOIN ke AKTIVASI global, per upline REG)', () => {
+test('8. PB conversion per PB = active_outlets / registrations x 100 (agregasi TERPISAH: registrations dari REG.upline, active_outlets dari AKTIVASI.upline, BUKAN inner join outlet-level)', () => {
   const reg = [
     { id_outlet: 'A', upline: 'PB1' }, { id_outlet: 'B', upline: 'PB1' },
     { id_outlet: 'C', upline: 'PB1' }, { id_outlet: 'D', upline: 'PB1' },
@@ -294,6 +312,17 @@ test('8. PB conversion per PB = active_outlets / registrations x 100 (JOIN ke AK
   assert.strictEqual(pb1.activation_conversion_pct, 50, 'PB1: 2 aktif (AKTIVASI is_active=true) / 4 registrasi = 50%');
   const pb2 = rows.find(r => r.pb === 'PB2');
   assert.strictEqual(pb2.activation_conversion_pct, 100, 'PB2: 1 aktif / 1 registrasi = 100%');
+});
+test('8b. PB active_outlets TIDAK butuh id_outlet sama dgn REG — agregasi AKTIVASI.upline berdiri sendiri (§H, §Y.10/11)', () => {
+  const reg = [{ id_outlet: 'X', upline: 'PB1' }, { id_outlet: 'Y', upline: 'PB1' }];
+  // AKTIVASI pakai id_outlet TOTALLY BEDA (W, bukan X/Y) — active_outlets
+  // PB1 harus tetap terhitung 1 (dari AKTIVASI.upline=PB1), TIDAK 0 akibat
+  // inner-join outlet-level yang akan membuat PB/outlet ini hilang.
+  const akt = [{ id_outlet: 'W', upline: 'PB1', is_active: true }];
+  const { rows } = buildPbScorecard(reg, akt, [], [], [], []);
+  const pb1 = rows.find(r => r.pb === 'PB1');
+  assert.strictEqual(pb1.registrations, 2, 'registrations murni dari REG.upline');
+  assert.strictEqual(pb1.active_outlets, 1, 'active_outlets murni dari AKTIVASI.upline, TIDAK hilang walau id_outlet beda dari REG');
 });
 test('9. avg_registration_per_pb = registrations / active_recruiting_pb', () => {
   const reg = [
@@ -471,6 +500,79 @@ test('13i. Revenue breakdown standalone (tab Transaction & Revenue) pakai CSS gr
     'margin-bottom 16px eksplisit harus dihapus — biarkan gap flex .wr-page/.wrd-tab-content yang mengatur jarak, jangan dobel spacing');
 });
 
+console.log('\n-- §Z. PB Opportunity Matrix — frontend structural tests --');
+const pbScorecardTabSlice = extractFunctionBody(frontendSrc, 'function PbScorecardTab(');
+
+test('Z1. Judul "PB OPPORTUNITY MATRIX" tampil menggantikan "PB Performance Matrix"', () => {
+  assert.ok(pbScorecardTabSlice.includes('PB OPPORTUNITY MATRIX'));
+  assert.ok(!frontendSrc.includes('PB Performance Matrix — Registrasi vs Conversion Aktivasi (bubble = Revenue MGM)'), 'judul lama harus sudah diganti');
+});
+test('Z2. Subtitle "Volume Rekrutmen vs Conversion Aktivasi" dan "Bubble = Revenue MGM" tampil', () => {
+  assert.ok(pbScorecardTabSlice.includes('Volume Rekrutmen vs Conversion Aktivasi'));
+  assert.ok(pbScorecardTabSlice.includes('Bubble = Revenue MGM'));
+});
+test('Z3. Panel teknis "Threshold Segmentasi" TIDAK LAGI tampil sebagai panel utama', () => {
+  assert.ok(!pbScorecardTabSlice.includes('Threshold Segmentasi (P50/P75 aktual, bukan target)'), 'panel utama lama harus sudah dihapus dari PbScorecardTab');
+});
+test('Z4. Raw variable names P50/P75 hanya tampil di collapsible Metodologi Segmentasi, bukan main view', () => {
+  assert.ok(pbScorecardTabSlice.includes('Metodologi Segmentasi'), 'harus ada toggle/collapsible Metodologi Segmentasi');
+  assert.ok(pbScorecardTabSlice.includes('showMethodology'), 'raw threshold table harus dikondisikan oleh state showMethodology (collapsible), bukan selalu tampil');
+});
+test('Z5. Panel "RINGKASAN SEGMEN PB" tampil menggantikan Threshold Segmentasi', () => {
+  assert.ok(pbScorecardTabSlice.includes('RINGKASAN SEGMEN PB'));
+  assert.ok(frontendSrc.includes('function SegmentSummaryPanel'), 'komponen SegmentSummaryPanel harus ada');
+});
+test('Z6. Lima segment business-friendly + CHECK DATA terdaftar di STATUS_COLORS, label lama sudah dihapus total', () => {
+  for (const label of ['SCALE UP', 'FIX CONVERSION', 'PUSH RECRUITMENT', 'HIGH BACKLOG', 'LOW PRODUCTIVITY', 'CHECK DATA']) {
+    assert.ok(frontendSrc.includes(`'${label}'`), `STATUS_COLORS harus memuat "${label}"`);
+  }
+  for (const oldLabel of ['Growth Engine', 'Closer', 'Hunter Only', 'Low Activity']) {
+    assert.ok(!frontendSrc.includes(oldLabel), `label lama "${oldLabel}" harus sudah dihapus total`);
+  }
+});
+test('Z7. Top Opportunity lists (Prioritas Aktivasi / Kandidat Scale Up / Push Recruitment) tampil, maksimal 3 kelompok', () => {
+  assert.ok(frontendSrc.includes('function OpportunityListsPanel'));
+  assert.ok(frontendSrc.includes("title: 'Prioritas Aktivasi'"));
+  assert.ok(frontendSrc.includes("title: 'Kandidat Scale Up'"));
+  assert.ok(frontendSrc.includes("title: 'Push Recruitment'"));
+});
+test('Z8. Bubble tooltip memuat metrik bisnis lengkap (Registrasi, Sudah Aktif, Belum Aktif, Conversion, NMAT, Transaksi NMAT, Revenue Transaksi/Aktivasi/MGM, Segment, Aksi)', () => {
+  const matrixChartSlice = extractFunctionBody(frontendSrc, 'function OpportunityMatrixChart(');
+  for (const term of ['Registrasi:', 'Sudah Aktif:', 'Belum Aktif:', 'Conversion Aktivasi:', 'NMAT:', 'Transaksi NMAT:', 'Revenue Transaksi:', 'Revenue Aktivasi:', 'Revenue MGM:', 'Segment:', 'Aksi:']) {
+    assert.ok(matrixChartSlice.includes(term), `tooltip bubble harus memuat "${term}"`);
+  }
+});
+test('Z9. Bubble radius bounded/scaled (bukan linear tak terbatas) — satu PB besar tidak memenuhi chart', () => {
+  const matrixChartSlice = extractFunctionBody(frontendSrc, 'function OpportunityMatrixChart(');
+  assert.ok(/minR\s*=\s*\d/.test(matrixChartSlice) && /maxR\s*=\s*\d/.test(matrixChartSlice), 'harus ada batas minR/maxR eksplisit');
+  assert.ok(/Math\.sqrt/.test(matrixChartSlice), 'radius harus di-scale non-linear (sqrt), bukan proporsional langsung ke revenue');
+});
+test('Z10. Axis label Bahasa Indonesia ("Registrasi PB" / "Conversion Aktivasi PB")', () => {
+  const matrixChartSlice = extractFunctionBody(frontendSrc, 'function OpportunityMatrixChart(');
+  assert.ok(matrixChartSlice.includes('Registrasi PB'));
+  assert.ok(matrixChartSlice.includes('Conversion Aktivasi PB'));
+});
+test('Z11. Garis threshold dashed/subtle dengan caption "batas distribusi aktual" (bukan target)', () => {
+  assert.ok(pbScorecardTabSlice.includes('batas distribusi aktual'));
+  assert.ok(/mgm-matrix-caption[^<]*<\/div>|batas distribusi aktual[^<]*bukan target/.test(pbScorecardTabSlice), 'caption garis threshold harus eksplisit menyebut "bukan target"');
+});
+test('Z12. sample_size_low ditandai di tabel PB Scorecard (badge "sample kecil")', () => {
+  assert.ok(pbScorecardTabSlice.includes('sample_size_low'));
+  assert.ok(pbScorecardTabSlice.includes('sample kecil'));
+});
+test('Z13. Command Center tetap 10 kartu 5+5, Sudah Aktif tetap terintegrasi dengan Conversion (regresi §F/§G tidak boleh berubah oleh fitur Opportunity Matrix)', () => {
+  const literalCards = (mainKpiSlice.match(/<KPICard\s/g) || []).length;
+  assert.strictEqual(literalCards, 7);
+  assert.ok(/label="SUDAH AKTIF"[\s\S]*?sub=\{`Conversion/.test(mainKpiSlice));
+});
+test('Z14. Responsive — panel segmen/opportunity lists collapse ke 1 kolom di breakpoint mobile', () => {
+  const cssSrc = fs.readFileSync(path.join(__dirname, '../../frontend/src/index.css'), 'utf8');
+  assert.ok(cssSrc.includes('.mgm-segment-summary'));
+  assert.ok(/\.wrd-charts-row-3\s*\{[^}]*grid-template-columns/.test(cssSrc));
+  const flatCss = cssSrc.replace(/\s+/g, ' ');
+  assert.ok(/\.wrd-charts-row,\s*\.wrd-charts-row-3\s*\{\s*grid-template-columns:\s*1fr/.test(flatCss), 'harus ada breakpoint responsive yang collapse wrd-charts-row-3 ke 1 kolom');
+});
+
 console.log('\n-- 14-20. Baseline Agustus 2026 (angka nyata, tervalidasi read-only terhadap production DB) --');
 // Fixture deterministik yang MEREPRODUKSI baseline Agustus secara struktural
 // (931 registrasi tersebar di 281 PB, 480 aktif / 451 tidak aktif, revenue
@@ -519,34 +621,34 @@ const augFunnel = computeRegistrationFunnel(augReg);
 const augActivation = computeActivationRevenue(augDet);
 const augSummary = computeSummary(augReg, augAkt, augDet);
 
-// Overlay AKTIVASI KHUSUS utk menguji JOIN Sudah Aktif/Belum Aktif (definisi
-// resmi baru) — DIPISAH dari augAkt (dipakai battery revenue di bawah, id
-// outlet-nya AKTOUT* tidak overlap dgn REG OUT* dgn sengaja, supaya battery
-// revenue itu independen dari join aktif). Overlay ini me-replikasi rasio
-// 480/931 dari baseline lama, TAPI kini dihitung lewat JOIN REG<->AKTIVASI
-// is_active=true yang benar — augReg.is_active TIDAK dibaca sama sekali.
+// Overlay AKTIVASI KHUSUS utk menguji Sudah Aktif PURE COUNT (definisi
+// RESMI FINAL) — DIPISAH dari augAkt (dipakai battery revenue di bawah,
+// id outlet-nya AKTOUT* tidak overlap dgn REG OUT* dgn sengaja, supaya
+// battery revenue itu independen). Overlay ini me-replikasi rasio 480/931
+// dari fixture historis, dihitung LANGSUNG dari AKTIVASI.is_active=true
+// SAJA (TIDAK peduli overlap ke REG) — augReg.is_active TIDAK dibaca.
 function buildAugustActiveOverlayAktRows() {
   const rows = [];
   for (let i = 1; i <= 480; i++) rows.push({ id_outlet: `OUT${i}`, is_active: true });
   return rows;
 }
 const augActiveOverlayAkt = buildAugustActiveOverlayAktRows();
-const augActiveMatch = computeActiveOutletMatch(augReg, augActiveOverlayAkt);
+const augActiveMatch = computeSudahAktif(augReg, augActiveOverlayAkt);
 
 test('14. current August registrations = 931', () => {
   assert.strictEqual(augFunnel.registrations, 931);
 });
-test('15. current August active_outlets (JOIN REG<->AKTIVASI is_active=true) = 480', () => {
+test('15. current August active_outlets (PURE COUNT AKTIVASI.is_active=true, TIDAK join REG) = 480', () => {
   assert.strictEqual(augActiveMatch.active_outlets, 480);
 });
-test('16. current August inactive_outlets = registrations - active_outlets = 451', () => {
+test('16. current August inactive_outlets = registrations - active_outlets (aritmatika) = 451', () => {
   assert.strictEqual(augActiveMatch.inactive_outlets, 451);
   assert.strictEqual(augActiveMatch.active_outlets + augActiveMatch.inactive_outlets, augFunnel.registrations);
 });
 test('17. current August active_recruiting_pb = 281', () => {
   assert.strictEqual(augFunnel.active_recruiting_pb, 281);
 });
-test('18. current August activation_conversion_pct = 51,5575% (480/931x100, via JOIN)', () => {
+test('18. current August activation_conversion_pct = 51,5575% (480/931x100, pure count)', () => {
   closeTo(augActiveMatch.activation_conversion_pct, 51.5575, 0.01);
 });
 test('19. current August avg_registration_per_pb = 3,3132 (931/281)', () => {
@@ -555,6 +657,48 @@ test('19. current August avg_registration_per_pb = 3,3132 (931/281)', () => {
 test('20. current August activation_revenue = Rp12.614.475 (SUM komisi_aktifasi, 630 record)', () => {
   assert.strictEqual(augActivation.activation_revenue, 12614475);
   assert.strictEqual(augActivation.paid_activation_events, 630);
+});
+
+console.log('\n-- §AC. Baseline PRODUKSI TERVERIFIKASI read-only (Agustus 2026, dieksekusi sebelum implementasi) --');
+// Fixture ini mereproduksi struktur data PRODUKSI SUNGGUHAN hasil query
+// read-only (lihat laporan final): REG = 1332 distinct outlet, AKTIVASI
+// Agustus = 1002 outlet is_active=true + 1 false + 1 null (total distinct
+// 1004 — TAPI 1004 BUKAN Sudah Aktif, itu total TANPA filter is_active).
+// Baseline resmi TIDAK di-hardcode ke logic manapun — ini murni fixture
+// test yang meniru bentuk data aktual utk membuktikan formula konsisten.
+function buildVerifiedAugustRegRows() {
+  const rows = [];
+  for (let i = 0; i < 1332; i++) rows.push({ id_outlet: `VREG${i}`, upline: `VPB${i % 383}` });
+  return rows;
+}
+function buildVerifiedAugustAktRows() {
+  const rows = [];
+  for (let i = 0; i < 1002; i++) rows.push({ id_outlet: `VAKT${i}`, is_active: true });
+  rows.push({ id_outlet: 'VAKT_FALSE', is_active: false });
+  rows.push({ id_outlet: 'VAKT_NULL', is_active: null });
+  return rows;
+}
+const vReg = buildVerifiedAugustRegRows();
+const vAkt = buildVerifiedAugustAktRows();
+const vSudahAktif = computeSudahAktif(vReg, vAkt);
+
+test('§AC.1 registrations = 1332 (baseline produksi tervalidasi read-only)', () => {
+  assert.strictEqual(vSudahAktif.registrations, 1332);
+});
+test('§AC.2 active_outlets = 1002 (PURE COUNT is_active=true, BUKAN 1004) — 1004 adalah total distinct outlet AKTIVASI TANPA filter', () => {
+  assert.strictEqual(vSudahAktif.active_outlets, 1002);
+  const totalDistinctRegardlessStatus = new Set(vAkt.map(a => a.id_outlet)).size;
+  assert.strictEqual(totalDistinctRegardlessStatus, 1004);
+  assert.notStrictEqual(vSudahAktif.active_outlets, totalDistinctRegardlessStatus, 'active_outlets (formula resmi) TIDAK BOLEH sama dgn total distinct tanpa filter is_active');
+});
+test('§AC.3 inactive_outlets = 1332 - 1002 = 330', () => {
+  assert.strictEqual(vSudahAktif.inactive_outlets, 330);
+});
+test('§AC.4 activation_conversion_pct ≈ 75,2252% (1002/1332x100)', () => {
+  closeTo(vSudahAktif.activation_conversion_pct, 75.2252, 0.01);
+});
+test('§AC.5 active + inactive = registrations (invariant, baseline produksi)', () => {
+  assert.strictEqual(vSudahAktif.active_outlets + vSudahAktif.inactive_outlets, vSudahAktif.registrations);
 });
 
 console.log('\n-- §14 (item 1-20 spesifikasi pemisahan revenue) --');
@@ -968,42 +1112,230 @@ test('economics.formula_mismatch melaporkan selisih, activation_revenue tetap pa
   assert.strictEqual(result.economics.formula_mismatch[0].actual, 999);
 });
 
-console.log('\n-- PB segmentation cascade (5 status baru: Growth Engine/Closer/Hunter Only/High Backlog/Low Activity) --');
-test('Growth Engine — registrations >= P50 dan conversion >= P50', () => {
-  const pbRows = [
-    { registrations: 10, activation_conversion_pct: 40, inactive_outlets: 1 },
-    { registrations: 20, activation_conversion_pct: 60, inactive_outlets: 1 },
-  ];
-  const thresholds = computeSegmentationThresholds(pbRows);
-  assert.strictEqual(classifyPb(pbRows[1], thresholds), 'Growth Engine');
+console.log('\n-- PB Opportunity Segmentation — 5 label business-friendly + CHECK DATA (priority override), sample-size guard --');
+test('computeQualifiedConversionMinReg — P25 dari PB registrations>1, floor teknis minimum 2', () => {
+  const pbRows = [{ registrations: 1 }, { registrations: 2 }, { registrations: 4 }, { registrations: 6 }, { registrations: 8 }];
+  const min = computeQualifiedConversionMinReg(pbRows);
+  assert.ok(min >= 2, 'floor teknis minimum harus >= 2 supaya PB 1 registrasi tidak pernah lolos');
 });
-test('Closer — registrations < P50 dan conversion >= P75', () => {
-  const pbRows = [
-    { registrations: 5, activation_conversion_pct: 90, inactive_outlets: 0 },
-    { registrations: 50, activation_conversion_pct: 10, inactive_outlets: 0 },
-    { registrations: 50, activation_conversion_pct: 20, inactive_outlets: 0 },
-  ];
-  const thresholds = computeSegmentationThresholds(pbRows);
-  assert.strictEqual(classifyPb(pbRows[0], thresholds), 'Closer');
+test('computeQualifiedConversionMinReg — pool kosong (semua PB registrations<=1) -> floor teknis 2', () => {
+  assert.strictEqual(computeQualifiedConversionMinReg([{ registrations: 1 }, { registrations: 1 }]), 2);
 });
-test('High Backlog — inactive_outlets >= P75, tidak masuk kategori lain', () => {
+// Catatan desain fixture: percentile dari array ber-nilai SERAGAM akan
+// membuat gte(x, p75) TRIVIALLY true utk semua baris (P75 dari nilai yang
+// sama = nilai itu sendiri). Supaya HIGH BACKLOG (priority tertinggi
+// setelah anomaly) TIDAK ikut ter-trigger tanpa sengaja pada baris target
+// SCALE UP/FIX CONVERSION/PUSH RECRUITMENT, seluruh fixture di bawah ini
+// SENGAJA memberi baris target inactive_outlets RENDAH (0) sementara
+// baris lain punya inactive_outlets moderat (5) — supaya P75 backlog
+// TIDAK ikut baris target.
+test('SCALE UP — registrations >= P75 dan conversion >= P50, bukan anomaly, bukan HIGH BACKLOG', () => {
   const pbRows = [
-    { registrations: 5, activation_conversion_pct: 50, inactive_outlets: 1 },   // Growth Engine candidate (sets thresholds)
-    { registrations: 20, activation_conversion_pct: 80, inactive_outlets: 1 },  // Growth Engine candidate (sets thresholds)
-    { registrations: 3, activation_conversion_pct: 10, inactive_outlets: 100 }, // target: reg & conversion rendah, backlog tinggi
-    { registrations: 3, activation_conversion_pct: 10, inactive_outlets: 1 },
+    { registrations: 10, activation_conversion_pct: 20, inactive_outlets: 5 },
+    { registrations: 12, activation_conversion_pct: 25, inactive_outlets: 5 },
+    { registrations: 14, activation_conversion_pct: 30, inactive_outlets: 5 },
+    { registrations: 16, activation_conversion_pct: 35, inactive_outlets: 5 },
+    { registrations: 80, activation_conversion_pct: 80, inactive_outlets: 0 }, // target
+    { registrations: 65, activation_conversion_pct: 40, inactive_outlets: 5 },
+    { registrations: 70, activation_conversion_pct: 45, inactive_outlets: 5 },
+    { registrations: 75, activation_conversion_pct: 50, inactive_outlets: 5 },
   ];
-  const thresholds = computeSegmentationThresholds(pbRows);
-  assert.strictEqual(classifyPb(pbRows[2], thresholds), 'High Backlog');
+  const thresholds = computeOpportunitySegmentThresholds(pbRows);
+  assert.strictEqual(classifyOpportunitySegment(pbRows[4], thresholds), 'SCALE UP');
 });
-test('Low Activity — di bawah semua threshold', () => {
+test('FIX CONVERSION — registrations >= P75 tapi conversion < P50', () => {
+  const pbRows = [
+    { registrations: 10, activation_conversion_pct: 60, inactive_outlets: 5 },
+    { registrations: 12, activation_conversion_pct: 65, inactive_outlets: 5 },
+    { registrations: 14, activation_conversion_pct: 70, inactive_outlets: 5 },
+    { registrations: 16, activation_conversion_pct: 75, inactive_outlets: 5 },
+    { registrations: 80, activation_conversion_pct: 10, inactive_outlets: 0 }, // target
+    { registrations: 65, activation_conversion_pct: 40, inactive_outlets: 5 },
+    { registrations: 70, activation_conversion_pct: 45, inactive_outlets: 5 },
+    { registrations: 75, activation_conversion_pct: 50, inactive_outlets: 5 },
+  ];
+  const thresholds = computeOpportunitySegmentThresholds(pbRows);
+  assert.strictEqual(classifyOpportunitySegment(pbRows[4], thresholds), 'FIX CONVERSION');
+});
+test('PUSH RECRUITMENT — registrations < P75, conversion >= P75, LOLOS sample-size guard', () => {
+  const pbRows = [
+    { registrations: 10, activation_conversion_pct: 20, inactive_outlets: 5 },
+    { registrations: 12, activation_conversion_pct: 25, inactive_outlets: 5 },
+    { registrations: 14, activation_conversion_pct: 30, inactive_outlets: 5 },
+    { registrations: 16, activation_conversion_pct: 35, inactive_outlets: 5 },
+    { registrations: 18, activation_conversion_pct: 90, inactive_outlets: 0 }, // target: reg rendah TAPI di atas qualified_conversion_min_reg
+    { registrations: 60, activation_conversion_pct: 40, inactive_outlets: 5 },
+    { registrations: 65, activation_conversion_pct: 45, inactive_outlets: 5 },
+    { registrations: 70, activation_conversion_pct: 50, inactive_outlets: 5 },
+  ];
+  const thresholds = computeOpportunitySegmentThresholds(pbRows);
+  assert.ok(pbRows[4].registrations >= thresholds.qualified_conversion_min_reg, 'fixture harus lolos sample-size guard supaya menguji branch PUSH RECRUITMENT, bukan LOW PRODUCTIVITY');
+  assert.strictEqual(classifyOpportunitySegment(pbRows[4], thresholds), 'PUSH RECRUITMENT');
+});
+test('PUSH RECRUITMENT DITOLAK sample-size guard — PB 1 registrasi/100% conversion TIDAK OTOMATIS top performer', () => {
+  const pbRows = [
+    { registrations: 10, activation_conversion_pct: 20, inactive_outlets: 5 },
+    { registrations: 12, activation_conversion_pct: 25, inactive_outlets: 5 },
+    { registrations: 14, activation_conversion_pct: 30, inactive_outlets: 5 },
+    { registrations: 16, activation_conversion_pct: 35, inactive_outlets: 5 },
+    { registrations: 1, activation_conversion_pct: 100, inactive_outlets: 0 }, // target: 1 registrasi, 100% conversion
+    { registrations: 60, activation_conversion_pct: 40, inactive_outlets: 5 },
+    { registrations: 65, activation_conversion_pct: 45, inactive_outlets: 5 },
+    { registrations: 70, activation_conversion_pct: 50, inactive_outlets: 5 },
+  ];
+  const thresholds = computeOpportunitySegmentThresholds(pbRows);
+  assert.ok(pbRows[4].registrations < thresholds.qualified_conversion_min_reg, 'fixture harus GAGAL sample-size guard supaya menguji penolakannya');
+  const status = classifyOpportunitySegment(pbRows[4], thresholds);
+  assert.notStrictEqual(status, 'PUSH RECRUITMENT', 'PB 1 registrasi TIDAK BOLEH lolos jadi PUSH RECRUITMENT walau conversion 100%');
+  assert.strictEqual(status, 'LOW PRODUCTIVITY');
+});
+test('HIGH BACKLOG — priority override, muncul walau volume & conversion juga tinggi (bukan SCALE UP)', () => {
+  const pbRows = [
+    { registrations: 5, activation_conversion_pct: 40, inactive_outlets: 1 },
+    { registrations: 10, activation_conversion_pct: 45, inactive_outlets: 1 },
+    { registrations: 20, activation_conversion_pct: 55, inactive_outlets: 1 },
+    { registrations: 30, activation_conversion_pct: 60, inactive_outlets: 500 },
+  ];
+  const thresholds = computeOpportunitySegmentThresholds(pbRows);
+  assert.strictEqual(classifyOpportunitySegment(pbRows[3], thresholds), 'HIGH BACKLOG', 'backlog tinggi override SCALE UP walau volume & conversion juga tinggi');
+});
+test('LOW PRODUCTIVITY — fallback ketika tidak masuk kategori actionable lain', () => {
   const pbRows = [
     { registrations: 100, activation_conversion_pct: 80, inactive_outlets: 5 },
     { registrations: 90, activation_conversion_pct: 70, inactive_outlets: 5 },
-    { registrations: 1, activation_conversion_pct: 1, inactive_outlets: 0 },
+    { registrations: 3, activation_conversion_pct: 5, inactive_outlets: 0 },
   ];
-  const thresholds = computeSegmentationThresholds(pbRows);
-  assert.strictEqual(classifyPb(pbRows[2], thresholds), 'Low Activity');
+  const thresholds = computeOpportunitySegmentThresholds(pbRows);
+  assert.strictEqual(classifyOpportunitySegment(pbRows[2], thresholds), 'LOW PRODUCTIVITY');
+});
+test('CHECK DATA — data_quality_anomaly PRIORITY TERTINGGI, override HIGH BACKLOG sekalipun', () => {
+  const pbRows = [
+    { registrations: 5, activation_conversion_pct: 40, inactive_outlets: 1 },
+    { registrations: 30, activation_conversion_pct: 60, inactive_outlets: 500, data_quality_anomaly: true },
+  ];
+  const thresholds = computeOpportunitySegmentThresholds(pbRows);
+  assert.strictEqual(classifyOpportunitySegment(pbRows[1], thresholds), 'CHECK DATA', 'anomaly harus menang atas HIGH BACKLOG (priority §P item 1 > item 2)');
+});
+test('Segment mutually exclusive — setiap PB tepat SATU status dari 6 label resmi', () => {
+  const pbRows = [
+    { registrations: 5, activation_conversion_pct: 40, inactive_outlets: 1 },
+    { registrations: 30, activation_conversion_pct: 60, inactive_outlets: 1 },
+    { registrations: 30, activation_conversion_pct: 10, inactive_outlets: 1 },
+    { registrations: 3, activation_conversion_pct: 5, inactive_outlets: 0 },
+  ];
+  const thresholds = computeOpportunitySegmentThresholds(pbRows);
+  const validSegments = ['SCALE UP', 'FIX CONVERSION', 'PUSH RECRUITMENT', 'HIGH BACKLOG', 'LOW PRODUCTIVITY', 'CHECK DATA'];
+  pbRows.forEach(r => assert.ok(validSegments.includes(classifyOpportunitySegment(r, thresholds)), 'status harus salah satu dari 6 label resmi'));
+});
+
+console.log('\n-- Segment summary & Top Opportunity lists (§Q/§S) --');
+test('buildSegmentSummary — totals reconcile dengan PB universe', () => {
+  const reg = [{ id_outlet: 'A1', upline: 'PBA' }, { id_outlet: 'A2', upline: 'PBA' }, { id_outlet: 'B1', upline: 'PBB' }];
+  const akt = [{ id_outlet: 'A1', upline: 'PBA', is_active: true }, { id_outlet: 'B1', upline: 'PBB', is_active: true }];
+  const { rows } = buildPbScorecard(reg, akt, [], [], [], []);
+  const summary = buildSegmentSummary(rows);
+  const sumReg = summary.reduce((s, g) => s + g.registrations, 0);
+  assert.strictEqual(sumReg, rows.reduce((s, r) => s + r.registrations, 0), 'SUM registrations per segmen harus sama dgn total PB universe');
+  assert.strictEqual(summary.reduce((s, g) => s + g.pb_count, 0), rows.length, 'SUM pb_count per segmen harus sama dgn jumlah PB total');
+});
+test('buildSegmentSummary — action_text terisi dari SEGMENT_ACTION', () => {
+  const rows = [{ pb: 'PBX', registrations: 10, active_outlets: 5, inactive_outlets: 5, activation_conversion_pct: 50, nmat_outlets: 2, mgm_revenue: 1000, status: 'SCALE UP' }];
+  assert.strictEqual(buildSegmentSummary(rows)[0].action_text, SEGMENT_ACTION['SCALE UP']);
+});
+test('buildOpportunityLists — maksimal 5 baris per kelompok (§S: top 5 cukup, jangan puluhan baris)', () => {
+  const rows = [];
+  for (let i = 0; i < 10; i++) rows.push({ pb: `PB${i}`, registrations: 10, active_outlets: 5, inactive_outlets: 20 + i, activation_conversion_pct: 50, nmat_outlets: 1, mgm_revenue: 100, status: 'LOW PRODUCTIVITY' });
+  assert.ok(buildOpportunityLists(rows).prioritas_aktivasi.length <= 5);
+});
+test('buildOpportunityLists — kandidat_scale_up hanya berisi PB berstatus SCALE UP', () => {
+  const rows = [
+    { pb: 'PB1', registrations: 10, active_outlets: 8, inactive_outlets: 2, activation_conversion_pct: 80, nmat_outlets: 3, mgm_revenue: 5000, status: 'SCALE UP' },
+    { pb: 'PB2', registrations: 10, active_outlets: 2, inactive_outlets: 8, activation_conversion_pct: 20, nmat_outlets: 0, mgm_revenue: 100, status: 'LOW PRODUCTIVITY' },
+  ];
+  const lists = buildOpportunityLists(rows);
+  assert.strictEqual(lists.kandidat_scale_up.length, 1);
+  assert.strictEqual(lists.kandidat_scale_up[0].pb, 'PB1');
+});
+test('buildOpportunityLists — prioritas_aktivasi TIDAK termasuk PB berstatus CHECK DATA (data tidak reliable utk ranking)', () => {
+  const rows = [
+    { pb: 'PBBAD', registrations: 5, active_outlets: 50, inactive_outlets: -45, activation_conversion_pct: 1000, nmat_outlets: 0, mgm_revenue: 0, status: 'CHECK DATA' },
+    { pb: 'PBGOOD', registrations: 10, active_outlets: 2, inactive_outlets: 8, activation_conversion_pct: 20, nmat_outlets: 0, mgm_revenue: 100, status: 'LOW PRODUCTIVITY' },
+  ];
+  assert.ok(!buildOpportunityLists(rows).prioritas_aktivasi.some(r => r.pb === 'PBBAD'));
+});
+
+console.log('\n-- PB metrics tambahan (§T): nmat_rate_pct & revenue_per_nmat — aman denominator 0 --');
+test('nmat_rate_pct = nmat_outlets/active_outlets x 100', () => {
+  const reg = [{ id_outlet: 'A', upline: 'PB1' }];
+  const akt = [{ id_outlet: 'A', upline: 'PB1', is_active: true, tanggal_aktifasi: '2026-08-05', trx: 3 }];
+  const { rows } = buildPbScorecard(reg, akt, [], [], [], [], '2026-08-01', '2026-07-01');
+  assert.strictEqual(rows.find(r => r.pb === 'PB1').nmat_rate_pct, 100);
+});
+test('nmat_rate_pct = null jika active_outlets = 0 (bukan NaN/Infinity)', () => {
+  const reg = [{ id_outlet: 'A', upline: 'PB1' }];
+  const akt = [{ id_outlet: 'A', upline: 'PB1', is_active: false, tanggal_aktifasi: '2026-08-05', trx: 3 }];
+  const { rows } = buildPbScorecard(reg, akt, [], [], [], [], '2026-08-01', '2026-07-01');
+  const pb1 = rows.find(r => r.pb === 'PB1');
+  assert.strictEqual(pb1.active_outlets, 0);
+  assert.strictEqual(pb1.nmat_rate_pct, null);
+});
+test('revenue_per_nmat = mgm_revenue/nmat_outlets, null jika nmat_outlets=0', () => {
+  const reg = [{ id_outlet: 'A', upline: 'PB1' }];
+  const akt = [{ id_outlet: 'A', upline: 'PB1', is_active: true, rev: 500, trx: 0 }];
+  const det = [{ id_aktifasi: '1', id_outlet: 'A', upline: 'PB1', komisi_aktifasi: 300 }];
+  const { rows } = buildPbScorecard(reg, akt, det, [], [], [], '2026-08-01', '2026-07-01');
+  const pb1 = rows.find(r => r.pb === 'PB1');
+  assert.strictEqual(pb1.nmat_outlets, 0);
+  assert.strictEqual(pb1.revenue_per_nmat, null, 'nmat_outlets=0 -> revenue_per_nmat null, bukan Infinity');
+});
+
+console.log('\n-- Data Quality audit (§X) --');
+test('quality.activation_active_source_count = active_outlets (pure count, terpisah dari registrations_count)', () => {
+  const reg = [{ id_outlet: 'A', upline: 'PB1' }];
+  const akt = [{ id_outlet: 'A', is_active: true }, { id_outlet: 'B', is_active: true }];
+  const result = buildPeriodAnalytics({
+    registrasi: reg, aktivasi: akt, detail: [],
+    previousRegistrasi: [], previousAktivasi: [], previousDetail: [],
+  }, {});
+  assert.strictEqual(result.quality.activation_active_source_count, 2);
+  assert.strictEqual(result.quality.registrations_count, 1);
+  assert.strictEqual(result.quality.active_vs_registration_gap, 1);
+  assert.strictEqual(result.quality.active_exceeds_registrations, true);
+});
+test('quality.pb_active_exceeds_registrations_count & segmentation_anomaly_count menghitung PB CHECK DATA', () => {
+  const reg = [{ id_outlet: 'A', upline: 'PB1' }];
+  const akt = [{ id_outlet: 'A', upline: 'PB1', is_active: true }, { id_outlet: 'B', upline: 'PB1', is_active: true }];
+  const result = buildPeriodAnalytics({
+    registrasi: reg, aktivasi: akt, detail: [],
+    previousRegistrasi: [], previousAktivasi: [], previousDetail: [],
+  }, {});
+  assert.strictEqual(result.quality.pb_active_exceeds_registrations_count, 1);
+  assert.strictEqual(result.quality.segmentation_anomaly_count, 1);
+  assert.strictEqual(result.pb_scorecard.find(r => r.pb === 'PB1').status, 'CHECK DATA');
+});
+test('quality.low_sample_pb_count menghitung PB sample_size_low=true', () => {
+  const reg = [
+    { id_outlet: 'A', upline: 'PBBIG' }, { id_outlet: 'B', upline: 'PBBIG' }, { id_outlet: 'C', upline: 'PBBIG' },
+    { id_outlet: 'D', upline: 'PBBIG' }, { id_outlet: 'E', upline: 'PBBIG' }, { id_outlet: 'F', upline: 'PBBIG' },
+    { id_outlet: 'G', upline: 'PBBIG' }, { id_outlet: 'H', upline: 'PBBIG' },
+    { id_outlet: 'X', upline: 'PBSMALL' },
+  ];
+  const result = buildPeriodAnalytics({
+    registrasi: reg, aktivasi: [], detail: [],
+    previousRegistrasi: [], previousAktivasi: [], previousDetail: [],
+  }, {});
+  assert.ok(result.quality.low_sample_pb_count >= 1, 'PBSMALL (1 registrasi) harus terhitung low sample');
+});
+test('Tidak ada NaN/Infinity pada buildPeriodAnalytics utk skenario anomaly (active > registrations)', () => {
+  const reg = [{ id_outlet: 'A', upline: 'PB1' }];
+  const akt = [{ id_outlet: 'A', upline: 'PB1', is_active: true }, { id_outlet: 'B', upline: 'PB1', is_active: true }, { id_outlet: 'C', upline: 'PB1', is_active: true }];
+  const result = buildPeriodAnalytics({
+    registrasi: reg, aktivasi: akt, detail: [],
+    previousRegistrasi: [], previousAktivasi: [], previousDetail: [],
+  }, { currentPeriod: '2026-08-01' });
+  const flat = JSON.stringify(result);
+  assert.ok(!/NaN/.test(flat), 'tidak boleh ada NaN walau active > registrations');
+  assert.ok(!/Infinity/.test(flat), 'tidak boleh ada Infinity walau active > registrations');
 });
 
 console.log('\n-- Extra: safeBoolean tidak menebak unknown jadi false --');
