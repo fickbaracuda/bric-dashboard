@@ -6,7 +6,7 @@ Resource preflight gate untuk safe_deploy.py — audit CPU-saturation
 tanpa pengecekan resource apa pun, di server dengan spesifikasi SANGAT
 terbatas:
 
-    VPS aktual (dicek read-only sebelum menulis modul ini):
+    VPS aktual (dicek read-only saat modul ini pertama ditulis):
       - 2 vCPU
       - 1.6 GB RAM total, ~324 MB available saat idle
       - 0 swap (tidak ada buffer sama sekali)
@@ -16,6 +16,16 @@ Build frontend (Vite/esbuild/rollup, bundle ~1.9MB) di server sekecil ini
 bisa memenuhi 100% CPU di kedua core DAN mendekati/melebihi RAM yang
 tersisa -- karena tidak ada swap, itu bisa memicu OOM-killer yang justru
 menyasar proses Node backend (proses RSS terbesar di server).
+
+UPDATE (2026-08-07): swap file 2GB ditambahkan permanen di VPS (/swapfile,
+terdaftar di /etc/fstab) setelah insiden "server stuck" saat deploy — root
+cause-nya OOM-killer instan karena tidak ada swap sama sekali sebagai
+bantalan. Baseline "available RAM" di server ini SELALU mepet (~210-230MB)
+karena Node backend idle sudah pakai ~850MB RSS -- itu kondisi normal
+steady-state, BUKAN tanda insiden. Threshold di bawah diturunkan supaya
+tidak menolak SETIAP percobaan deploy dalam kondisi normal, sambil tetap
+fail-closed kalau swap sendiri mulai terpakai signifikan (tanda RAM benar-
+benar mepet, bukan sekadar baseline rendah seperti biasa).
 
 Modul ini SENGAJA dipisah dari safe_deploy.py supaya logic keputusan
 (evaluate_resource_gate, parser-parser di bawah) bisa dites tanpa koneksi
@@ -37,14 +47,17 @@ DEFAULT_THRESHOLDS = {
     "MAX_LOAD1_PER_CPU": 0.7,
     # RAM tersedia (kolom "available" dari `free -m`, BUKAN "free" mentah --
     # available sudah memperhitungkan buff/cache yang bisa direclaim) minimal
-    # dalam MB. Di server tanpa swap, ini garis pertahanan TERAKHIR sebelum
-    # OOM-killer beraksi -- dipilih konservatif (250MB) krn baseline available
-    # saat idle di VPS produksi cuma ~324MB; build butuh ruang utk tumbuh.
-    "MIN_AVAILABLE_RAM_MB": 250,
-    # Swap yang TERPAKAI (bukan total) -- kalau server MULAI swapping sama
-    # sekali, itu tanda RAM sudah mepet, STOP walau CPU/load masih terlihat OK
-    # (proses yang di-swap out justru bikin load MISLEADING rendah).
-    "MAX_SWAP_USED_MB": 50,
+    # dalam MB. Sejak swap 2GB ditambahkan (2026-08-07), ini bukan lagi garis
+    # pertahanan TERAKHIR sebelum OOM-killer (swap yang jadi bantalan itu) --
+    # diturunkan ke 150MB (dari 250MB) supaya tidak menolak deploy di kondisi
+    # baseline normal server ini (available idle konsisten ~210-230MB, karena
+    # Node backend sendiri pakai ~850MB RSS), tapi tetap ada margin nyata.
+    "MIN_AVAILABLE_RAM_MB": 150,
+    # Swap yang TERPAKAI (bukan total) -- swap SEKARANG memang diharapkan
+    # terpakai sedikit saat build (itu tujuannya, jadi bantalan), jadi
+    # threshold dinaikkan dari 50MB -> 300MB (15% dari swap 2GB). Kalau
+    # terpakai lebih dari itu, RAM benar-benar mepet, bukan sekadar baseline.
+    "MAX_SWAP_USED_MB": 300,
     # Disk root minimal tersisa (GB) -- backup frontend + release baru +
     # pg_dump semua butuh ruang; kalau disk penuh, PostgreSQL/backup/build
     # bisa gagal dgn cara yang membingungkan (bukan error yang jelas).
@@ -64,8 +77,10 @@ BUILD_MONITOR_DEFAULTS = {
     "POLL_INTERVAL_SECONDS": 5,
     # CPU load1/cpu_count di atas ini selama build dianggap "kritis".
     "CRITICAL_LOAD1_PER_CPU": 1.6,
-    # RAM available di bawah ini selama build dianggap "kritis" (lebih ketat
-    # dari start-gate krn tanpa swap, kehabisan RAM = OOM-killer, bukan slow).
+    # RAM available di bawah ini selama build dianggap "kritis" (masih lebih
+    # ketat dari start-gate walau swap 2GB sekarang jadi bantalan -- dititik
+    # ini sistem sudah pasti menggantungkan diri ke swap, build lambat drastis
+    # walau tidak lagi langsung di-OOM-kill seperti sebelum swap ada).
     "CRITICAL_MIN_AVAILABLE_RAM_MB": 100,
     # Berapa kali BERTURUT-TURUT (tiap POLL_INTERVAL_SECONDS) kondisi kritis
     # harus terdeteksi sebelum build di-abort -- supaya lonjakan sesaat
