@@ -222,6 +222,51 @@ body {
   opacity: 0.6;
 }
 
+/* ── Kotak pencarian sidebar — filter cepat lintas semua war-room tanpa
+   perlu buka accordion satu-satu ── */
+.sidebar-search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin: 10px 16px 4px;
+}
+.sidebar-search-icon {
+  position: absolute;
+  left: 10px;
+  font-size: 13px;
+  color: var(--text-4);
+  pointer-events: none;
+}
+.sidebar-search-input {
+  width: 100%;
+  padding: 7px 28px 7px 30px;
+  font-size: 12.5px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-page);
+  color: var(--text-1);
+  outline: none;
+  transition: border-color 0.15s, background 0.15s;
+}
+.sidebar-search-input:focus { border-color: var(--primary); background: var(--bg-card); }
+.sidebar-search-input::placeholder { color: var(--text-4); }
+.sidebar-search-clear {
+  position: absolute;
+  right: 6px;
+  border: none; background: none; cursor: pointer;
+  color: var(--text-4); font-size: 13px;
+  padding: 4px;
+  display: flex; align-items: center; justify-content: center;
+}
+.sidebar-search-clear:hover { color: var(--text-2); }
+.sidebar-search-results { padding-top: 4px; }
+.sidebar-search-empty {
+  padding: 16px 12px;
+  font-size: 12.5px;
+  color: var(--text-4);
+  text-align: center;
+}
+
 .sidebar-link {
   display: flex;
   align-items: center;
@@ -3117,6 +3162,14 @@ body {
   padding: 10px 12px 4px 18px;
 }
 .sidebar-warroom-label i { font-size: 11px; }
+/* Sub-kelompok DI DALAM satu section War Room (mis. "Wilayah & Institusi"
+   di dalam Payment Agent) — lebih halus dari .sidebar-warroom-label,
+   supaya daftar panjang tidak jadi tembok datar tanpa jeda visual. */
+.sidebar-warroom-sublabel {
+  font-size: 9.5px; font-weight: 700; color: var(--text-4);
+  text-transform: uppercase; letter-spacing: 0.6px;
+  padding: 8px 12px 3px 26px;
+}
 .sidebar-warroom-item {
   display: flex; align-items: center; gap: 8px;
   padding: 7px 12px 7px 22px;

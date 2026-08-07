@@ -133,6 +133,56 @@ function LeaderAccordion({ leader, timList, onClose, currentPath }) {
   );
 }
 
+/* ── Registry semua item yang bisa dicari lewat kotak pencarian sidebar.
+   Data murni (bukan JSX) supaya gampang di-filter — daftar ini SENGAJA
+   mencakup semua war-room + halaman utama, termasuk yang tersembunyi di
+   dalam accordion, supaya search jadi cara cepat "lompat langsung" tanpa
+   perlu buka accordion satu-satu. ── */
+const SEARCHABLE_ITEMS = [
+  { label: 'Unit Scoreboard',             to: '/scoreboard',                         icon: 'ti-trophy',            color: '#1D9E75' },
+  { label: 'Leader Scoreboard',           to: '/leader-scoreboard',                  icon: 'ti-medal',             color: '#1D9E75' },
+  { label: 'InstaQRIS Command Center',    to: '/war-room/instaqris-command-center',  icon: 'ti-radar-2',           color: '#7F77DD', badge: 'CMD' },
+  { label: 'Quick Win Q3',                to: '/war-room/quick-win-q3',              icon: 'ti-target-arrow',      color: '#0EA5E9', badge: 'Q3' },
+  { label: 'Instaqris - Analitik',        to: '/war-room/iq-raw',                    icon: 'ti-chart-dots',        color: '#0EA5E9', badge: 'IQ' },
+  { label: 'Penerbitan QRIS',             to: '/war-room/penerbitan-qris',           icon: 'ti-qrcode',            color: '#EC4899', badge: 'QRIS' },
+  { label: 'QRIS Control Tower',          to: '/war-room/qris-control-tower',        icon: 'ti-radar',             color: '#0891B2', badge: 'CTL' },
+  { label: 'Transaksi by Outlet',         to: '/war-room/trx-outlet',                icon: 'ti-building-store',    color: '#2563EB', badge: 'OUT' },
+  { label: 'Data Raw',                    to: '/data-raw',                           icon: 'ti-table',             color: '#3B82F6', badge: 'RAW' },
+  { label: 'Produk (Payment Agent)',      to: '/war-room/payment-agent/produk',      icon: 'ti-shopping-cart-bolt',color: '#0EA5E9', badge: 'PROD' },
+  { label: '⚡ Produk',                    to: '/war-room/pa-produk',                 icon: 'ti-bolt',              color: '#639922' },
+  { label: 'Ekspedisi',                   to: '/war-room/ekspedisi',                 icon: 'ti-package',           color: '#8B5CF6', badge: 'Okta' },
+  { label: 'Produk Ekspedisi',            to: '/war-room/ekspedisi-produk',          icon: 'ti-box-seam',          color: '#0EA5E9', badge: 'PROD' },
+  { label: 'Farming',                     to: '/war-room/farming',                   icon: 'ti-plant-2',           color: '#10B981', badge: 'Nizar' },
+  { label: 'Fastpay Global',              to: '/war-room/fastpayglobal',             icon: 'ti-bolt',              color: '#F59E0B', badge: 'Ainul' },
+  { label: 'MGM PA',                      to: '/war-room/mgm-pa',                    icon: 'ti-users-group',       color: '#10B981', badge: 'MGM' },
+  { label: 'Hunter',                      to: '/war-room/hunter',                    icon: 'ti-crosshair',         color: '#F97316', badge: 'HNT' },
+  { label: 'DM Fastpay',                  to: '/war-room/dm-fastpay',                icon: 'ti-speakerphone',      color: '#0EA5E9', badge: 'DM' },
+  { label: 'DM Control Tower',            to: '/war-room/dm-control-tower',          icon: 'ti-radar-2',           color: '#7F77DD', badge: 'DM CT' },
+  { label: 'ASDP',                        to: '/war-room/pa-asdp',                   icon: 'ti-ship',              color: '#3B82F6', badge: 'PA' },
+  { label: 'LPD',                         to: '/war-room/pa-lpd',                    icon: 'ti-building-bank',     color: '#9333EA', badge: 'PA' },
+  { label: 'MPNG3',                       to: '/war-room/mpng3',                     icon: 'ti-map-2',             color: '#EA580C', badge: 'PA' },
+  { label: 'BUMDes',                      to: '/war-room/bumdes',                    icon: 'ti-building-community',color: '#0D9488', badge: 'PA' },
+  { label: 'WAR-ROOM Speedcash',          to: '/war-room/speedcash',                 icon: 'ti-bolt',              color: '#F97316' },
+  { label: 'Rekonsiliasi OCBC',           to: '/war-room/rekonsiliasi-ocbc',         icon: 'ti-building-bank',     color: '#DC2626', badge: 'REK' },
+  { label: 'Rekonsiliasi Mandiri',        to: '/war-room/rekonsiliasi/mandiri',      icon: 'ti-building-bank',     color: '#003D79', badge: 'MDR' },
+  { label: 'Rekonsiliasi BRI',            to: '/war-room/rekonsiliasi/bri',          icon: 'ti-building-bank',     color: '#00529C', badge: 'BRI' },
+  { label: 'Rekonsiliasi BRI BI-FAST',    to: '/war-room/rekonsiliasi/bri-bifast',   icon: 'ti-building-bank',     color: '#00529C', badge: 'BRI BF' },
+  { label: 'Rekonsiliasi BNI',            to: '/war-room/rekonsiliasi/bni',          icon: 'ti-building-bank',     color: '#F15A23', badge: 'BNI' },
+  { label: 'Rekonsiliasi BCA',            to: '/war-room/rekonsiliasi/bca',          icon: 'ti-building-bank',     color: '#0033A0', badge: 'BCA' },
+  { label: 'Balance Control Tower',       to: '/war-room/balance-control-tower',     icon: 'ti-activity',          color: '#0D9488', badge: 'BCT' },
+  { label: 'Balance & Funding',           to: '/balance-funding',                    icon: 'ti-adjustments-alt',   color: '#0EA5E9' },
+  { label: 'Server Monitor',              to: '/server-monitor',                     icon: 'ti-server-2',          color: '#6366F1', adminOnly: true },
+  { label: 'Kelola User',                 to: '/users',                              icon: 'ti-users',             color: '#6B7280', adminOnly: true },
+];
+
+/* ── Sub-label kecil DI DALAM satu section "War Room" — beda dari
+   .sidebar-warroom-label (section utama, warna amber+icon besar): ini
+   penanda kelompok yang lebih halus, supaya daftar panjang tidak jadi
+   tembok datar tanpa jeda visual. ── */
+function WarroomSubLabel({ children }) {
+  return <div className="sidebar-warroom-sublabel">{children}</div>;
+}
+
 /* ── Main Sidebar ── */
 export default function Sidebar({ onClose }) {
   const navigate   = useNavigate();
@@ -147,6 +197,14 @@ export default function Sidebar({ onClose }) {
   const [members,   setMembers]   = useState([]);
   const [membersPA, setMembersPA] = useState([]);
   const [membersSC, setMembersSC] = useState([]);
+  const [search,    setSearch]    = useState('');
+
+  const searchResults = search.trim()
+    ? SEARCHABLE_ITEMS.filter(it =>
+        (!it.adminOnly || user?.role === 'admin') &&
+        it.label.toLowerCase().includes(search.trim().toLowerCase())
+      )
+    : null;
 
   /* ── Path detection ── */
   const anggotaId = location.pathname.startsWith('/anggota/')
@@ -240,10 +298,46 @@ export default function Sidebar({ onClose }) {
 
       <div className="sidebar-divider" />
 
-      <nav className="sidebar-nav">
-        <div className="sidebar-nav-label">MENU</div>
+      {!isReconOnly && (
+        <div className="sidebar-search-wrap">
+          <i className="ti ti-search sidebar-search-icon" aria-hidden="true" />
+          <input
+            type="text"
+            className="sidebar-search-input"
+            placeholder="Cari menu / war-room..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
+          {search && (
+            <button className="sidebar-search-clear" onClick={() => setSearch('')} title="Bersihkan">
+              <i className="ti ti-x" aria-hidden="true" />
+            </button>
+          )}
+        </div>
+      )}
 
-        {!isReconOnly && (
+      <nav className="sidebar-nav">
+        {searchResults && (
+          <div className="sidebar-search-results">
+            {searchResults.length === 0 ? (
+              <div className="sidebar-search-empty">Tidak ada menu yang cocok dengan "{search}"</div>
+            ) : searchResults.map(it => (
+              <NavLink
+                key={it.to} to={it.to}
+                onClick={() => { setSearch(''); onClose(); }}
+                className={({ isActive }) => 'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')}
+              >
+                <i className={`ti ${it.icon}`} style={{ color: it.color }} aria-hidden="true" />
+                <span>{it.label}</span>
+                {it.badge && <span className="sidebar-warroom-badge" style={{ background: it.color }}>{it.badge}</span>}
+              </NavLink>
+            ))}
+          </div>
+        )}
+
+        {!searchResults && <div className="sidebar-nav-label">MENU</div>}
+
+        {!searchResults && !isReconOnly && (
         <>
         {/* Unit Scoreboard */}
         <NavLink to="/scoreboard" onClick={onClose}
@@ -354,6 +448,8 @@ export default function Sidebar({ onClose }) {
                 <i className="ti ti-sword" aria-hidden="true" />
                 War Room
               </div>
+
+              <WarroomSubLabel>Command Center</WarroomSubLabel>
               <NavLink
                 to="/war-room/instaqris-command-center"
                 onClick={onClose}
@@ -376,6 +472,8 @@ export default function Sidebar({ onClose }) {
                 <span>Quick Win Q3</span>
                 <span className="sidebar-warroom-badge" style={{ background: '#0EA5E9' }}>Q3</span>
               </NavLink>
+
+              <WarroomSubLabel>Analitik &amp; Kontrol</WarroomSubLabel>
               <NavLink
                 to="/war-room/iq-raw"
                 onClick={onClose}
@@ -528,11 +626,14 @@ export default function Sidebar({ onClose }) {
                 </Accordion>
               </div>
 
-              {/* ── WAR ROOM — label + items dengan badge ── */}
+              {/* ── WAR ROOM — dikelompokkan jadi 3 sub-section supaya tidak
+                   jadi 14 item berjejer datar (feedback: "kurang tersegmentasi") ── */}
               <div className="sidebar-warroom-label">
                 <i className="ti ti-sword" aria-hidden="true" />
                 War Room
               </div>
+
+              <WarroomSubLabel>Produk &amp; Operasional</WarroomSubLabel>
               <NavLink
                 to="/war-room/payment-agent/produk"
                 onClick={onClose}
@@ -543,6 +644,16 @@ export default function Sidebar({ onClose }) {
                 <i className="ti ti-shopping-cart-bolt" style={{ color: '#0EA5E9' }} aria-hidden="true" />
                 <span>Produk</span>
                 <span className="sidebar-warroom-badge" style={{ background: '#0EA5E9' }}>PROD</span>
+              </NavLink>
+              <NavLink
+                to="/war-room/pa-produk"
+                onClick={onClose}
+                className={({ isActive }) =>
+                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                }
+              >
+                <i className="ti ti-bolt" style={{ color: '#639922' }} aria-hidden="true" />
+                <span>⚡ Produk</span>
               </NavLink>
               <NavLink
                 to="/war-room/ekspedisi"
@@ -579,6 +690,19 @@ export default function Sidebar({ onClose }) {
                 <span className="sidebar-warroom-badge" style={{ background: '#10B981' }}>Nizar</span>
               </NavLink>
               <NavLink
+                to="/war-room/fastpayglobal"
+                onClick={onClose}
+                className={({ isActive }) =>
+                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                }
+              >
+                <i className="ti ti-bolt" style={{ color: '#F59E0B' }} aria-hidden="true" />
+                <span>Fastpay Global</span>
+                <span className="sidebar-warroom-badge" style={{ background: '#F59E0B' }}>Ainul</span>
+              </NavLink>
+
+              <WarroomSubLabel>Akuisisi &amp; Marketing</WarroomSubLabel>
+              <NavLink
                 to="/war-room/mgm-pa"
                 onClick={onClose}
                 className={({ isActive }) =>
@@ -595,7 +719,6 @@ export default function Sidebar({ onClose }) {
                 className={({ isActive }) =>
                   'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
                 }
-                style={{ paddingLeft: 28 }}
               >
                 <i className="ti ti-crosshair" style={{ color: '#F97316' }} aria-hidden="true" />
                 <span>Hunter</span>
@@ -623,6 +746,8 @@ export default function Sidebar({ onClose }) {
                 <span>DM Control Tower</span>
                 <span className="sidebar-warroom-badge" style={{ background: '#7F77DD' }}>DM CT</span>
               </NavLink>
+
+              <WarroomSubLabel>Wilayah &amp; Institusi</WarroomSubLabel>
               <NavLink
                 to="/war-room/pa-asdp"
                 onClick={onClose}
@@ -774,8 +899,10 @@ export default function Sidebar({ onClose }) {
         </>
         )}
 
-        <div className="sidebar-menu-sep" />
+        {!searchResults && <div className="sidebar-menu-sep" />}
 
+        {!searchResults && (
+        <>
         {/* ── Rekonsiliasi — level 1 accordion ── */}
         <div className="sidebar-accordion-wrap">
           <NavLink
@@ -908,6 +1035,8 @@ export default function Sidebar({ onClose }) {
             <span>Kelola User</span>
           </NavLink>
           </>
+        )}
+        </>
         )}
       </nav>
 
