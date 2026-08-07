@@ -1,0 +1,59 @@
+name: Build Frontend (offload dari VPS)
+
+# Kenapa workflow ini ada: VPS produksi BRIC sangat kecil (2 vCPU, 1.6GB
+# RAM) dan `npm run build` (Vite/Rollup) yang jalan langsung di VPS pernah
+# memicu OOM/CPU-saturation saat deploy (lihat docs/DEPLOYMENT_SAFETY.md
+# bagian 14). Workflow ini memindahkan proses build ke runner GitHub
+# (resource jauh lebih besar, terisolasi dari production), lalu
+# menghasilkan artifact tarball yang siap dipakai lewat mode
+# `safe_deploy.py --execute --prebuilt-frontend <tarball> --prebuilt-checksum <sha256>`
+# yang SUDAH ADA di safe_deploy.py sebelum workflow ini dibuat.
+#
+# PENTING: workflow ini HANYA build. TIDAK PERNAH menyambung ke VPS, TIDAK
+# ADA credential production di sini sama sekali -- gerbang manual DEPLOY
+# (ketik "DEPLOY" di terminal) di scripts/safe_deploy.py TETAP dijalankan
+# manusia seperti biasa, cuma langkah build-nya yang dipindah ke sini.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/build-frontend.yml'
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build
+        working-directory: frontend
+        run: npm run build
+
+      - name: Package artifact + checksum
+        run: |
+          set -e
+          tar -czf frontend-dist.tar.gz -C frontend/dist .
+          sha256sum frontend-dist.tar.gz | awk '{print $1}' > frontend-dist.sha256
+          echo "Commit: ${{ github.sha }}"
+          echo "SHA256: $(cat frontend-dist.sha256)"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist-${{ github.sha }}
+          path: |
+            frontend-dist.tar.gz
+            frontend-dist.sha256
+          retention-days: 14

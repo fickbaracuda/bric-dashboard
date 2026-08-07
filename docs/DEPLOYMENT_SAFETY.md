@@ -566,20 +566,53 @@ melipatgandakan tekanan yang justru ingin dicegah. Lock STALE (>20 menit,
 mis. proses lama terputus SSH-nya) otomatis diambil alih, bukan mengunci
 deploy selamanya.
 
-### 14.7 Mode Prebuilt Frontend (opsional)
+### 14.7 Mode Prebuilt Frontend + Build via GitHub Actions (2026-08-07)
 
 ```
 python scripts/safe_deploy.py --execute --prebuilt-frontend <path.tar.gz> --prebuilt-checksum <sha256>
 ```
 
-Build TIDAK dilakukan di VPS sama sekali — tarball hasil build LOKAL
+Build TIDAK dilakukan di VPS sama sekali — tarball hasil build LOKAL/CI
 diupload, **checksum SHA-256 diverifikasi SEBELUM dipakai** (deploy
 DIHENTIKAN kalau tidak cocok, artifact tidak pernah dipakai begitu saja),
 lalu di-extract ke release baru & di-switch atomic sama seperti mode
-build-di-VPS. **Belum jadi default** — build lokal di komputer Windows
-developer saat ini tidak bisa dijalankan langsung dari repo ini (Node.js
-tidak ada di PATH lokal, lihat `CLAUDE.md`). Mode ini disiapkan untuk
-dipakai dari komputer/CI yang punya Node terpasang.
+build-di-VPS. Mode ini sudah ada sejak awal tapi baru punya sumber
+artifact praktis sejak workflow CI berikut ditambahkan.
+
+**Kenapa ditambahkan**: walau resource-guard (14.2) dan build-monitor
+(14.4) sudah meredam risiko OOM/CPU-saturation saat `npm run build`
+jalan DI VPS, VPS 2 vCPU/1.6GB tetap fundamentally terlalu kecil untuk
+build Vite/Rollup yang wajar. Solusi paling permanen: jangan pernah build
+di VPS sama sekali.
+
+**`.github/workflows/build-frontend.yml`** — trigger otomatis tiap push
+ke `master` yang menyentuh `frontend/**` (atau manual lewat
+`workflow_dispatch`), build di GitHub-hosted runner (resource jauh lebih
+besar & terisolasi dari production), lalu upload artifact
+`frontend-dist-<commit-sha>` berisi `frontend-dist.tar.gz` +
+`frontend-dist.sha256`. **TIDAK ADA credential production di workflow ini
+sama sekali** — workflow ini murni build, tidak pernah menyambung ke VPS.
+
+**`scripts/fetch_ci_frontend_build.py`** — dijalankan LOKAL (bukan CI)
+oleh siapa pun yang mau deploy, sebelum `safe_deploy.py`:
+```
+python scripts/fetch_ci_frontend_build.py
+```
+Mencari run CI yang SUKSES untuk commit HEAD `master` lokal (lewat GitHub
+CLI `gh`, harus sudah `gh auth login`), unduh artifact-nya, verifikasi
+checksum-nya SENDIRI (independen dari verifikasi checksum di
+`safe_deploy.py` — dua lapis), lalu mencetak perintah `safe_deploy.py
+--execute --prebuilt-frontend ... --prebuilt-checksum ...` yang siap
+dijalankan. **Gerbang manual `DEPLOY` TETAP harus diketik seperti biasa**
+— script ini cuma menyiapkan artifact-nya, tidak menyentuh gerbang sama
+sekali.
+
+Kalau CI belum selesai/belum ada run sukses untuk commit itu, script
+berhenti dengan pesan jelas (link ke halaman Actions) — TIDAK fallback
+diam-diam ke build-di-VPS. Kalau memang ingin tetap build di VPS (mis. CI
+sedang down), jalankan `safe_deploy.py --execute` tanpa flag
+`--prebuilt-frontend` seperti biasa — mode build-di-VPS lama (14.4) masih
+berfungsi penuh sebagai fallback, tidak dihapus.
 
 ### 14.8 Yang TIDAK berubah
 
@@ -602,5 +635,10 @@ repo ini): parser resource (`free`/`uptime`/`df`), evaluasi gate resource
 (server sehat vs 7 skenario gagal berbeda), klasifikasi perubahan
 (frontend-only/backend-only/docs-only/mixed/kosong/tak-terklasifikasi),
 deploy lock (fresh/blocked/stale-takeover/release), release manager
-(verify contents/bootstrap/switch/prune), checksum. **31 test, semua
-pass.** Run: `python scripts/test_deploy_hardening.py`
+(verify contents/bootstrap/switch/prune), checksum. Run:
+`python scripts/test_deploy_hardening.py`
+
+`scripts/test_fetch_ci_frontend_build.py` — test logic pemilihan CI run
+sukses per commit SHA, verifikasi checksum, pencarian artifact nested
+(tanpa panggilan `gh`/network sungguhan). Run:
+`python scripts/test_fetch_ci_frontend_build.py`
