@@ -402,7 +402,7 @@ async function analyticsHandler(req, res) {
     const analytics = buildPeriodAnalytics({
       registrasi: current.registrasi, aktivasi: current.aktivasi, detail: current.detail,
       previousRegistrasi: previous.registrasi, previousAktivasi: previous.aktivasi, previousDetail: previous.detail,
-    }, { cutoffDate, compareCutoffDateStr: compareCutoff });
+    }, { cutoffDate, compareCutoffDateStr: compareCutoff, currentPeriod: requestedPeriod });
 
     // daily_acquisition — HANYA registrasi & aktivasi harian, TIDAK ADA revenue/trx harian
     // (Trx/Rev adalah agregat periode per outlet, bukan transaksi harian — lihat larangan §15).

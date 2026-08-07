@@ -322,6 +322,47 @@ function computeTransactionInfo(actRows) {
   };
 }
 
+// dateValue jatuh di [periodStart, periodStart + 1 bulan)? Dipakai NMAT
+// (lihat computeNmatOutlets) — bukan perbandingan string biasa, karena
+// harus benar menangani akhir bulan/awal bulan berikutnya.
+function isDateInPeriod(dateValue, periodStart) {
+  if (!dateValue || !periodStart) return false;
+
+  const date = String(dateValue).slice(0, 10);
+  const start = String(periodStart).slice(0, 10);
+
+  const startDate = new Date(`${start}T00:00:00Z`);
+  if (Number.isNaN(startDate.getTime())) return false;
+
+  const nextMonth = new Date(Date.UTC(
+    startDate.getUTCFullYear(),
+    startDate.getUTCMonth() + 1,
+    1
+  ));
+
+  const next = nextMonth.toISOString().slice(0, 10);
+
+  return date >= start && date < next;
+}
+
+// NMAT (New Member Aktif Transaksi) — sumber TUNGGAL mgm_pa_aktivasi.
+// Outlet dihitung NMAT bulan M hanya jika: id_outlet ada, tanggal_aktifasi
+// jatuh DI DALAM bulan M (bukan bulan lain meski row-nya kebetulan
+// tersinkron di periode M), DAN trx > 0. BEDA dari transacting_outlets
+// (yang tidak peduli kapan outlet itu diaktivasi) — lihat §2 spesifikasi
+// bisnis. TIDAK PERNAH pakai tanggal_registrasi/REG.is_active/id_aktifasi.
+function computeNmatOutlets(actRows, periodStart) {
+  if (!periodStart) return 0;
+  const seen = new Set();
+  for (const a of actRows || []) {
+    if (!a.id_outlet) continue;
+    if (!isDateInPeriod(a.tanggal_aktifasi, periodStart)) continue;
+    if (safeNumber(a.trx) <= 0) continue;
+    seen.add(a.id_outlet);
+  }
+  return seen.size;
+}
+
 // Gabungan satu periode: funnel registrasi + revenue (transaksi + aktivasi)
 // + info transaksi pendukung + irisan "sudah registrasi DAN sudah
 // transaksi" (dipakai funnel tahap 3 — lihat §10 spesifikasi bisnis).
@@ -330,10 +371,11 @@ function computeTransactionInfo(actRows) {
 // di sini secara struktural (bukan field terpisah yang bisa divergen) —
 // lihat juga revenue_formula_consistent di buildPeriodAnalytics untuk
 // audit eksplisit bahwa relasi ini tidak pernah berubah tanpa terdeteksi.
-function computeSummary(regRows, actRows, detailRows) {
+function computeSummary(regRows, actRows, detailRows, periodStart) {
   const funnel = computeRegistrationFunnel(regRows);
   const activation = computeActivationRevenue(detailRows);
   const txn = computeTransactionInfo(actRows);
+  const nmat_outlets = computeNmatOutlets(actRows, periodStart);
   const mgm_revenue = txn.transaction_revenue + activation.activation_revenue;
 
   const regOutletSet = new Set((regRows || []).map(r => r.id_outlet).filter(Boolean));
@@ -346,6 +388,7 @@ function computeSummary(regRows, actRows, detailRows) {
     ...funnel,
     ...activation,
     ...txn,
+    nmat_outlets,
     mgm_revenue,
     registered_and_transacting,
     registered_to_transacting_pct: safePct(registered_and_transacting, funnel.registrations),
@@ -538,13 +581,15 @@ function agingBucket(days) {
 // ─────────────────────────────────────────────────────────────────
 // Orchestrator utama — dipanggil dari analyticsHandler.
 // dataset: { registrasi, aktivasi, detail, previousRegistrasi, previousAktivasi, previousDetail }
-// options: { cutoffDate, compareCutoffDateStr }
+// options: { cutoffDate, compareCutoffDateStr, currentPeriod }
 //
 // PENTING: `registrasi`/`aktivasi`/`detail` di sini HARUS SUDAH berisi
 // seluruh data periode yang tersinkron (current period TIDAK dipotong
 // oleh cutoff_date — lihat §6 spesifikasi bisnis). cutoffDate di sini
 // hanya dipakai untuk menghitung `aging_days` deskriptif, BUKAN untuk
-// memfilter current period.
+// memfilter current period. `currentPeriod` ('YYYY-MM-01') dipakai KHUSUS
+// utk NMAT (computeNmatOutlets) — previous period NMAT otomatis dihitung
+// dari previousPeriod(currentPeriod).
 // ─────────────────────────────────────────────────────────────────
 
 function buildPeriodAnalytics(dataset, options = {}) {
@@ -553,9 +598,11 @@ function buildPeriodAnalytics(dataset, options = {}) {
     previousRegistrasi = [], previousAktivasi = [], previousDetail = [],
   } = dataset;
   const cutoffDate = options.cutoffDate || null;
+  const currentPeriod = options.currentPeriod || null;
+  const prevPeriod = currentPeriod ? previousPeriod(currentPeriod) : null;
 
-  const current = computeSummary(registrasi, aktivasi, detail);
-  const previous = computeSummary(previousRegistrasi, previousAktivasi, previousDetail);
+  const current = computeSummary(registrasi, aktivasi, detail, currentPeriod);
+  const previous = computeSummary(previousRegistrasi, previousAktivasi, previousDetail, prevPeriod);
   const deltas = summaryDeltas(current, previous);
 
   const cohort_funnel = {
@@ -571,6 +618,7 @@ function buildPeriodAnalytics(dataset, options = {}) {
   const operational_volume = {
     activated_outlets: current.activated_outlets,
     transacting_outlets: current.transacting_outlets,
+    nmat_outlets: current.nmat_outlets,
     total_trx: current.total_trx,
     transaction_revenue: current.transaction_revenue,
     activation_to_transaction_pct: current.activation_to_transaction_pct,
@@ -851,6 +899,8 @@ module.exports = {
   computeRegistrationFunnel,
   computeActivationRevenue,
   computeTransactionInfo,
+  isDateInPeriod,
+  computeNmatOutlets,
   computeSummary,
   summaryDeltas,
   computeSegmentationThresholds,
