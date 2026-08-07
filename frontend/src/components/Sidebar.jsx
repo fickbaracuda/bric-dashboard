@@ -174,12 +174,30 @@ const SEARCHABLE_ITEMS = [
   { label: 'Kelola User',                 to: '/users',                              icon: 'ti-users',             color: '#6B7280', adminOnly: true },
 ];
 
-/* ── Sub-label kecil DI DALAM satu section "War Room" — beda dari
+/* ── Sub-grup collapsible DI DALAM satu section "War Room" — beda dari
    .sidebar-warroom-label (section utama, warna amber+icon besar): ini
-   penanda kelompok yang lebih halus, supaya daftar panjang tidak jadi
-   tembok datar tanpa jeda visual. ── */
-function WarroomSubLabel({ children }) {
-  return <div className="sidebar-warroom-sublabel">{children}</div>;
+   accordion sendiri per kelompok (mis. "Produk", "Ekspedisi") supaya
+   daftar panjang bisa dilipat, bukan cuma jeda visual statis. `active`
+   dihitung pemanggil dari path saat ini — begitu true, grup otomatis
+   terbuka (persis pola Accordion lain di sidebar ini). */
+function WarroomGroup({ label, active, children }) {
+  const [open, setOpen] = useState(!!active);
+  useEffect(() => { if (active) setOpen(true); }, [active]);
+  return (
+    <div className="sidebar-warroom-group">
+      <button
+        type="button"
+        className="sidebar-warroom-group-header"
+        onClick={() => setOpen(o => !o)}
+      >
+        <span>{label}</span>
+        <i className={'ti ti-chevron-down sidebar-chevron' + (open ? ' sidebar-chevron--open' : '')} aria-hidden="true" />
+      </button>
+      <Accordion open={open}>
+        <div className="sidebar-warroom-group-body">{children}</div>
+      </Accordion>
+    </div>
+  );
 }
 
 /* ── Main Sidebar ── */
@@ -328,7 +346,6 @@ export default function Sidebar({ onClose }) {
               >
                 <i className={`ti ${it.icon}`} style={{ color: it.color }} aria-hidden="true" />
                 <span>{it.label}</span>
-                {it.badge && <span className="sidebar-warroom-badge" style={{ background: it.color }}>{it.badge}</span>}
               </NavLink>
             ))}
           </div>
@@ -448,75 +465,71 @@ export default function Sidebar({ onClose }) {
                 War Room
               </div>
 
-              <WarroomSubLabel>Command Center</WarroomSubLabel>
-              <NavLink
-                to="/war-room/instaqris-command-center"
-                onClick={onClose}
-                className={({ isActive }) =>
-                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
-                }
-              >
-                <i className="ti ti-radar-2" style={{ color: '#7F77DD' }} aria-hidden="true" />
-                <span>InstaQRIS Command Center</span>
-                <span className="sidebar-warroom-badge" style={{ background: '#7F77DD' }}>CMD</span>
-              </NavLink>
-              <NavLink
-                to="/war-room/quick-win-q3"
-                onClick={onClose}
-                className={({ isActive }) =>
-                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
-                }
-              >
-                <i className="ti ti-target-arrow" style={{ color: '#0EA5E9' }} aria-hidden="true" />
-                <span>Quick Win Q3</span>
-                <span className="sidebar-warroom-badge" style={{ background: '#0EA5E9' }}>Q3</span>
-              </NavLink>
+              <WarroomGroup label="Command Center" active={isWRIqCcPath || isWRQw3Path}>
+                <NavLink
+                  to="/war-room/instaqris-command-center"
+                  onClick={onClose}
+                  className={({ isActive }) =>
+                    'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                  }
+                >
+                  <i className="ti ti-radar-2" style={{ color: '#7F77DD' }} aria-hidden="true" />
+                  <span>InstaQRIS Command Center</span>
+                </NavLink>
+                <NavLink
+                  to="/war-room/quick-win-q3"
+                  onClick={onClose}
+                  className={({ isActive }) =>
+                    'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                  }
+                >
+                  <i className="ti ti-target-arrow" style={{ color: '#0EA5E9' }} aria-hidden="true" />
+                  <span>Quick Win Q3</span>
+                </NavLink>
+              </WarroomGroup>
 
-              <WarroomSubLabel>Analitik &amp; Kontrol</WarroomSubLabel>
-              <NavLink
-                to="/war-room/iq-raw"
-                onClick={onClose}
-                className={({ isActive }) =>
-                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
-                }
-              >
-                <i className="ti ti-chart-dots" style={{ color: '#0EA5E9' }} aria-hidden="true" />
-                <span>Instaqris - Analitik</span>
-                <span className="sidebar-warroom-badge" style={{ background: '#0EA5E9' }}>IQ</span>
-              </NavLink>
-              <NavLink
-                to="/war-room/penerbitan-qris"
-                onClick={onClose}
-                className={({ isActive }) =>
-                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
-                }
-              >
-                <i className="ti ti-qrcode" style={{ color: '#EC4899' }} aria-hidden="true" />
-                <span>Penerbitan QRIS</span>
-                <span className="sidebar-warroom-badge" style={{ background: '#EC4899' }}>QRIS</span>
-              </NavLink>
-              <NavLink
-                to="/war-room/qris-control-tower"
-                onClick={onClose}
-                className={({ isActive }) =>
-                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
-                }
-              >
-                <i className="ti ti-radar" style={{ color: '#0891B2' }} aria-hidden="true" />
-                <span>QRIS Control Tower</span>
-                <span className="sidebar-warroom-badge" style={{ background: '#0891B2' }}>CTL</span>
-              </NavLink>
-              <NavLink
-                to="/war-room/trx-outlet"
-                onClick={onClose}
-                className={({ isActive }) =>
-                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
-                }
-              >
-                <i className="ti ti-building-store" style={{ color: '#2563EB' }} aria-hidden="true" />
-                <span>Transaksi by Outlet</span>
-                <span className="sidebar-warroom-badge" style={{ background: '#2563EB' }}>OUT</span>
-              </NavLink>
+              <WarroomGroup label="Analitik & Kontrol" active={isWRIQRawPath || isWRQrisPath || isWRQrisCtlPath || isWRTrxOutPath}>
+                <NavLink
+                  to="/war-room/iq-raw"
+                  onClick={onClose}
+                  className={({ isActive }) =>
+                    'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                  }
+                >
+                  <i className="ti ti-chart-dots" style={{ color: '#0EA5E9' }} aria-hidden="true" />
+                  <span>Instaqris - Analitik</span>
+                </NavLink>
+                <NavLink
+                  to="/war-room/penerbitan-qris"
+                  onClick={onClose}
+                  className={({ isActive }) =>
+                    'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                  }
+                >
+                  <i className="ti ti-qrcode" style={{ color: '#EC4899' }} aria-hidden="true" />
+                  <span>Penerbitan QRIS</span>
+                </NavLink>
+                <NavLink
+                  to="/war-room/qris-control-tower"
+                  onClick={onClose}
+                  className={({ isActive }) =>
+                    'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                  }
+                >
+                  <i className="ti ti-radar" style={{ color: '#0891B2' }} aria-hidden="true" />
+                  <span>QRIS Control Tower</span>
+                </NavLink>
+                <NavLink
+                  to="/war-room/trx-outlet"
+                  onClick={onClose}
+                  className={({ isActive }) =>
+                    'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                  }
+                >
+                  <i className="ti ti-building-store" style={{ color: '#2563EB' }} aria-hidden="true" />
+                  <span>Transaksi by Outlet</span>
+                </NavLink>
+              </WarroomGroup>
 
               {/* ── Data Raw ── */}
               <div className="sidebar-warroom-label">
@@ -532,7 +545,6 @@ export default function Sidebar({ onClose }) {
               >
                 <i className="ti ti-table" style={{ color: '#3B82F6' }} aria-hidden="true" />
                 <span>Data Raw</span>
-                <span className="sidebar-warroom-badge" style={{ background: '#3B82F6' }}>RAW</span>
               </NavLink>
 
             </div>
@@ -632,159 +644,151 @@ export default function Sidebar({ onClose }) {
                 War Room
               </div>
 
-              <WarroomSubLabel>Produk</WarroomSubLabel>
-              <NavLink
-                to="/war-room/payment-agent/produk"
-                onClick={onClose}
-                className={({ isActive }) =>
-                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
-                }
-              >
-                <i className="ti ti-shopping-cart-bolt" style={{ color: '#0EA5E9' }} aria-hidden="true" />
-                <span>Produk</span>
-                <span className="sidebar-warroom-badge" style={{ background: '#0EA5E9' }}>PROD</span>
-              </NavLink>
-              <NavLink
-                to="/war-room/farming"
-                onClick={onClose}
-                className={({ isActive }) =>
-                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
-                }
-              >
-                <i className="ti ti-plant-2" style={{ color: '#10B981' }} aria-hidden="true" />
-                <span>Farming</span>
-                <span className="sidebar-warroom-badge" style={{ background: '#10B981' }}>Nizar</span>
-              </NavLink>
-              <NavLink
-                to="/war-room/fastpayglobal"
-                onClick={onClose}
-                className={({ isActive }) =>
-                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
-                }
-              >
-                <i className="ti ti-bolt" style={{ color: '#F59E0B' }} aria-hidden="true" />
-                <span>Fastpay Global</span>
-                <span className="sidebar-warroom-badge" style={{ background: '#F59E0B' }}>Ainul</span>
-              </NavLink>
+              <WarroomGroup label="Produk" active={isWRPayAgentProdukPath || isWRFarmPath || isWRFPPath}>
+                <NavLink
+                  to="/war-room/payment-agent/produk"
+                  onClick={onClose}
+                  className={({ isActive }) =>
+                    'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                  }
+                >
+                  <i className="ti ti-shopping-cart-bolt" style={{ color: '#0EA5E9' }} aria-hidden="true" />
+                  <span>Produk</span>
+                </NavLink>
+                <NavLink
+                  to="/war-room/farming"
+                  onClick={onClose}
+                  className={({ isActive }) =>
+                    'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                  }
+                >
+                  <i className="ti ti-plant-2" style={{ color: '#10B981' }} aria-hidden="true" />
+                  <span>Farming</span>
+                </NavLink>
+                <NavLink
+                  to="/war-room/fastpayglobal"
+                  onClick={onClose}
+                  className={({ isActive }) =>
+                    'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                  }
+                >
+                  <i className="ti ti-bolt" style={{ color: '#F59E0B' }} aria-hidden="true" />
+                  <span>Fastpay Global</span>
+                </NavLink>
+              </WarroomGroup>
 
-              <WarroomSubLabel>Ekspedisi</WarroomSubLabel>
-              <NavLink
-                to="/war-room/ekspedisi"
-                onClick={onClose}
-                className={({ isActive }) =>
-                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
-                }
-              >
-                <i className="ti ti-package" style={{ color: '#8B5CF6' }} aria-hidden="true" />
-                <span>Ekspedisi</span>
-                <span className="sidebar-warroom-badge" style={{ background: '#8B5CF6' }}>Okta</span>
-              </NavLink>
-              <NavLink
-                to="/war-room/ekspedisi-produk"
-                onClick={onClose}
-                className={({ isActive }) =>
-                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
-                }
-                style={{ paddingLeft: 28 }}
-              >
-                <i className="ti ti-box-seam" style={{ color: '#0EA5E9' }} aria-hidden="true" />
-                <span>Produk Ekspedisi</span>
-                <span className="sidebar-warroom-badge" style={{ background: '#0EA5E9' }}>PROD</span>
-              </NavLink>
+              <WarroomGroup label="Ekspedisi" active={isWREkspPath || isWREkspProdukPath}>
+                <NavLink
+                  to="/war-room/ekspedisi"
+                  onClick={onClose}
+                  className={({ isActive }) =>
+                    'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                  }
+                >
+                  <i className="ti ti-package" style={{ color: '#8B5CF6' }} aria-hidden="true" />
+                  <span>Ekspedisi</span>
+                </NavLink>
+                <NavLink
+                  to="/war-room/ekspedisi-produk"
+                  onClick={onClose}
+                  className={({ isActive }) =>
+                    'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                  }
+                  style={{ paddingLeft: 28 }}
+                >
+                  <i className="ti ti-box-seam" style={{ color: '#0EA5E9' }} aria-hidden="true" />
+                  <span>Produk Ekspedisi</span>
+                </NavLink>
+              </WarroomGroup>
 
-              <WarroomSubLabel>MGM</WarroomSubLabel>
-              <NavLink
-                to="/war-room/mgm-pa"
-                onClick={onClose}
-                className={({ isActive }) =>
-                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
-                }
-              >
-                <i className="ti ti-users-group" style={{ color: '#10B981' }} aria-hidden="true" />
-                <span>MGM PA</span>
-                <span className="sidebar-warroom-badge" style={{ background: '#10B981' }}>MGM</span>
-              </NavLink>
-              <NavLink
-                to="/war-room/hunter"
-                onClick={onClose}
-                className={({ isActive }) =>
-                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
-                }
-              >
-                <i className="ti ti-crosshair" style={{ color: '#F97316' }} aria-hidden="true" />
-                <span>Hunter</span>
-                <span className="sidebar-warroom-badge" style={{ background: '#F97316' }}>HNT</span>
-              </NavLink>
+              <WarroomGroup label="MGM" active={isWRMgmPath || isWRHunterPath}>
+                <NavLink
+                  to="/war-room/mgm-pa"
+                  onClick={onClose}
+                  className={({ isActive }) =>
+                    'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                  }
+                >
+                  <i className="ti ti-users-group" style={{ color: '#10B981' }} aria-hidden="true" />
+                  <span>MGM PA</span>
+                </NavLink>
+                <NavLink
+                  to="/war-room/hunter"
+                  onClick={onClose}
+                  className={({ isActive }) =>
+                    'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                  }
+                >
+                  <i className="ti ti-crosshair" style={{ color: '#F97316' }} aria-hidden="true" />
+                  <span>Hunter</span>
+                </NavLink>
+              </WarroomGroup>
 
-              <WarroomSubLabel>Digital Marketing</WarroomSubLabel>
-              <NavLink
-                to="/war-room/dm-fastpay"
-                onClick={onClose}
-                className={({ isActive }) =>
-                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
-                }
-              >
-                <i className="ti ti-speakerphone" style={{ color: '#0EA5E9' }} aria-hidden="true" />
-                <span>DM Fastpay</span>
-                <span className="sidebar-warroom-badge" style={{ background: '#0EA5E9' }}>DM</span>
-              </NavLink>
-              <NavLink
-                to="/war-room/dm-control-tower"
-                onClick={onClose}
-                className={({ isActive }) =>
-                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
-                }
-              >
-                <i className="ti ti-radar-2" style={{ color: '#7F77DD' }} aria-hidden="true" />
-                <span>DM Control Tower</span>
-                <span className="sidebar-warroom-badge" style={{ background: '#7F77DD' }}>DM CT</span>
-              </NavLink>
+              <WarroomGroup label="Digital Marketing" active={isWRDMFPPath || isWRDmCtPath}>
+                <NavLink
+                  to="/war-room/dm-fastpay"
+                  onClick={onClose}
+                  className={({ isActive }) =>
+                    'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                  }
+                >
+                  <i className="ti ti-speakerphone" style={{ color: '#0EA5E9' }} aria-hidden="true" />
+                  <span>DM Fastpay</span>
+                </NavLink>
+                <NavLink
+                  to="/war-room/dm-control-tower"
+                  onClick={onClose}
+                  className={({ isActive }) =>
+                    'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                  }
+                >
+                  <i className="ti ti-radar-2" style={{ color: '#7F77DD' }} aria-hidden="true" />
+                  <span>DM Control Tower</span>
+                </NavLink>
+              </WarroomGroup>
 
-              <WarroomSubLabel>Wilayah &amp; Institusi</WarroomSubLabel>
-              <NavLink
-                to="/war-room/pa-asdp"
-                onClick={onClose}
-                className={({ isActive }) =>
-                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
-                }
-              >
-                <i className="ti ti-ship" style={{ color: '#3B82F6' }} aria-hidden="true" />
-                <span>ASDP</span>
-                <span className="sidebar-warroom-badge" style={{ background: '#3B82F6' }}>PA</span>
-              </NavLink>
-              <NavLink
-                to="/war-room/pa-lpd"
-                onClick={onClose}
-                className={({ isActive }) =>
-                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
-                }
-              >
-                <i className="ti ti-building-bank" style={{ color: '#9333EA' }} aria-hidden="true" />
-                <span>LPD</span>
-                <span className="sidebar-warroom-badge" style={{ background: '#9333EA' }}>PA</span>
-              </NavLink>
-              <NavLink
-                to="/war-room/mpng3"
-                onClick={onClose}
-                className={({ isActive }) =>
-                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
-                }
-              >
-                <i className="ti ti-map-2" style={{ color: '#EA580C' }} aria-hidden="true" />
-                <span>MPNG3</span>
-                <span className="sidebar-warroom-badge" style={{ background: '#EA580C' }}>PA</span>
-              </NavLink>
-              <NavLink
-                to="/war-room/bumdes"
-                onClick={onClose}
-                className={({ isActive }) =>
-                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
-                }
-              >
-                <i className="ti ti-building-community" style={{ color: '#0D9488' }} aria-hidden="true" />
-                <span>BUMDes</span>
-                <span className="sidebar-warroom-badge" style={{ background: '#0D9488' }}>PA</span>
-              </NavLink>
+              <WarroomGroup label="Wilayah & Institusi" active={isWRPaAsdpPath || isWRPaLpdPath || isWRMpng3Path || isWRBumdesPath}>
+                <NavLink
+                  to="/war-room/pa-asdp"
+                  onClick={onClose}
+                  className={({ isActive }) =>
+                    'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                  }
+                >
+                  <i className="ti ti-ship" style={{ color: '#3B82F6' }} aria-hidden="true" />
+                  <span>ASDP</span>
+                </NavLink>
+                <NavLink
+                  to="/war-room/pa-lpd"
+                  onClick={onClose}
+                  className={({ isActive }) =>
+                    'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                  }
+                >
+                  <i className="ti ti-building-bank" style={{ color: '#9333EA' }} aria-hidden="true" />
+                  <span>LPD</span>
+                </NavLink>
+                <NavLink
+                  to="/war-room/mpng3"
+                  onClick={onClose}
+                  className={({ isActive }) =>
+                    'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                  }
+                >
+                  <i className="ti ti-map-2" style={{ color: '#EA580C' }} aria-hidden="true" />
+                  <span>MPNG3</span>
+                </NavLink>
+                <NavLink
+                  to="/war-room/bumdes"
+                  onClick={onClose}
+                  className={({ isActive }) =>
+                    'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                  }
+                >
+                  <i className="ti ti-building-community" style={{ color: '#0D9488' }} aria-hidden="true" />
+                  <span>BUMDes</span>
+                </NavLink>
+              </WarroomGroup>
 
             </div>
           </Accordion>
@@ -926,7 +930,6 @@ export default function Sidebar({ onClose }) {
               >
                 <i className="ti ti-building-bank" style={{ color: '#DC2626' }} aria-hidden="true" />
                 <span>Rekonsiliasi OCBC</span>
-                <span className="sidebar-warroom-badge" style={{ background: '#DC2626' }}>REK</span>
               </NavLink>
               <NavLink
                 to="/war-room/rekonsiliasi/mandiri"
@@ -937,7 +940,6 @@ export default function Sidebar({ onClose }) {
               >
                 <i className="ti ti-building-bank" style={{ color: '#003D79' }} aria-hidden="true" />
                 <span>Rekonsiliasi Mandiri</span>
-                <span className="sidebar-warroom-badge" style={{ background: '#003D79' }}>MDR</span>
               </NavLink>
               <NavLink
                 to="/war-room/rekonsiliasi/bri"
@@ -948,7 +950,6 @@ export default function Sidebar({ onClose }) {
               >
                 <i className="ti ti-building-bank" style={{ color: '#00529C' }} aria-hidden="true" />
                 <span>Rekonsiliasi BRI</span>
-                <span className="sidebar-warroom-badge" style={{ background: '#00529C' }}>BRI</span>
               </NavLink>
               <NavLink
                 to="/war-room/rekonsiliasi/bri-bifast"
@@ -959,7 +960,6 @@ export default function Sidebar({ onClose }) {
               >
                 <i className="ti ti-building-bank" style={{ color: '#00529C' }} aria-hidden="true" />
                 <span>Rekonsiliasi BRI BI-FAST</span>
-                <span className="sidebar-warroom-badge" style={{ background: '#00529C' }}>BRI BF</span>
               </NavLink>
               <NavLink
                 to="/war-room/rekonsiliasi/bni"
@@ -970,7 +970,6 @@ export default function Sidebar({ onClose }) {
               >
                 <i className="ti ti-building-bank" style={{ color: '#F15A23' }} aria-hidden="true" />
                 <span>Rekonsiliasi BNI</span>
-                <span className="sidebar-warroom-badge" style={{ background: '#F15A23' }}>BNI</span>
               </NavLink>
               <NavLink
                 to="/war-room/rekonsiliasi/bca"
@@ -981,7 +980,6 @@ export default function Sidebar({ onClose }) {
               >
                 <i className="ti ti-building-bank" style={{ color: '#0033A0' }} aria-hidden="true" />
                 <span>Rekonsiliasi BCA</span>
-                <span className="sidebar-warroom-badge" style={{ background: '#0033A0' }}>BCA</span>
               </NavLink>
               <NavLink
                 to="/war-room/balance-control-tower"
@@ -992,7 +990,6 @@ export default function Sidebar({ onClose }) {
               >
                 <i className="ti ti-activity" style={{ color: '#0D9488' }} aria-hidden="true" />
                 <span>Balance Control Tower</span>
-                <span className="sidebar-warroom-badge" style={{ background: '#0D9488' }}>BCT</span>
               </NavLink>
             </div>
           </Accordion>
