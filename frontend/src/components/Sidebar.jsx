@@ -149,7 +149,6 @@ const SEARCHABLE_ITEMS = [
   { label: 'Transaksi by Outlet',         to: '/war-room/trx-outlet',                icon: 'ti-building-store',    color: '#2563EB', badge: 'OUT' },
   { label: 'Data Raw',                    to: '/data-raw',                           icon: 'ti-table',             color: '#3B82F6', badge: 'RAW' },
   { label: 'Produk (Payment Agent)',      to: '/war-room/payment-agent/produk',      icon: 'ti-shopping-cart-bolt',color: '#0EA5E9', badge: 'PROD' },
-  { label: '⚡ Produk',                    to: '/war-room/pa-produk',                 icon: 'ti-bolt',              color: '#639922' },
   { label: 'Ekspedisi',                   to: '/war-room/ekspedisi',                 icon: 'ti-package',           color: '#8B5CF6', badge: 'Okta' },
   { label: 'Produk Ekspedisi',            to: '/war-room/ekspedisi-produk',          icon: 'ti-box-seam',          color: '#0EA5E9', badge: 'PROD' },
   { label: 'Farming',                     to: '/war-room/farming',                   icon: 'ti-plant-2',           color: '#10B981', badge: 'Nizar' },
@@ -633,7 +632,7 @@ export default function Sidebar({ onClose }) {
                 War Room
               </div>
 
-              <WarroomSubLabel>Produk &amp; Operasional</WarroomSubLabel>
+              <WarroomSubLabel>Produk</WarroomSubLabel>
               <NavLink
                 to="/war-room/payment-agent/produk"
                 onClick={onClose}
@@ -643,39 +642,6 @@ export default function Sidebar({ onClose }) {
               >
                 <i className="ti ti-shopping-cart-bolt" style={{ color: '#0EA5E9' }} aria-hidden="true" />
                 <span>Produk</span>
-                <span className="sidebar-warroom-badge" style={{ background: '#0EA5E9' }}>PROD</span>
-              </NavLink>
-              <NavLink
-                to="/war-room/pa-produk"
-                onClick={onClose}
-                className={({ isActive }) =>
-                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
-                }
-              >
-                <i className="ti ti-bolt" style={{ color: '#639922' }} aria-hidden="true" />
-                <span>⚡ Produk</span>
-              </NavLink>
-              <NavLink
-                to="/war-room/ekspedisi"
-                onClick={onClose}
-                className={({ isActive }) =>
-                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
-                }
-              >
-                <i className="ti ti-package" style={{ color: '#8B5CF6' }} aria-hidden="true" />
-                <span>Ekspedisi</span>
-                <span className="sidebar-warroom-badge" style={{ background: '#8B5CF6' }}>Okta</span>
-              </NavLink>
-              <NavLink
-                to="/war-room/ekspedisi-produk"
-                onClick={onClose}
-                className={({ isActive }) =>
-                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
-                }
-                style={{ paddingLeft: 28 }}
-              >
-                <i className="ti ti-box-seam" style={{ color: '#0EA5E9' }} aria-hidden="true" />
-                <span>Produk Ekspedisi</span>
                 <span className="sidebar-warroom-badge" style={{ background: '#0EA5E9' }}>PROD</span>
               </NavLink>
               <NavLink
@@ -701,7 +667,32 @@ export default function Sidebar({ onClose }) {
                 <span className="sidebar-warroom-badge" style={{ background: '#F59E0B' }}>Ainul</span>
               </NavLink>
 
-              <WarroomSubLabel>Akuisisi &amp; Marketing</WarroomSubLabel>
+              <WarroomSubLabel>Ekspedisi</WarroomSubLabel>
+              <NavLink
+                to="/war-room/ekspedisi"
+                onClick={onClose}
+                className={({ isActive }) =>
+                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                }
+              >
+                <i className="ti ti-package" style={{ color: '#8B5CF6' }} aria-hidden="true" />
+                <span>Ekspedisi</span>
+                <span className="sidebar-warroom-badge" style={{ background: '#8B5CF6' }}>Okta</span>
+              </NavLink>
+              <NavLink
+                to="/war-room/ekspedisi-produk"
+                onClick={onClose}
+                className={({ isActive }) =>
+                  'sidebar-warroom-item' + (isActive ? ' sidebar-warroom-item--active' : '')
+                }
+                style={{ paddingLeft: 28 }}
+              >
+                <i className="ti ti-box-seam" style={{ color: '#0EA5E9' }} aria-hidden="true" />
+                <span>Produk Ekspedisi</span>
+                <span className="sidebar-warroom-badge" style={{ background: '#0EA5E9' }}>PROD</span>
+              </NavLink>
+
+              <WarroomSubLabel>MGM</WarroomSubLabel>
               <NavLink
                 to="/war-room/mgm-pa"
                 onClick={onClose}
@@ -724,6 +715,8 @@ export default function Sidebar({ onClose }) {
                 <span>Hunter</span>
                 <span className="sidebar-warroom-badge" style={{ background: '#F97316' }}>HNT</span>
               </NavLink>
+
+              <WarroomSubLabel>Digital Marketing</WarroomSubLabel>
               <NavLink
                 to="/war-room/dm-fastpay"
                 onClick={onClose}
