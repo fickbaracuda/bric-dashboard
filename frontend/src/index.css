@@ -6557,6 +6557,29 @@ body {
 .mgm-matrix-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; font-size: 11px; color: var(--text-3); }
 .mgm-matrix-legend-item { display: inline-flex; align-items: center; gap: 5px; }
 .mgm-matrix-legend-item i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; }
+.mgm-matrix-subtitle { font-size: 11.5px; color: var(--text-4); font-weight: 500; }
+.mgm-matrix-caption { font-size: 11px; color: var(--text-4); margin-top: 6px; }
+
+/* Ringkasan Segmen PB — menggantikan panel teknis Threshold Segmentasi
+   (raw P50/P75 dipindah ke collapsible "Metodologi Segmentasi"). */
+.mgm-segment-summary { display: flex; flex-direction: column; gap: 10px; max-height: 360px; overflow-y: auto; padding-right: 2px; }
+.mgm-segment-card { background: var(--bg-page); border-radius: 8px; padding: 10px 12px; }
+.mgm-segment-card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.mgm-segment-card-count { font-size: 12px; color: var(--text-3); font-weight: 700; }
+.mgm-segment-card-rows { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px 12px; font-size: 11.5px; color: var(--text-3); }
+.mgm-segment-card-rows strong { color: var(--text-1); font-weight: 700; }
+.mgm-segment-card-action { font-size: 11.5px; color: var(--text-4); margin-top: 6px; font-style: italic; }
+
+.mgm-methodology-toggle { margin: 4px 0 14px; }
+.mgm-methodology-panel { margin-top: 8px; background: var(--bg-page); border-radius: 8px; padding: 10px 12px; }
+
+.mgm-opportunity-lists { margin-bottom: 14px; }
+
+.mgm-sample-low-badge {
+  display: inline-block; margin-left: 6px; padding: 2px 7px; border-radius: 999px;
+  font-size: 10px; font-weight: 700; background: #F3F4F6; color: #6B7280;
+  white-space: nowrap;
+}
 
 .mgm-queue-tab {
   border: 2px solid var(--border); background: transparent; color: var(--text-2);
